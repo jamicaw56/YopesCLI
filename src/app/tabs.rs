@@ -38,6 +38,7 @@ pub(crate) struct TabState {
     pub(crate) auto_compact: bool,
     pub(crate) attachments: Vec<ImageAttachment>,
     next_image: usize,
+    image_paths: HashMap<String, super::PastedImage>,
     image_rows: HashMap<String, Vec<Line<'static>>>,
     image_width: u16,
     pub(crate) approval: Option<ToolApproval>,
@@ -74,6 +75,7 @@ impl Default for TabState {
             auto_compact: true,
             attachments: Vec::new(),
             next_image: 0,
+            image_paths: HashMap::new(),
             image_rows: HashMap::new(),
             image_width: 0,
             approval: None,
@@ -113,6 +115,7 @@ impl TabState {
             auto_compact: std::mem::take(&mut app.auto_compact),
             attachments: std::mem::take(&mut app.attachments),
             next_image: std::mem::take(&mut app.next_image),
+            image_paths: std::mem::take(&mut app.image_paths),
             image_rows: std::mem::take(&mut app.image_rows),
             image_width: std::mem::take(&mut app.image_width),
             approval: app.approval.take(),
@@ -149,6 +152,7 @@ impl TabState {
         app.auto_compact = self.auto_compact;
         app.attachments = self.attachments;
         app.next_image = self.next_image;
+        app.image_paths = self.image_paths;
         app.image_rows = self.image_rows;
         app.image_width = self.image_width;
         app.approval = self.approval;
@@ -236,6 +240,7 @@ impl App {
             self.info(format!("At most {MAX_TABS} tabs; close one first."));
             return;
         }
+        let auto_compact = self.auto_compact;
         self.stash();
         let mut state = TabState::default();
         if let Some(dir) = &self.sessions_dir {
@@ -246,7 +251,7 @@ impl App {
         }
         self.tabs.push(state);
         self.tab = self.tabs.len() - 1;
-        self.tabs[self.tab].auto_compact = self.auto_compact;
+        self.tabs[self.tab].auto_compact = auto_compact;
         self.unstash();
         self.info(format!(
             "Tab {} — {} · alt+w closes · alt+arrows switch",
@@ -257,19 +262,39 @@ impl App {
 
     /// Close the active tab, saving its history first.
     pub(crate) fn close_tab(&mut self) {
+        self.close_tab_at(self.tab);
+    }
+
+    /// Close tab `index`, saving its history first. Mouse clicks on `×`.
+    pub(crate) fn close_tab_at(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
         if self.tabs.len() == 1 {
             self.info("The last tab cannot close; ctrl+c quits instead.");
             return;
         }
-        if self.is_busy() {
-            self.info("Finish the current turn before closing this tab.");
+        if index == self.tab {
+            if self.is_busy() {
+                self.info("Finish the current turn before closing this tab.");
+                return;
+            }
+            self.save_session();
+            self.stash();
+            self.tabs.remove(index);
+            self.tab = self.tab.min(self.tabs.len() - 1);
+            self.unstash();
             return;
         }
-        self.save_session();
-        self.stash();
-        self.tabs.remove(self.tab);
-        self.tab = self.tab.min(self.tabs.len() - 1);
-        self.unstash();
+        if self.tabs[index].is_busy() {
+            self.info("That tab is busy; finish its turn before closing it.");
+            return;
+        }
+        self.with_tab(index, App::save_session);
+        self.tabs.remove(index);
+        if self.tab > index {
+            self.tab -= 1;
+        }
     }
 
     pub(crate) fn cycle_tab(&mut self, delta: isize) {
@@ -374,8 +399,9 @@ impl App {
         } else {
             self.tabs[index].session.title.trim()
         };
-        let mut title: String = title.chars().take(24).collect();
-        if title.chars().count() == 24 {
+        let mut title: String = title.chars().take(25).collect();
+        if title.chars().count() > 24 {
+            title = title.chars().take(24).collect();
             title.push('…');
         }
         title
@@ -430,6 +456,28 @@ mod tests {
         assert_eq!(app.session.id, before);
         app.select_tab(0);
         assert_eq!(app.session.title, "background");
+    }
+
+    #[test]
+    fn open_tab_keeps_the_auto_compact_setting() {
+        let mut app = test_app();
+        app.auto_compact = false;
+        app.open_tab();
+        assert!(!app.auto_compact);
+        app.auto_compact = true;
+        app.open_tab();
+        assert!(app.auto_compact);
+    }
+
+    #[test]
+    fn close_tab_at_closes_a_background_tab() {
+        let mut app = test_app();
+        app.open_tab();
+        app.session.update_title("second");
+        app.close_tab_at(0);
+        assert_eq!(app.tab_count(), 1);
+        assert_eq!(app.tab_index(), 0);
+        assert_eq!(app.session.title, "second");
     }
 
     #[test]

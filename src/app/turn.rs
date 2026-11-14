@@ -18,7 +18,6 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
             | "/tools"
             | "/permission"
             | "/permissions"
-            | "/yolo"
             | "/system"
             | "/effort"
             | "/skills"
@@ -172,6 +171,9 @@ impl App {
         self.send_pulse = Some(self.spinner);
         self.session.update_title(&prompt);
         self.prompt_started = Some(Instant::now());
+        // Swap `[Image N]` placeholders back to their real paths: the model
+        // and the transcript see the path, the composer never did.
+        value = self.resolve_image_placeholders(value);
         if steering {
             // Drop the blank reply the interrupted request left behind, then
             // fold the steer into the conversation and restart the turn.
@@ -421,15 +423,6 @@ impl App {
                     ));
                 } else {
                     self.error("Usage: /tools on|yolo|ask|off");
-                }
-            }
-            "/yolo" => {
-                if self.tools_mode == ToolsMode::Auto {
-                    self.tools_mode = ToolsMode::On;
-                    self.info("Permission: on — edits run automatically, risky commands ask");
-                } else {
-                    self.tools_mode = ToolsMode::Auto;
-                    self.info("Permission: yolo — all commands and edits run automatically without asking");
                 }
             }
             "/compact" => {
@@ -1018,30 +1011,6 @@ pub(crate) mod tests {
         ));
         assert_eq!(app.tools_mode, ToolsMode::On);
         assert_eq!(app.tools_mode.label(), "on");
-    }
-
-    #[test]
-    fn slash_yolo_toggles_mode_and_prompt_includes_instruction() {
-        let mut app = test_app();
-        assert_eq!(app.tools_mode, ToolsMode::On);
-
-        // Run /yolo -> enables YOLO
-        app.command("/yolo");
-        assert_eq!(app.tools_mode, ToolsMode::Auto);
-        assert!(
-            app.mode
-                .instruction(app.tools_mode)
-                .is_some_and(|inst| inst.contains("BUILD MODE (YOLO)"))
-        );
-
-        // Run /yolo again -> disables YOLO (back to On)
-        app.command("/yolo");
-        assert_eq!(app.tools_mode, ToolsMode::On);
-        assert!(
-            !app.mode
-                .instruction(app.tools_mode)
-                .is_some_and(|inst| inst.contains("YOLO"))
-        );
     }
 
     #[test]

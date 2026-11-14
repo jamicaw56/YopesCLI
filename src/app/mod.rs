@@ -88,6 +88,15 @@ pub struct ToolApproval {
     pub popup_area: std::cell::Cell<ratatui::layout::Rect>,
 }
 
+/// One pasted image waiting in the composer: its real path (file pastes
+/// only; clipboard images have none) plus the queued attachment that vision
+/// models receive. The composer itself only ever shows the placeholder.
+#[derive(Clone, Debug)]
+pub struct PastedImage {
+    pub path: Option<String>,
+    pub attachment: String,
+}
+
 pub struct RunningTool {
     pub call: ToolCall,
     pub started: Instant,
@@ -207,6 +216,9 @@ pub struct App {
     pub attachments: Vec<ImageAttachment>,
     /// Counter giving each pasted image a unique display name.
     next_image: usize,
+    /// Pasted images waiting in the composer: `[Image N]` placeholder ->
+    /// real path and attachment. The composer never shows the path.
+    image_paths: HashMap<String, PastedImage>,
     /// Pre-rendered half-block rows of pasted images, keyed `name:width`.
     image_rows: HashMap<String, Vec<Line<'static>>>,
     /// Terminal width the cached image rows were rendered for.
@@ -264,6 +276,10 @@ pub struct App {
     tab: usize,
     /// Click hit-boxes for the tab bar, refilled each draw: (x_start, x_end, index).
     pub(crate) tab_hits: Vec<(u16, u16, usize)>,
+    /// Click hit-boxes for each tab's `×`: (x_start, x_end, row, index).
+    pub(crate) tab_close_hits: Vec<(u16, u16, u16, usize)>,
+    /// Click hit-box for the `+` new-tab button: (x_start, x_end, row).
+    pub(crate) tab_new_hit: Option<(u16, u16, u16)>,
     /// Prompt tokens billed across this session.
     spent_prompt_tokens: u64,
     /// Completion tokens billed across this session.
@@ -305,6 +321,7 @@ impl App {
             auto_compact,
             attachments: Vec::new(),
             next_image: 0,
+            image_paths: HashMap::new(),
             image_rows: HashMap::new(),
             image_width: 0,
             approval: None,
@@ -338,6 +355,8 @@ impl App {
             tabs: vec![TabState::default()],
             tab: 0,
             tab_hits: Vec::new(),
+            tab_close_hits: Vec::new(),
+            tab_new_hit: None,
             spent_prompt_tokens: 0,
             spent_completion_tokens: 0,
             prompt_started: None,

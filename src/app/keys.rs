@@ -1,4 +1,5 @@
 use super::*;
+use super::images::pasted_image_path;
 
 impl App {
     pub(crate) fn handle_paste(&mut self, value: &str) {
@@ -37,16 +38,8 @@ impl App {
             return;
         }
         if !self.show_help {
-            let trimmed = value.trim().trim_matches('"').trim_matches('\'');
-            if (trimmed.ends_with(".png")
-                || trimmed.ends_with(".jpg")
-                || trimmed.ends_with(".jpeg")
-                || trimmed.ends_with(".webp")
-                || trimmed.ends_with(".gif")
-                || trimmed.ends_with(".bmp"))
-                && std::path::Path::new(trimmed).is_file()
-            {
-                if let Ok(bytes) = std::fs::read(trimmed) {
+            if let Some(path) = pasted_image_path(value) {
+                if let Ok(bytes) = std::fs::read(&path) {
                     if let Ok(img) = image::load_from_memory(&bytes) {
                         let mut png_bytes = std::io::Cursor::new(Vec::new());
                         if img
@@ -54,15 +47,9 @@ impl App {
                             .is_ok()
                         {
                             use base64::Engine;
-                            let b64 = base64::engine::general_purpose::STANDARD
+                            let data = base64::engine::general_purpose::STANDARD
                                 .encode(png_bytes.into_inner());
-                            let name = format!("paste-{}.png", self.next_image);
-                            self.next_image += 1;
-                            self.attachments.push(ImageAttachment { name, data: b64 });
-                            self.info(format!(
-                                "Image {} attached — send it with the next message.",
-                                self.attachments.len()
-                            ));
+                            self.attach_pasted_image_data(Some(path), data);
                             return;
                         }
                     }
@@ -239,9 +226,22 @@ impl App {
             }
             return Action::None;
         }
-        // Tab bar clicks: the header refills `tab_hits` every draw.
+        // Tab bar clicks: the header refills the hit-boxes every draw. `×`
+        // closes that tab, `+` opens one, the label switches to it.
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             let column = mouse.column;
+            if let Some(&(_, _, _, index)) = self.tab_close_hits.iter().find(|(start, end, hit_row, _)| {
+                mouse.row == *hit_row && column >= *start && column < *end
+            }) {
+                self.close_tab_at(index);
+                return Action::None;
+            }
+            if let Some((start, end, hit_row)) = self.tab_new_hit {
+                if mouse.row == hit_row && column >= start && column < end {
+                    self.open_tab();
+                    return Action::None;
+                }
+            }
             if let Some(&(_, _, index)) = self
                 .tab_hits
                 .iter()
@@ -432,6 +432,7 @@ impl App {
                 KeyCode::Char('n') => self.new_session(),
                 KeyCode::Char('u') => {
                     self.input.clear();
+                    self.discard_pasted_images();
                     self.reset_palette();
                 }
                 KeyCode::Char('w') => {
@@ -526,7 +527,9 @@ impl App {
                 Action::None
             }
             KeyCode::Backspace => {
-                self.input.backspace();
+                if !self.remove_pasted_image_token() {
+                    self.input.backspace();
+                }
                 self.reset_palette();
                 Action::None
             }
