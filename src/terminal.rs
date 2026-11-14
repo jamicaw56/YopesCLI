@@ -22,17 +22,22 @@ pub(crate) struct TerminalGuard {
     pub(crate) terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 
+/// The teardown every exit path shares: mouse, paste, alternate screen, cursor.
+fn restore_terminal(writer: &mut impl io::Write) -> io::Result<()> {
+    execute!(
+        writer,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen,
+        Show
+    )
+}
+
 pub(crate) fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            Show
-        );
+        let _ = restore_terminal(&mut io::stdout());
         default_hook(info);
     }));
 }
@@ -50,13 +55,7 @@ impl TerminalGuard {
             Show
         ) {
             let _ = disable_raw_mode();
-            let _ = execute!(
-                io::stdout(),
-                DisableMouseCapture,
-                DisableBracketedPaste,
-                LeaveAlternateScreen,
-                Show
-            );
+            let _ = restore_terminal(&mut stdout);
             return Err(error).context("initializing terminal");
         }
         let backend = CrosstermBackend::new(stdout);
@@ -64,13 +63,7 @@ impl TerminalGuard {
             Ok(terminal) => Ok(Self { terminal }),
             Err(error) => {
                 let _ = disable_raw_mode();
-                let _ = execute!(
-                    io::stdout(),
-                    DisableMouseCapture,
-                    DisableBracketedPaste,
-                    LeaveAlternateScreen,
-                    Show
-                );
+                let _ = restore_terminal(&mut io::stdout());
                 Err(error).context("creating terminal")
             }
         }
@@ -80,13 +73,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            Show
-        );
+        let _ = restore_terminal(self.terminal.backend_mut());
         let _ = self.terminal.show_cursor();
     }
 }

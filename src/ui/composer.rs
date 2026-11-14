@@ -94,9 +94,10 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(inner);
     // The prompt flashes briefly after a send: input registered, turn running.
-    let pulse = app
-        .send_pulse
-        .is_some_and(|mark| app.spinner.saturating_sub(mark) < 5);
+    let pulse = match app.send_pulse {
+        Some(mark) => app.spinner.saturating_sub(mark) < 5,
+        None => false,
+    };
     let (prompt_marker, prompt_style) = if app.tools_mode == ToolsMode::Auto {
         (
             "⚡",
@@ -125,7 +126,12 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     if target.width == 0 || target.height == 0 {
         return;
     }
-    let before = wrapped_line_count(app.input.before_cursor(), target.width).saturating_sub(1);
+    // A cursor after a trailing newline sits on a fresh row the wrap count
+    // folds into the last one; keep that row inside the viewport.
+    let mut before = wrapped_line_count(app.input.before_cursor(), target.width).saturating_sub(1);
+    if app.input.before_cursor().ends_with('\n') {
+        before += 1;
+    }
     let height = usize::from(target.height);
     if before < app.input_scroll {
         app.input_scroll = before;
@@ -145,59 +151,64 @@ fn render_composer_text(input: &Input) -> Text<'static> {
     let sel_style = Style::default().add_modifier(Modifier::REVERSED);
     let norm_style = Style::default().fg(TEXT);
     let cursor_style = Style::default().fg(ACCENT);
-
-    let mut lines = Vec::new();
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
-    let mut current_chunk = String::new();
-    let mut current_style = norm_style;
-
-    let flush_chunk = |spans: &mut Vec<Span<'static>>, chunk: &mut String, style: Style| {
-        if !chunk.is_empty() {
-            spans.push(Span::styled(std::mem::take(chunk), style));
-        }
+    let style_at = |start: usize| match &sel {
+        Some(range) if start >= range.start && start < range.end => sel_style,
+        _ => norm_style,
     };
 
-    let total_len = input.value.len();
-    let mut idx = 0;
-    let mut chars = input.value.char_indices().peekable();
-
-    while idx <= total_len {
-        if idx == input.cursor {
-            flush_chunk(&mut current_spans, &mut current_chunk, current_style);
-            current_spans.push(Span::styled("▌", cursor_style));
-        }
-
-        if idx == total_len {
-            break;
-        }
-
-        let (_, ch) = chars.next().unwrap();
-        let next_idx = idx + ch.len_utf8();
-
-        let is_selected = if let Some(ref r) = sel {
-            idx >= r.start && idx < r.end
-        } else {
-            false
-        };
-
-        let target_style = if is_selected { sel_style } else { norm_style };
-        if target_style != current_style {
-            flush_chunk(&mut current_spans, &mut current_chunk, current_style);
-            current_style = target_style;
-        }
-
-        if ch == '\n' {
-            flush_chunk(&mut current_spans, &mut current_chunk, current_style);
-            lines.push(Line::from(std::mem::take(&mut current_spans)));
-        } else {
-            current_chunk.push(ch);
-        }
-
-        idx = next_idx;
+    enum Seg {
+        // One styled byte range, emitted as a single span.
+        Run(usize, usize, Style),
+        Cursor,
+        Break,
     }
 
-    flush_chunk(&mut current_spans, &mut current_chunk, current_style);
-    lines.push(Line::from(current_spans));
+    // Slice-based runs: one span per styled range instead of a chunk per char.
+    let mut segs: Vec<Seg> = Vec::new();
+    let mut run: Option<(usize, Style)> = None;
+    for (offset, ch) in input.value.char_indices() {
+        if offset == input.cursor {
+            if let Some((start, style)) = run.take() {
+                segs.push(Seg::Run(start, offset, style));
+            }
+            segs.push(Seg::Cursor);
+        }
+        if ch == '\n' {
+            if let Some((start, style)) = run.take() {
+                segs.push(Seg::Run(start, offset, style));
+            }
+            segs.push(Seg::Break);
+            continue;
+        }
+        let style = style_at(offset);
+        match run {
+            Some((_, run_style)) if run_style == style => {}
+            Some((start, run_style)) => {
+                segs.push(Seg::Run(start, offset, run_style));
+                run = Some((offset, style));
+            }
+            None => run = Some((offset, style)),
+        }
+    }
+    if let Some((start, style)) = run {
+        segs.push(Seg::Run(start, input.value.len(), style));
+    }
+    if input.cursor == input.value.len() {
+        segs.push(Seg::Cursor);
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for seg in segs {
+        match seg {
+            Seg::Run(start, end, style) => {
+                spans.push(Span::styled(input.value[start..end].to_owned(), style));
+            }
+            Seg::Cursor => spans.push(Span::styled("▌", cursor_style)),
+            Seg::Break => lines.push(Line::from(std::mem::take(&mut spans))),
+        }
+    }
+    lines.push(Line::from(spans));
 
     Text::from(lines)
 }
@@ -209,38 +220,53 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     app.progress_row = Some(area.y);
     let inner = padded(area, 2);
-    let done = app.session.tasks.iter().filter(|task| task.done).count();
     let marker = if app.progress_collapsed { "▸" } else { "▾" };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(MUTED)),
-        Span::styled(
-            format!("Progress {done}/{}", app.session.tasks.len()),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" · todo_write · click to fold", Style::default().fg(MUTED)),
-    ])];
-    if !app.progress_collapsed {
+    let total = app.session.tasks.len();
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let done = if app.progress_collapsed {
+        app.session.tasks.iter().filter(|task| task.done).count()
+    } else {
         if area.height < 3 {
             return;
         }
+        // One pass counts completion for every task and renders the visible
+        // rows, so the header never costs a second scan.
+        let mut counted = 0usize;
         for (index, task) in app.session.tasks.iter().enumerate() {
-            if index == 6 {
-                lines.push(Line::styled(
-                    format!("… {} more", app.session.tasks.len() - 6),
+            counted += usize::from(task.done);
+            match index {
+                0..=5 => {
+                    let mark = if task.done { "[x]" } else { "[ ]" };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{mark} "),
+                            Style::default().fg(if task.done { MUTED } else { ACCENT }),
+                        ),
+                        Span::styled(task.text.clone(), Style::default().fg(TEXT)),
+                    ]));
+                }
+                6 => lines.push(Line::styled(
+                    format!("… {} more", total - 6),
                     Style::default().fg(MUTED),
-                ));
-                break;
+                )),
+                _ => {}
             }
-            let mark = if task.done { "[x]" } else { "[ ]" };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{mark} "),
-                    Style::default().fg(if task.done { MUTED } else { ACCENT }),
-                ),
-                Span::styled(task.text.clone(), Style::default().fg(TEXT)),
-            ]));
         }
-    }
+        counted
+    };
+
+    lines.insert(
+        0,
+        Line::from(vec![
+            Span::styled(format!("{marker} "), Style::default().fg(MUTED)),
+            Span::styled(
+                format!("Progress {done}/{total}"),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · todo_write · click to fold", Style::default().fg(MUTED)),
+        ]),
+    );
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

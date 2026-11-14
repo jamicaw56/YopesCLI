@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, path::PathBuf, time::SystemTime};
+use std::{path::PathBuf, time::SystemTime};
 
 use ratatui::{
     Frame,
@@ -124,6 +124,32 @@ pub(super) fn responsive_palette_width(area_width: u16) -> u16 {
 /// The cat tracks the rolling yarn, blinks, twitches its ears, paws the ball,
 /// and snoozes during longer idle stretches.
 fn mascot_frame(step: usize) -> Vec<Line<'static>> {
+    use std::cell::RefCell;
+    thread_local! {
+        // The art redraws in tick pairs; keep the last frame instead of
+        // rebuilding seven string rows for an identical picture.
+        static LAST: RefCell<Option<(usize, Vec<Line<'static>>)>> = const { RefCell::new(None) };
+    }
+    // Only the odd mew (70 mod 160) and the sleep boundary (135 mod 160)
+    // change the picture inside a tick pair.
+    let key = match step % 160 {
+        70 | 135 => step,
+        _ => step & !1,
+    };
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        if let Some((cached_key, frame)) = last.as_ref() {
+            if *cached_key == key {
+                return frame.clone();
+            }
+        }
+        let frame = build_mascot_frame(step);
+        *last = Some((key, frame.clone()));
+        frame
+    })
+}
+
+fn build_mascot_frame(step: usize) -> Vec<Line<'static>> {
     // ponytail: procedural tick animation; add stateful sprite machine if interactive pet actions are needed.
     let mut rows: Vec<String> = CAT_ROWS.iter().map(|row| (*row).to_owned()).collect();
     let sleeping = step % 160 >= 135;
@@ -475,12 +501,14 @@ fn wrapped_rows(line: &str, width: usize) -> usize {
     let mut line_width = 0usize;
     let mut word_width = 0usize;
     let mut whitespace_width = 0usize;
-    let mut pending_whitespace: VecDeque<usize> = VecDeque::new();
+    // Pending whitespace is the contiguous run before the current word, so a
+    // byte range stands in for ratatui's VecDeque and skips the heap churn.
+    let mut whitespace: (usize, usize) = (0, 0);
     let mut non_whitespace_previous = false;
     let mut line_has_graphemes = false;
     let mut word_has_graphemes = false;
 
-    for grapheme in line.graphemes(true) {
+    for (offset, grapheme) in line.grapheme_indices(true) {
         let is_whitespace = grapheme.chars().all(char::is_whitespace);
         let symbol_width = grapheme.width();
         if symbol_width > width {
@@ -496,7 +524,7 @@ fn wrapped_rows(line: &str, width: usize) -> usize {
             whitespace_width = 0;
             word_width = 0;
             word_has_graphemes = false;
-            pending_whitespace.clear();
+            whitespace = (offset, offset);
         }
 
         let line_full = line_width >= width;
@@ -507,22 +535,27 @@ fn wrapped_rows(line: &str, width: usize) -> usize {
             let mut remaining = width.saturating_sub(line_width);
             line_width = 0;
             line_has_graphemes = false;
-            while let Some(&first) = pending_whitespace.front() {
-                if first > remaining {
+            while whitespace.0 < whitespace.1 {
+                let head = &line[whitespace.0..whitespace.1];
+                let first = head.graphemes(true).next().unwrap();
+                if first.width() > remaining {
                     break;
                 }
-                whitespace_width -= first;
-                remaining -= first;
-                pending_whitespace.pop_front();
+                whitespace_width -= first.width();
+                remaining -= first.width();
+                whitespace.0 += first.len();
             }
-            if is_whitespace && pending_whitespace.is_empty() {
+            if is_whitespace && whitespace.0 == whitespace.1 {
                 continue;
             }
         }
 
         if is_whitespace {
             whitespace_width += symbol_width;
-            pending_whitespace.push_back(symbol_width);
+            if whitespace.0 == whitespace.1 {
+                whitespace.0 = offset;
+            }
+            whitespace.1 = offset + grapheme.len();
         } else {
             word_width += symbol_width;
             word_has_graphemes = true;
@@ -530,10 +563,10 @@ fn wrapped_rows(line: &str, width: usize) -> usize {
         non_whitespace_previous = !is_whitespace;
     }
 
-    if !line_has_graphemes && !word_has_graphemes && !pending_whitespace.is_empty() {
+    if !line_has_graphemes && !word_has_graphemes && whitespace.0 < whitespace.1 {
         rows += 1;
     }
-    line_has_graphemes = line_has_graphemes || !pending_whitespace.is_empty() || word_has_graphemes;
+    line_has_graphemes = line_has_graphemes || whitespace.0 < whitespace.1 || word_has_graphemes;
     if line_has_graphemes {
         rows += 1;
     }
@@ -743,5 +776,35 @@ mod tests {
         assert_eq!(wrapped_line_count("", 10), 1);
         assert_eq!(wrapped_line_count("one\ntwo", 10), 2);
         assert_eq!(wrapped_line_count("aaaaaa aaaaaa aaaaaa", 10), 3);
+    }
+
+    #[test]
+    fn wrapped_counts_hold_for_long_text() {
+        // One 600-char word: it splits across rows, no panic, no truncation.
+        let word = "x".repeat(600);
+        let single = wrapped_line_count(&word, 60);
+        assert_eq!(wrapped_line_count(&word, 60), single, "stable per call");
+
+        // 500+ chars of prose wrap greedily: rows stay within the width.
+        let prose = "lorem ipsum ".repeat(50);
+        let count = wrapped_line_count(prose.trim(), 60);
+        assert!((10..=12).contains(&count), "greedy rows: {count}");
+
+        // Long multi-line text keeps every explicit line plus its wraps.
+        let text = format!("{}\n{}\n{}", "a".repeat(300), "", "b".repeat(250));
+        let total = wrapped_line_count(&text, 60);
+        assert_eq!(
+            total,
+            wrapped_line_count(&"a".repeat(300), 60) + 1 + wrapped_line_count(&"b".repeat(250), 60),
+            "lines add up independently"
+        );
+
+        // Wide (CJK) text doubles its column count per char.
+        let cjk = "汉".repeat(260);
+        assert_eq!(
+            wrapped_line_count(&cjk, 60),
+            wrapped_line_count(&"x".repeat(520), 60),
+            "CJK width matches twice the char count"
+        );
     }
 }
