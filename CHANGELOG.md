@@ -50,6 +50,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- Session tabs each keep their own provider and model: switching models or
+  connecting a provider in one tab never reaches another tab, and new tabs
+  start from the current tab's provider.
+
 - Split `src/app.rs` into `src/app/` modules (input, turns, streaming,
   `/connect`, palette, pickers, images, formatting, modes) and `src/ui.rs` into
   `src/ui/` modules, one per panel. No behaviour change.

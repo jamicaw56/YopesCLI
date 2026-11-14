@@ -16,6 +16,7 @@ use ratatui::text::Line;
 use anyhow::Result;
 
 use super::{ActiveRequest, App, ChangeReport, Input, Mode, RunningTool, ToolApproval, ToolsMode};
+use crate::backend::Backend;
 use crate::session::{ImageAttachment, Session, ToolCall};
 
 /// Upper bound: one tab per Alt+1..9 jump.
@@ -25,6 +26,7 @@ const MAX_TABS: usize = 9;
 /// the background.
 pub(crate) struct TabState {
     pub(crate) session: Session,
+    pub(crate) backend: Backend,
     pub(crate) input: Input,
     pub(crate) scroll: usize,
     pub(crate) input_scroll: usize,
@@ -62,6 +64,7 @@ impl Default for TabState {
     fn default() -> Self {
         Self {
             session: Session::new(),
+            backend: Backend::default(),
             input: Input::default(),
             scroll: 0,
             input_scroll: 0,
@@ -102,6 +105,7 @@ impl TabState {
     fn take_from(app: &mut App) -> Self {
         Self {
             session: std::mem::take(&mut app.session),
+            backend: std::mem::take(&mut app.backend),
             input: std::mem::take(&mut app.input),
             scroll: std::mem::take(&mut app.scroll),
             input_scroll: std::mem::take(&mut app.input_scroll),
@@ -139,6 +143,7 @@ impl TabState {
     /// Put this tab's state back into `app` as the active one.
     fn apply(self, app: &mut App) {
         app.session = self.session;
+        app.backend = self.backend;
         app.input = self.input;
         app.scroll = self.scroll;
         app.input_scroll = self.input_scroll;
@@ -239,8 +244,14 @@ impl App {
             return;
         }
         let auto_compact = self.auto_compact;
+        let backend = self.backend.clone();
         self.stash();
-        let mut state = TabState::default();
+        let mut state = TabState {
+            backend,
+            ..TabState::default()
+        };
+        // The new tab starts from this tab's provider and model, then keeps
+        // its own copy: switches here never reach the other tabs.
         if let Some(dir) = &self.sessions_dir {
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -447,6 +458,18 @@ mod tests {
         assert_eq!(app.session.id, before);
         app.select_tab(0);
         assert_eq!(app.session.title, "background");
+    }
+
+    #[test]
+    fn model_switches_stay_per_tab() {
+        let mut app = test_app();
+        app.open_tab();
+        app.backend.set_model("model-b".to_owned());
+        assert_eq!(app.backend.model(), "model-b");
+        app.select_tab(0);
+        assert_eq!(app.backend.model(), "gpt-4o");
+        app.select_tab(1);
+        assert_eq!(app.backend.model(), "model-b");
     }
 
     #[test]
