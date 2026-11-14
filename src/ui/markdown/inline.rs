@@ -5,8 +5,8 @@ use ratatui::{
     text::Span,
 };
 
-use super::CODE;
-use super::{ACCENT, MUTED};
+use super::code;
+use super::{accent, muted};
 
 pub(super) fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
@@ -34,7 +34,7 @@ pub(super) fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
         if first == '`' {
             if let Some((content, consumed)) = code_span(rest) {
                 flush_plain(&mut spans, &mut plain, base);
-                spans.push(Span::styled(content, base.fg(CODE)));
+                spans.push(Span::styled(content, base.fg(code())));
                 index += consumed;
                 continue;
             }
@@ -48,7 +48,7 @@ pub(super) fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
                 } else {
                     label.as_str()
                 };
-                spans.extend(inline_spans(label, Style::default().fg(MUTED)));
+                spans.extend(inline_spans(label, Style::default().fg(muted())));
                 index += consumed + 1;
                 continue;
             }
@@ -187,7 +187,7 @@ fn parse_link(text: &str) -> Option<(String, String, usize)> {
 
 fn link_style() -> Style {
     Style::default()
-        .fg(ACCENT)
+        .fg(accent())
         .add_modifier(Modifier::UNDERLINED)
 }
 
@@ -197,7 +197,7 @@ fn link_spans(label: &str, url: &str) -> Vec<Span<'static>> {
     if !url.is_empty() && url != display {
         spans.push(Span::styled(
             format!(" ({url})"),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     }
     spans

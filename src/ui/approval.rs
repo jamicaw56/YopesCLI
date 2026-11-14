@@ -26,7 +26,7 @@ pub(super) fn draw_approval(
     frame.render_widget(Clear, popup);
 
     let blink = (spinner / 5) % 2 == 0;
-    let border = Style::default().fg(ACCENT).add_modifier(if blink {
+    let border = Style::default().fg(accent()).add_modifier(if blink {
         Modifier::BOLD
     } else {
         Modifier::empty()
@@ -39,7 +39,7 @@ pub(super) fn draw_approval(
         .title_top(Line::from(vec![
             Span::styled(
                 "● ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 if has_command {
@@ -47,20 +47,20 @@ pub(super) fn draw_approval(
                 } else {
                     "Apply this change? "
                 },
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
         ]))
         .title_bottom(Line::from(vec![
             Span::styled(
                 " [Enter] Run ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" [A] Always ", Style::default().fg(MUTED)),
+            Span::styled(" [A] Always ", Style::default().fg(muted())),
             Span::styled(
                 " [Shift+Tab] YOLO ",
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                Style::default().fg(warning()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" [Esc] Deny ", Style::default().fg(ERROR)),
+            Span::styled(" [Esc] Deny ", Style::default().fg(error())),
         ]))
         .padding(Padding::new(1, 1, 1, 1));
     let inner = block.inner(popup);
@@ -93,7 +93,7 @@ pub(super) fn tool_result_lines(
     let outer = usize::from(width).saturating_sub(1).max(1);
     let inner_width = outer.saturating_sub(4);
     let failed = message.content.starts_with("Error: ");
-    let border = if failed { ERROR } else { MUTED };
+    let border = if failed { error() } else { muted() };
     let rendered: Vec<String> = message.content.split('\n').map(normalize_line).collect();
     // On a very narrow terminal a frame would not fit; draw the raw lines.
     if inner_width < 6 {
@@ -103,13 +103,13 @@ pub(super) fn tool_result_lines(
             .map(|line| {
                 Line::styled(
                     truncate(line, outer),
-                    Style::default().fg(if failed { ERROR } else { TEXT }),
+                    Style::default().fg(if failed { error() } else { text() }),
                 )
             })
             .collect();
     }
 
-    let color = if failed { ERROR } else { TEXT };
+    let color = if failed { error() } else { text() };
     let call_id = message.tool_call_id.clone().unwrap_or_default();
     let report = message
         .tool_call_id
@@ -127,7 +127,7 @@ pub(super) fn tool_result_lines(
             for line in summary {
                 body.push(Line::styled(
                     truncate(&line, inner_width),
-                    Style::default().fg(TEXT),
+                    Style::default().fg(text()),
                 ));
             }
         }
@@ -144,7 +144,7 @@ pub(super) fn tool_result_lines(
         body.extend(change_lines(report, inner_width));
     }
     if body.is_empty() {
-        body.push(Line::styled(" ", Style::default().fg(MUTED)));
+        body.push(Line::styled(" ", Style::default().fg(muted())));
     }
     // Long output, diff included, is folded; a click on the frame reveals the rest.
     let expanded = app.expanded.contains(&call_id);
@@ -164,7 +164,7 @@ pub(super) fn tool_result_lines(
                     ),
                     inner_width,
                 ),
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
         } else if body.len() > TOOL_OUTPUT_PREVIEW_LINES {
             let total = body.len();
@@ -180,7 +180,7 @@ pub(super) fn tool_result_lines(
             let mut shown: Vec<Line<'static>> = body.drain(..TOOL_OUTPUT_PREVIEW_LINES).collect();
             shown.push(Line::styled(
                 truncate(&hint, inner_width),
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
             body = shown;
         }
@@ -188,17 +188,17 @@ pub(super) fn tool_result_lines(
         for content_line in &rendered {
             body.push(Line::styled(
                 truncate(content_line, inner_width),
-                Style::default().fg(TEXT),
+                Style::default().fg(text()),
             ));
         }
         body.push(Line::styled(
             truncate("· click to collapse", inner_width),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     } else {
         body.push(Line::styled(
             truncate("· click to collapse", inner_width),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     }
 
@@ -298,25 +298,25 @@ pub(super) fn change_file_lines(
     let mut lines = Vec::new();
     let mut spans = vec![Span::styled(
         truncate(&diff.path, width.saturating_sub(22)),
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        Style::default().fg(text()).add_modifier(Modifier::BOLD),
     )];
     if diff.created {
-        spans.push(Span::styled("  new file", Style::default().fg(MUTED)));
+        spans.push(Span::styled("  new file", Style::default().fg(muted())));
     }
     spans.push(Span::styled(
         format!("  +{}", diff.additions),
-        Style::default().fg(ADDED),
+        Style::default().fg(added()),
     ));
     spans.push(Span::styled(
         format!("  −{}", diff.deletions),
-        Style::default().fg(REMOVED),
+        Style::default().fg(removed()),
     ));
     lines.push(Line::from(spans));
     if diff.is_empty() {
         let note = diff.note.as_deref().unwrap_or("No line changes.");
         lines.push(Line::styled(
             truncate(note, width),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
         return lines;
     }
@@ -347,12 +347,12 @@ pub(super) fn approval_lines(
         };
         for wrapped in textwrap::wrap(&line, textwrap::Options::new(width)) {
             if shown == MAX_APPROVAL_LINES {
-                lines.push(Line::styled("…", Style::default().fg(MUTED)));
+                lines.push(Line::styled("…", Style::default().fg(muted())));
                 break;
             }
             lines.push(Line::styled(
                 wrapped.into_owned(),
-                Style::default().fg(TEXT),
+                Style::default().fg(text()),
             ));
             shown += 1;
         }
@@ -361,7 +361,7 @@ pub(super) fn approval_lines(
         }
     }
     if shown == 0 && approval.diffs.is_empty() {
-        lines.push(Line::styled("$", Style::default().fg(TEXT)));
+        lines.push(Line::styled("$", Style::default().fg(text())));
     }
     for (index, diff) in approval.diffs.iter().enumerate() {
         if index > 0 {
@@ -376,7 +376,7 @@ pub(super) fn approval_lines(
     if let Some(note) = &approval.note {
         lines.push(Line::styled(
             truncate(note, width),
-            Style::default().fg(ERROR),
+            Style::default().fg(error()),
         ));
     }
     lines
@@ -392,7 +392,7 @@ pub(super) fn unified_lines(diff: &FileDiff, width: usize) -> Vec<Line<'static>>
         }
         lines.push(Line::styled(
             diff.header(hunk),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ));
         for line in &hunk.lines {
             let (sign, color) = diff_sign(line.kind);
@@ -407,7 +407,7 @@ pub(super) fn unified_lines(diff: &FileDiff, width: usize) -> Vec<Line<'static>>
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{old:>gutter$} {new:>gutter$} "),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 ),
                 Span::styled(format!("{sign} "), Style::default().fg(color)),
                 Span::styled(truncate(&line.text, text_width), Style::default().fg(color)),
@@ -429,7 +429,7 @@ pub(super) fn side_by_side_lines(diff: &FileDiff, width: usize) -> Vec<Line<'sta
         }
         lines.push(Line::styled(
             diff.header(hunk),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ));
         for row in hunk.side_rows() {
             let left_number = row
@@ -455,30 +455,30 @@ pub(super) fn side_by_side_lines(diff: &FileDiff, width: usize) -> Vec<Line<'sta
             let left_style = row
                 .left
                 .as_ref()
-                .map_or_else(|| Style::default().fg(TEXT), diff_style);
+                .map_or_else(|| Style::default().fg(text()), diff_style);
             let right_style = row
                 .right
                 .as_ref()
-                .map_or_else(|| Style::default().fg(TEXT), diff_style);
+                .map_or_else(|| Style::default().fg(text()), diff_style);
             let (left_sign, left_color) = row
                 .left
                 .as_ref()
-                .map_or((" ", TEXT), |line| diff_sign(line.kind));
+                .map_or((" ", text()), |line| diff_sign(line.kind));
             let (right_sign, right_color) = row
                 .right
                 .as_ref()
-                .map_or((" ", TEXT), |line| diff_sign(line.kind));
+                .map_or((" ", text()), |line| diff_sign(line.kind));
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{left_number:>gutter$} "),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 ),
                 Span::styled(left_sign, Style::default().fg(left_color)),
                 Span::styled(format!("{left_text:<text_width$}"), left_style),
-                Span::styled(" │ ", Style::default().fg(MUTED)),
+                Span::styled(" │ ", Style::default().fg(muted())),
                 Span::styled(
                     format!("{right_number:>gutter$} "),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 ),
                 Span::styled(right_sign, Style::default().fg(right_color)),
                 Span::styled(right_text, right_style),
@@ -502,9 +502,9 @@ pub(super) fn line_number_width(diff: &FileDiff) -> usize {
 
 pub(super) fn diff_sign(kind: ChangeKind) -> (&'static str, Color) {
     match kind {
-        ChangeKind::Context => (" ", TEXT),
-        ChangeKind::Insert => ("+", ADDED),
-        ChangeKind::Delete => ("-", REMOVED),
+        ChangeKind::Context => (" ", text()),
+        ChangeKind::Insert => ("+", added()),
+        ChangeKind::Delete => ("-", removed()),
     }
 }
 

@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use super::super::truncate;
 use super::Fence;
 use super::inline::inline_spans;
-use super::{MUTED, TEXT};
+use super::{muted, text};
 
 /// Tables are capped so one long cell cannot crowd out every other column.
 const MAX_TABLE_CELL: usize = 40;
@@ -167,7 +167,7 @@ fn table_border(left: char, middle: char, right: char, widths: &[usize]) -> Line
             middle
         });
     }
-    Line::styled(text, Style::default().fg(MUTED))
+    Line::styled(text, Style::default().fg(muted()))
 }
 
 fn table_row(
@@ -177,11 +177,11 @@ fn table_row(
     header: bool,
 ) -> Line<'static> {
     let base = if header {
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+        Style::default().fg(text()).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(TEXT)
+        Style::default().fg(text())
     };
-    let mut spans = vec![Span::styled("│", Style::default().fg(MUTED))];
+    let mut spans = vec![Span::styled("│", Style::default().fg(muted()))];
     for (index, width) in widths.iter().enumerate() {
         let cell = cells.get(index).map_or("", |cell| cell.as_str());
         let clipped = truncate(cell, *width);
@@ -195,12 +195,12 @@ fn table_row(
         };
         spans.push(Span::styled(
             " ".repeat(before + 1),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
         spans.extend(cell_spans);
         spans.push(Span::styled(
             format!("{}│", " ".repeat(after + 1)),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     }
     Line::from(spans)

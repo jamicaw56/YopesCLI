@@ -36,6 +36,7 @@ mod mode;
 mod palette;
 mod pickers;
 mod stream;
+mod tabs;
 mod turn;
 
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
@@ -50,6 +51,8 @@ pub(crate) use connect::state::{
 };
 pub use format::{format_bytes, format_cost, format_tokens};
 pub use mode::{Mode, ToolsMode};
+
+use tabs::TabState;
 
 /// Fraction of the model context window at which compaction triggers.
 const COMPACTION_THRESHOLD_FRAC: u64 = 3; // fire at ~1/3 of window
@@ -253,6 +256,14 @@ pub struct App {
     palette_index: usize,
     palette_hidden: bool,
     connect: Option<ConnectState>,
+    /// Parked sessions: the active tab's state lives in the fields above,
+    /// every other tab is a `TabState` snapshot here. `tabs[tab]` is a blank
+    /// placeholder for the active one.
+    tabs: Vec<TabState>,
+    /// Index of the active tab.
+    tab: usize,
+    /// Click hit-boxes for the tab bar, refilled each draw: (x_start, x_end, index).
+    pub(crate) tab_hits: Vec<(u16, u16, usize)>,
     /// Prompt tokens billed across this session.
     spent_prompt_tokens: u64,
     /// Completion tokens billed across this session.
@@ -324,6 +335,9 @@ impl App {
             palette_index: 0,
             palette_hidden: false,
             connect: None,
+            tabs: vec![TabState::default()],
+            tab: 0,
+            tab_hits: Vec::new(),
             spent_prompt_tokens: 0,
             spent_completion_tokens: 0,
             prompt_started: None,

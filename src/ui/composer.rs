@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
     let mut right = if app.backend.model().is_empty() {
         format!("{} · {}", app.backend.provider_label(), app.spent_cost())
@@ -21,8 +21,8 @@ pub(super) fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(4), Constraint::Length(right_width)])
         .split(inner);
 
-    // No product branding in the working view: the mode dot and the session
-    // title are the only things that need the space.
+    // No product branding in the working view: the mode dot, the permission
+    // badge and the session tabs are what need the space.
     let mut title_spans = vec![
         Span::styled(
             "●",
@@ -41,22 +41,69 @@ pub(super) fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ToolsMode::Auto => {
             title_spans.push(Span::styled(
                 " [YOLO]",
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                Style::default().fg(warning()).add_modifier(Modifier::BOLD),
             ));
         }
         ToolsMode::Ask => {
-            title_spans.push(Span::styled(" [ASK]", Style::default().fg(MUTED)));
+            title_spans.push(Span::styled(" [ASK]", Style::default().fg(muted())));
         }
         ToolsMode::Off => {
-            title_spans.push(Span::styled(" [OFF]", Style::default().fg(MUTED)));
+            title_spans.push(Span::styled(" [OFF]", Style::default().fg(muted())));
         }
         ToolsMode::On => {}
     }
     title_spans.push(Span::styled("  ", Style::default()));
-    title_spans.push(Span::styled(
-        app.session.title.trim(),
-        Style::default().fg(MUTED),
-    ));
+
+    // Session tabs: `◐` while a tab streams, `!` when it wants a decision.
+    // Click or Alt+1..9 to switch; the active one is accent + bold.
+    app.tab_hits.clear();
+    let active = app.tab_index();
+    let mut x = inner.x
+        + title_spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum::<usize>() as u16;
+    let end_x = columns[0].x + columns[0].width;
+    for index in 0..app.tab_count() {
+        let streaming = app.tab_streaming(index);
+        let busy = app.tab_busy(index);
+        let marker = if streaming {
+            "◐ "
+        } else if busy {
+            "! "
+        } else {
+            ""
+        };
+        let label = format!("{} {}", index + 1, app.tab_title(index));
+        let sep_w: u16 = if index > 0 { 3 } else { 0 };
+        let marker_w: u16 = if marker.is_empty() { 0 } else { 2 };
+        let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
+        if x.saturating_add(sep_w + marker_w + label_w) > end_x {
+            break;
+        }
+        if index > 0 {
+            title_spans.push(Span::styled(" │ ", Style::default().fg(muted())));
+            x = x.saturating_add(sep_w);
+        }
+        if !marker.is_empty() {
+            let marker_style = if busy && !streaming {
+                Style::default().fg(warning()).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(accent())
+            };
+            title_spans.push(Span::styled(marker, marker_style));
+            x = x.saturating_add(marker_w);
+        }
+        let style = if index == active {
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(muted())
+        };
+        title_spans.push(Span::styled(label, style));
+        x = x.saturating_add(label_w);
+        let start = x.saturating_sub(label_w + marker_w);
+        app.tab_hits.push((start, x, index));
+    }
     let title = Line::from(title_spans);
     frame.render_widget(Paragraph::new(title), columns[0]);
 
@@ -64,7 +111,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(
             Paragraph::new(right)
                 .alignment(Alignment::Right)
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(muted())),
             columns[1],
         );
     }
@@ -76,7 +123,7 @@ pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
         return;
     }
     frame.render_widget(
-        Paragraph::new("─".repeat(usize::from(inner.width))).style(Style::default().fg(MUTED)),
+        Paragraph::new("─".repeat(usize::from(inner.width))).style(Style::default().fg(muted())),
         inner,
     );
 }
@@ -101,19 +148,19 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     let (prompt_marker, prompt_style) = if app.tools_mode == ToolsMode::Auto {
         (
             "⚡",
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            Style::default().fg(warning()).add_modifier(Modifier::BOLD),
         )
     } else if pulse {
         (
             "›",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         )
     } else if app.is_busy() {
-        ("›", Style::default().fg(MUTED))
+        ("›", Style::default().fg(muted()))
     } else {
         (
             "›",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         )
     };
     frame.render_widget(
@@ -149,8 +196,8 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_composer_text(input: &Input) -> Text<'static> {
     let sel = input.selection();
     let sel_style = Style::default().add_modifier(Modifier::REVERSED);
-    let norm_style = Style::default().fg(TEXT);
-    let cursor_style = Style::default().fg(ACCENT);
+    let norm_style = Style::default().fg(text());
+    let cursor_style = Style::default().fg(accent());
     let style_at = |start: usize| match &sel {
         Some(range) if start >= range.start && start < range.end => sel_style,
         _ => norm_style,
@@ -241,14 +288,14 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("{mark} "),
-                            Style::default().fg(if task.done { MUTED } else { ACCENT }),
+                            Style::default().fg(if task.done { muted() } else { accent() }),
                         ),
-                        Span::styled(task.text.clone(), Style::default().fg(TEXT)),
+                        Span::styled(task.text.clone(), Style::default().fg(text())),
                     ]));
                 }
                 6 => lines.push(Line::styled(
                     format!("… {} more", total - 6),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 )),
                 _ => {}
             }
@@ -259,12 +306,12 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.insert(
         0,
         Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default().fg(MUTED)),
+            Span::styled(format!("{marker} "), Style::default().fg(muted())),
             Span::styled(
                 format!("Progress {done}/{total}"),
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" · todo_write · click to fold", Style::default().fg(MUTED)),
+            Span::styled(" · todo_write · click to fold", Style::default().fg(muted())),
         ]),
     );
     frame.render_widget(Paragraph::new(lines), inner);
@@ -293,7 +340,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         (
             "approval needed · enter run · a always allow · shift+tab yolo · esc deny · v diff"
                 .to_owned(),
-            ACCENT,
+            accent(),
         )
     } else if let Some(retry) = &app.retry {
         // A retry in flight: the wait is shown so a slow provider does not
@@ -303,7 +350,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 "retrying in {}s · attempt {} · {}",
                 retry.delay_secs, retry.attempt, retry.reason
             ),
-            ERROR,
+            error(),
         )
     } else if let Some(running) = &app.running_tool {
         let elapsed = app.running_tool_elapsed().unwrap_or_default();
@@ -313,7 +360,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 SPINNER[app.spinner % SPINNER.len()],
                 running.call.function.name
             ),
-            ACCENT,
+            accent(),
         )
     } else if let Some(elapsed) = app.elapsed_seconds() {
         // Compaction is a request of its own: say so instead of "thinking".
@@ -323,7 +370,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                     "{} compacting context · {elapsed:.1}s · esc stop",
                     SPINNER[app.spinner % SPINNER.len()]
                 ),
-                ACCENT,
+                accent(),
             )
         } else {
             let progress = match app.stream_tool_progress() {
@@ -352,7 +399,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
             text.push_str(" · esc stop");
-            (text, ACCENT)
+            (text, accent())
         }
     } else if app.fetching_models {
         (
@@ -360,33 +407,33 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 "{} fetching models · esc stop",
                 SPINNER[app.spinner % SPINNER.len()]
             ),
-            ACCENT,
+            accent(),
         )
     } else if let Some(notice) = &app.notice {
         (
             notice.message.clone(),
             match notice.kind {
-                NoticeKind::Info => MUTED,
-                NoticeKind::Error => ERROR,
+                NoticeKind::Info => muted(),
+                NoticeKind::Error => error(),
             },
         )
     } else {
         // The mode is the idle status's first word: Tab cycles build · plan · chat.
         let text = if app.tools_mode == ToolsMode::Auto {
             format!(
-                "mode {} · [yolo] · shift+tab permissions · enter send · / commands",
+                "mode {} · [yolo] · shift+tab permissions · ctrl+t tabs · enter send · / commands",
                 app.mode.label()
             )
         } else {
             format!(
-                "mode {} · shift+tab yolo · enter send · / commands · F1 help",
+                "mode {} · shift+tab yolo · ctrl+t tabs · enter send · / commands · F1 help",
                 app.mode.label()
             )
         };
         let color = match app.mode {
-            Mode::Build if app.tools_mode == ToolsMode::Auto => YELLOW,
-            Mode::Build => MUTED,
-            _ => ACCENT,
+            Mode::Build if app.tools_mode == ToolsMode::Auto => warning(),
+            Mode::Build => muted(),
+            _ => accent(),
         };
         (text, color)
     };
@@ -399,7 +446,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(
             Paragraph::new(right)
                 .alignment(Alignment::Right)
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(muted())),
             columns[1],
         );
     }

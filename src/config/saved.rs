@@ -52,6 +52,9 @@ pub(super) struct SavedConfig {
     /// Reasoning effort sent with OpenAI-compatible requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) reasoning_effort: Option<String>,
+    /// UI theme name; one of the built-ins in `crate::theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) theme: Option<String>,
 }
 
 fn auto_compact_default() -> bool {
@@ -91,6 +94,7 @@ impl SavedConfig {
             tavily_api_key: None,
             auto_compact: true,
             reasoning_effort: None,
+            theme: None,
         }
     }
 }
@@ -657,6 +661,11 @@ pub(crate) fn save_reasoning_effort(path: &Path, value: Option<String>) -> Resul
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
     })
+}
+
+/// Store the UI theme name, in place.
+pub(crate) fn save_theme(path: &Path, value: &str) -> Result<()> {
+    update_saved(path, |saved| saved.theme = Some(value.to_owned()))
 }
 
 pub(super) fn load_saved(path: &Path) -> Result<Option<SavedConfig>> {

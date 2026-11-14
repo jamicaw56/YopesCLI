@@ -239,6 +239,18 @@ impl App {
             }
             return Action::None;
         }
+        // Tab bar clicks: the header refills `tab_hits` every draw.
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            let column = mouse.column;
+            if let Some(&(_, _, index)) = self
+                .tab_hits
+                .iter()
+                .find(|(start, end, _)| column >= *start && column < *end)
+            {
+                self.select_tab(index);
+                return Action::None;
+            }
+        }
         if self.show_help {
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.help_scroll = self.help_scroll.saturating_sub(3),
@@ -347,6 +359,37 @@ impl App {
             }
             self.should_quit = true;
             return Action::Quit;
+        }
+        // Session tabs: Ctrl+T opens, Alt+W closes, Alt+arrows and Alt+1..9
+        // switch. Guarded against the connect modal so a new tab never
+        // inherits an open dialog.
+        if self.connect.is_none()
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('t' | 'T'))
+        {
+            self.open_tab();
+            return Action::None;
+        }
+        if self.connect.is_none() && key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Char('w' | 'W') => {
+                    self.close_tab();
+                    return Action::None;
+                }
+                KeyCode::Left => {
+                    self.cycle_tab(-1);
+                    return Action::None;
+                }
+                KeyCode::Right => {
+                    self.cycle_tab(1);
+                    return Action::None;
+                }
+                KeyCode::Char(digit @ '1'..='9') => {
+                    self.select_tab(usize::from(digit as u8 - b'1'));
+                    return Action::None;
+                }
+                _ => {}
+            }
         }
         if self.approval.is_some() {
             return self.handle_approval_key(key);

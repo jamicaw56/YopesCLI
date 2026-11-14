@@ -735,6 +735,7 @@ mod tests {
             tavily_api_key: None,
             auto_compact: false,
             reasoning_effort: None,
+            theme: "dark".to_owned(),
         };
         let backend = Backend::new(&config).expect("backend");
         let mut app = App::new(

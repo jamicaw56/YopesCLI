@@ -22,7 +22,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut welcome = vec![
             Line::styled(
                 heading,
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
             Line::raw(""),
         ];
@@ -31,36 +31,36 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         welcome.push(Line::raw(""));
         welcome.push(Line::styled(
             "A quiet place to think out loud.",
-            Style::default().fg(TEXT),
+            Style::default().fg(text()),
         ));
         welcome.push(Line::raw(""));
         if !app.backend.is_configured() {
             welcome.push(Line::styled(
                 "No provider connected.",
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
             welcome.push(Line::styled(
                 "Run /connect to add a provider or a custom endpoint.",
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
         } else if app.backend.model().is_empty() {
             welcome.push(Line::styled(
                 "No model selected.",
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
             welcome.push(Line::styled(
                 "Run /models or /connect to choose a model.",
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
         } else {
             welcome.push(Line::styled(
                 "Type a message to begin.",
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ));
         }
         welcome.push(Line::styled(
             "Type / to see commands.",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
         frame.render_widget(Paragraph::new(welcome).alignment(Alignment::Center), inner);
         return;
@@ -104,12 +104,12 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::raw(""));
         }
         let (label, color) = match message.role {
-            Role::User => ("you", MUTED),
-            Role::Tool => ("tool", MUTED),
+            Role::User => ("you", muted()),
+            Role::Tool => ("tool", muted()),
             // The label names the responding model, not the product.
             Role::Assistant => {
                 let model = app.backend.model();
-                (if model.is_empty() { "assistant" } else { model }, ACCENT)
+                (if model.is_empty() { "assistant" } else { model }, accent())
             }
         };
         if message.role == Role::Tool {
@@ -143,7 +143,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         if let Some(error) = &message.error {
             lines.push(Line::styled(
                 format!("✗ {error}"),
-                Style::default().fg(ERROR),
+                Style::default().fg(crate::theme::current().error),
             ));
             continue;
         }
@@ -166,7 +166,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         if message.content.is_empty() && streaming && !has_calls && message.reasoning.is_empty() {
             lines.push(Line::styled(
                 caret(app.spinner),
-                Style::default().fg(ACCENT),
+                Style::default().fg(accent()),
             ));
             continue;
         }
@@ -199,7 +199,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 Some(rows) => lines.extend(rows.iter().cloned()),
                 None => lines.push(Line::styled(
                     format!(" {}", image.name),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 )),
             }
         }
@@ -215,14 +215,14 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 .filter(|call| !is_hidden_tool(&call.function.name))
             {
                 lines.push(Line::from(vec![
-                    Span::styled("→ ", Style::default().fg(ACCENT)),
+                    Span::styled("→ ", Style::default().fg(accent())),
                     Span::styled(
                         call.function.name.clone(),
-                        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+                        Style::default().fg(text()).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("  {}", tools::preview(call)),
-                        Style::default().fg(MUTED),
+                        Style::default().fg(muted()),
                     ),
                 ]));
             }
@@ -233,12 +233,12 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 if line_len + 2 < usize::from(inner.width) {
                     line.spans.push(Span::styled(
                         format!(" {}", caret(app.spinner)),
-                        Style::default().fg(ACCENT),
+                        Style::default().fg(accent()),
                     ));
                 } else {
                     lines.push(Line::styled(
                         caret(app.spinner),
-                        Style::default().fg(ACCENT),
+                        Style::default().fg(accent()),
                     ));
                 }
             }
@@ -253,12 +253,12 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         lines.push(Line::styled(
             "compacting context",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            Style::default().fg(muted()).add_modifier(Modifier::BOLD),
         ));
         if summary.trim().is_empty() {
             lines.push(Line::styled(
                 caret(app.spinner),
-                Style::default().fg(ACCENT),
+                Style::default().fg(accent()),
             ));
         } else {
             lines.extend(markdown_lines(&summary, inner.width));

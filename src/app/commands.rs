@@ -27,7 +27,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 16] = [
+pub const COMMANDS: [CommandSpec; 17] = [
     CommandSpec {
         name: "/help",
         description: "Show keys and commands",
@@ -67,6 +67,11 @@ pub const COMMANDS: [CommandSpec; 16] = [
         name: "/sessions",
         description: "Switch between saved sessions",
         argument: None,
+    },
+    CommandSpec {
+        name: "/tab",
+        description: "Session tabs: new, close, next, prev, or 1-9",
+        argument: Some("action"),
     },
     CommandSpec {
         name: "/tools",
@@ -145,6 +150,7 @@ mod tests {
                 "/cd",
                 "/models",
                 "/sessions",
+                "/tab",
                 "/tools",
                 "/yolo",
                 "/system",
@@ -159,7 +165,8 @@ mod tests {
         assert_eq!(command_names("/d"), vec!["/disconnect"]);
         assert_eq!(command_names("/r"), vec!["/run"]);
         assert_eq!(command_names("/m"), vec!["/models"]);
-        assert_eq!(command_names("/t"), vec!["/tools"]);
+        assert_eq!(command_names("/s"), vec!["/sessions", "/system", "/skills"]);
+        assert_eq!(command_names("/t"), vec!["/tab", "/tools"]);
         assert_eq!(command_names("/y"), vec!["/yolo"]);
         assert_eq!(command_names("/e"), vec!["/effort"]);
         assert_eq!(command_names("/v"), vec!["/version"]);

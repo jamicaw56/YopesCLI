@@ -27,7 +27,7 @@ pub(crate) use saved::{
     delete_custom_provider, delete_saved_model, disconnect_provider, load_connected_providers,
     load_custom_providers, load_endpoint_models, load_endpoint_secret, rename_custom_provider,
     save_auto_compact, save_connection, save_model, save_reasoning_effort, save_system_prompt,
-    update_endpoint_models, update_model_context_window,
+    save_theme, update_endpoint_models, update_model_context_window,
 };
 
 const CONFIG_VERSION: u32 = 1;
@@ -185,6 +185,8 @@ pub struct Config {
     pub auto_compact: bool,
     /// Reasoning effort to request from OpenAI-compatible backends.
     pub reasoning_effort: Option<String>,
+    /// UI theme name; one of the built-ins in `crate::theme`.
+    pub theme: String,
 }
 
 pub struct Connection {
@@ -359,6 +361,10 @@ impl Config {
                 reasoning_effort: saved
                     .as_ref()
                     .and_then(|saved| saved.reasoning_effort.clone()),
+                theme: saved
+                    .as_ref()
+                    .and_then(|saved| saved.theme.clone())
+                    .unwrap_or_else(|| "dark".to_owned()),
             });
         }
 
@@ -456,6 +462,10 @@ impl Config {
             reasoning_effort: saved
                 .as_ref()
                 .and_then(|saved| saved.reasoning_effort.clone()),
+            theme: saved
+                .as_ref()
+                .and_then(|saved| saved.theme.clone())
+                .unwrap_or_else(|| "dark".to_owned()),
         })
     }
 }

@@ -22,6 +22,7 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
             | "/system"
             | "/effort"
             | "/skills"
+            | "/theme"
             | "/version"
             | "/quit"
     )
@@ -340,6 +341,36 @@ impl App {
                 self.info(format!("yopes {}", crate::update::current_version()));
             }
             "/sessions" => self.open_session_picker(),
+            "/tab" => {
+                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
+                match value.as_str() {
+                    "" | "new" => self.open_tab(),
+                    "close" => self.close_tab(),
+                    "next" => self.cycle_tab(1),
+                    "prev" | "previous" => self.cycle_tab(-1),
+                    other => match other.parse::<usize>() {
+                        Ok(index) if index >= 1 => self.select_tab(index - 1),
+                        _ => self.error("Usage: /tab new|close|next|prev|1-9"),
+                    },
+                }
+            }
+            "/theme" => {
+                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
+                if value.is_empty() {
+                    self.info(format!(
+                        "Theme: {} · /theme <name> · {}",
+                        crate::theme::current_name(),
+                        crate::theme::names()
+                    ));
+                } else if crate::theme::set(&value) {
+                    if let Err(error) = config::save_theme(&self.config_path, &value) {
+                        self.error(format!("Could not save the theme: {error:#}"));
+                    }
+                    self.info(format!("Theme: {}", crate::theme::current_name()));
+                } else {
+                    self.error(format!("Usage: /theme <{}>", crate::theme::names()));
+                }
+            }
             "/system" => {
                 let rest = parts.collect::<Vec<_>>().join(" ");
                 let current = self.backend.system_prompt().map(str::to_owned);
@@ -774,13 +805,13 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::{AuthKind, Config, ProviderKind};
     use crate::session::ToolCall;
     use std::time::Instant;
 
-    fn test_app() -> App {
+    pub(crate) fn test_app() -> App {
         let config = Config {
             provider: ProviderKind::OpenAi,
             provider_label: "OpenAI".to_owned(),
@@ -797,6 +828,7 @@ mod tests {
             tavily_api_key: None,
             auto_compact: false,
             reasoning_effort: None,
+            theme: "dark".to_owned(),
         };
         let backend = Backend::new(&config).expect("backend");
         App::new(

@@ -73,13 +73,31 @@ fn tool_call_name(site: &App, index: usize) -> Option<&str> {
     None
 }
 
-const MUTED: Color = Color::DarkGray;
-const ACCENT: Color = Color::Cyan;
-const ERROR: Color = Color::Red;
-const ADDED: Color = Color::Green;
-const REMOVED: Color = Color::Red;
-const YELLOW: Color = Color::Yellow;
-const TEXT: Color = Color::Reset;
+/// Colors come from the active theme; see `crate::theme`.
+pub(crate) fn muted() -> Color {
+    crate::theme::current().muted
+}
+pub(crate) fn accent() -> Color {
+    crate::theme::current().accent
+}
+pub(crate) fn error() -> Color {
+    crate::theme::current().error
+}
+pub(crate) fn added() -> Color {
+    crate::theme::current().added
+}
+pub(crate) fn removed() -> Color {
+    crate::theme::current().removed
+}
+pub(crate) fn warning() -> Color {
+    crate::theme::current().warning
+}
+pub(crate) fn text() -> Color {
+    crate::theme::current().text
+}
+pub(crate) fn code() -> Color {
+    crate::theme::current().code
+}
 
 pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans
@@ -226,7 +244,7 @@ fn build_mascot_frame(step: usize) -> Vec<Line<'static>> {
         .map(|row| {
             let mut row = row;
             row.push_str(&" ".repeat(MASCOT_WIDTH.saturating_sub(row.chars().count())));
-            Line::styled(row, Style::default().fg(ACCENT))
+            Line::styled(row, Style::default().fg(accent()))
         })
         .collect()
 }
@@ -244,7 +262,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(
             Paragraph::new("Terminal too small")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(muted())),
             area,
         );
         return;
@@ -428,7 +446,7 @@ fn usage_line(usage: Usage) -> Line<'static> {
     if let Some(rate) = usage.tokens_per_second() {
         text.push_str(&format!(" · {rate:.0} t/s"));
     }
-    Line::styled(text, Style::default().fg(MUTED))
+    Line::styled(text, Style::default().fg(muted()))
 }
 
 /// Thinking above a reply: every dim line while streaming or expanded, and
@@ -448,20 +466,20 @@ fn reasoning_lines(message: &Message, streaming: bool, expanded: bool) -> Vec<Li
         return Vec::new();
     }
     if streaming || expanded {
-        let style = Style::default().fg(MUTED);
+        let style = Style::default().fg(muted());
         let hidden = lines.len().saturating_sub(STREAMING_REASONING_LINES);
         let show_hidden = streaming && hidden > 0 && !expanded;
         let start = if show_hidden { hidden } else { 0 };
         let mut output: Vec<Line<'static>> = Vec::new();
         if show_hidden {
             output.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(MUTED)),
+                Span::styled("│ ", Style::default().fg(muted())),
                 Span::styled(format!("… {hidden} earlier lines of thinking"), style),
             ]));
         }
         for line in &lines[start..] {
             output.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(MUTED)),
+                Span::styled("│ ", Style::default().fg(muted())),
                 Span::styled((*line).to_owned(), style),
             ]));
         }
@@ -473,8 +491,8 @@ fn reasoning_lines(message: &Message, streaming: bool, expanded: bool) -> Vec<Li
         lines.join(" ")
     };
     vec![Line::from(vec![
-        Span::styled("▸ ", Style::default().fg(MUTED)),
-        Span::styled(text, Style::default().fg(MUTED)),
+        Span::styled("▸ ", Style::default().fg(muted())),
+        Span::styled(text, Style::default().fg(muted())),
     ])]
 }
 

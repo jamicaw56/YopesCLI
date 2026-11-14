@@ -28,14 +28,14 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
     let title_top = Line::from(vec![
         Span::styled(
             format!(" models{filter_field} "),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ),
         Span::styled(
             format!("[{prov_label}]"),
             if picker.provider_filter.is_some() {
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             },
         ),
         Span::styled(
@@ -45,20 +45,20 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
                 fetch_status
             },
             if app.fetching_models {
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             },
         ),
     ]);
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MUTED))
+        .border_style(Style::default().fg(muted()))
         .title_top(title_top)
         .title_bottom(Line::styled(
             " ↑↓ move · enter switch · tab provider · ctrl+r fetch · esc cancel ",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -69,7 +69,7 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
     let models = app.model_matches();
     if models.is_empty() {
         frame.render_widget(
-            Paragraph::new("No matches.").style(Style::default().fg(MUTED)),
+            Paragraph::new("No matches.").style(Style::default().fg(muted())),
             inner,
         );
         return;
@@ -97,7 +97,7 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
             frame.render_widget(
                 Paragraph::new(Line::styled(
                     format!("  ─{label}{}", "─".repeat(remaining)),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 )),
                 row,
             );
@@ -114,9 +114,9 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
             model.name.clone()
         };
         let title_style = if chosen {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TEXT)
+            Style::default().fg(text())
         };
 
         let active_mark = if is_active_model { "✓ " } else { "  " };
@@ -137,14 +137,14 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
         let padding = " ".repeat(pad_len);
 
         let line = Line::from(vec![
-            Span::styled(marker, Style::default().fg(ACCENT)),
+            Span::styled(marker, Style::default().fg(accent())),
             Span::styled(fitted_title, title_style),
             Span::raw(padding),
             Span::styled(
                 active_mark,
-                Style::default().fg(ADDED).add_modifier(Modifier::BOLD),
+                Style::default().fg(added()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(provider_tag, Style::default().fg(MUTED)),
+            Span::styled(provider_tag, Style::default().fg(muted())),
         ]);
         frame.render_widget(Paragraph::new(line), row);
     }
@@ -168,14 +168,14 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MUTED))
+        .border_style(Style::default().fg(muted()))
         .title_top(Line::styled(
             format!(" sessions{filter_field} "),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ))
         .title_bottom(Line::styled(
             " ↑↓ move · enter load · esc cancel ",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -186,7 +186,7 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
     let sessions = app.session_matches();
     if sessions.is_empty() {
         frame.render_widget(
-            Paragraph::new("No matching sessions.").style(Style::default().fg(MUTED)),
+            Paragraph::new("No matching sessions.").style(Style::default().fg(muted())),
             inner,
         );
         return;
@@ -211,14 +211,14 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
         let left_width = inner.width.saturating_sub(right_width as u16 + 4) as usize;
         let title = entry.title.clone();
         let title_style = if chosen {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TEXT)
+            Style::default().fg(text())
         };
         let line = Line::from(vec![
-            Span::styled(marker, Style::default().fg(ACCENT)),
+            Span::styled(marker, Style::default().fg(accent())),
             Span::styled(format!("{} ", fit_to(&title, left_width)), title_style),
-            Span::styled(fit_to(&right, right_width), Style::default().fg(MUTED)),
+            Span::styled(fit_to(&right, right_width), Style::default().fg(muted())),
         ]);
         frame.render_widget(Paragraph::new(line), row);
     }
@@ -259,11 +259,11 @@ pub(super) fn draw_palette(
     );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MUTED))
-        .title_top(Line::styled(" commands ", Style::default().fg(MUTED)))
+        .border_style(Style::default().fg(muted()))
+        .title_top(Line::styled(" commands ", Style::default().fg(muted())))
         .title_bottom(Line::styled(
             " ↑↓ move · tab complete · enter run ",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -279,18 +279,18 @@ pub(super) fn draw_palette(
         let marker = if chosen { "› " } else { "  " };
         let name = command.display_name();
         let name_style = if chosen {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TEXT)
+            Style::default().fg(text())
         };
         let description_style = if chosen {
-            Style::default().fg(TEXT)
+            Style::default().fg(text())
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         };
         let desc_col_width = usize::from(inner.width).saturating_sub(name_col_width + 3);
         let line = Line::from(vec![
-            Span::styled(marker, Style::default().fg(ACCENT)),
+            Span::styled(marker, Style::default().fg(accent())),
             Span::styled(fit_to(&name, name_col_width), name_style),
             Span::raw(" "),
             Span::styled(

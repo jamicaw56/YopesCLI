@@ -5,17 +5,18 @@
 //! this module only decides structure and style.
 
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, MUTED, TEXT, normalize_line};
+use super::{accent, muted, normalize_line, text};
 
-/// Code stays distinct from inline accents without competing with diff colours.
-pub(super) const CODE: Color = Color::LightCyan;
 mod inline;
 mod table;
+
+/// Re-exported so `markdown::inline` can reach it as `super::code`.
+pub(super) use super::code;
 
 use self::inline::inline_spans;
 use self::table::{is_table_start, render_table};
@@ -73,7 +74,7 @@ pub(super) fn markdown_lines(markdown: &str, width: u16) -> Vec<Line<'static>> {
             }
         }
 
-        output.push(Line::from(inline_spans(line, Style::default().fg(TEXT))));
+        output.push(Line::from(inline_spans(line, Style::default().fg(text()))));
         index += 1;
     }
     output
@@ -132,8 +133,8 @@ fn render_code(
             return cursor + 1;
         }
         output.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(MUTED)),
-            Span::styled(source[cursor].clone(), Style::default().fg(CODE)),
+            Span::styled("│ ", Style::default().fg(muted())),
+            Span::styled(source[cursor].clone(), Style::default().fg(code())),
         ]));
         cursor += 1;
     }
@@ -159,13 +160,13 @@ fn border_line(prefix: &str, width: u16) -> Line<'static> {
     let mut text = super::truncate(prefix, total);
     let used = UnicodeWidthStr::width(text.as_str());
     text.push_str(&"─".repeat(total.saturating_sub(used)));
-    Line::styled(text, Style::default().fg(MUTED))
+    Line::styled(text, Style::default().fg(muted()))
 }
 
 fn rule_line(width: u16) -> Line<'static> {
     Line::styled(
         "─".repeat(usize::from(width).saturating_sub(1).max(1)),
-        Style::default().fg(MUTED),
+        Style::default().fg(muted()),
     )
 }
 
@@ -198,13 +199,13 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 
 fn heading_line(level: usize, title: &str) -> Line<'static> {
     let style = if level <= 2 {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        Style::default().fg(accent()).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+        Style::default().fg(text()).add_modifier(Modifier::BOLD)
     };
     let mut spans = vec![Span::styled(
         format!("{} ", "▰".repeat(level.min(3))),
-        Style::default().fg(ACCENT),
+        Style::default().fg(accent()),
     )];
     spans.extend(inline_spans(title, style));
     Line::from(spans)
@@ -267,10 +268,10 @@ fn quote(line: &str) -> Option<(usize, &str)> {
 }
 
 fn quote_line(depth: usize, text: &str) -> Line<'static> {
-    let mut spans = vec![Span::styled("│ ".repeat(depth), Style::default().fg(MUTED))];
+    let mut spans = vec![Span::styled("│ ".repeat(depth), Style::default().fg(muted()))];
     spans.extend(inline_spans(
         text,
-        Style::default().fg(MUTED).add_modifier(Modifier::ITALIC),
+        Style::default().fg(muted()).add_modifier(Modifier::ITALIC),
     ));
     Line::from(spans)
 }
@@ -331,29 +332,29 @@ fn list_line(line: &str) -> Option<Line<'static>> {
     let (marker, marker_style, content_style) = match (task, kind) {
         (Some(checked), ListKind::Bullet) => {
             let style = if checked {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             } else {
-                Style::default().fg(ACCENT)
+                Style::default().fg(accent())
             };
             let text = if checked { "[x] " } else { "[ ] " };
             let content = if checked {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             } else {
-                Style::default().fg(TEXT)
+                Style::default().fg(crate::theme::current().text)
             };
             (text.to_owned(), style, content)
         }
         (Some(checked), ListKind::Ordered(number)) => {
             let style = if checked {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             } else {
-                Style::default().fg(ACCENT)
+                Style::default().fg(accent())
             };
             let checkbox = if checked { "[x] " } else { "[ ] " };
             let content = if checked {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             } else {
-                Style::default().fg(TEXT)
+                Style::default().fg(crate::theme::current().text)
             };
             (format!("{number}{checkbox}"), style, content)
         }
@@ -365,14 +366,14 @@ fn list_line(line: &str) -> Option<Line<'static>> {
             };
             (
                 symbol.to_owned(),
-                Style::default().fg(ACCENT),
-                Style::default().fg(TEXT),
+                Style::default().fg(accent()),
+                Style::default().fg(text()),
             )
         }
         (None, ListKind::Ordered(number)) => (
             number,
-            Style::default().fg(ACCENT),
-            Style::default().fg(TEXT),
+            Style::default().fg(accent()),
+            Style::default().fg(text()),
         ),
     };
 

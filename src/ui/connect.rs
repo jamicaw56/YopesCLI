@@ -28,20 +28,20 @@ pub(super) fn draw_connect(
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MUTED))
+        .border_style(Style::default().fg(muted()))
         .title_top(Line::from(vec![
             Span::styled(
                 " connect ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("· {} ", connect.stage.label()),
-                Style::default().fg(MUTED),
+                Style::default().fg(muted()),
             ),
         ]))
         .title_bottom(Line::styled(
             " providers + custom · stored locally ",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = block.inner(popup);
@@ -67,12 +67,12 @@ pub(super) fn draw_connect(
     let mut spans = vec![
         Span::styled(
             format!("{}  ", connect.input_label()),
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ),
-        Span::styled(connect.input(), Style::default().fg(TEXT)),
+        Span::styled(connect.input(), Style::default().fg(text())),
     ];
     if connect.uses_cursor() {
-        spans.push(Span::styled("▌", Style::default().fg(ACCENT)));
+        spans.push(Span::styled("▌", Style::default().fg(accent())));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rows[index]);
     index += 1;
@@ -91,20 +91,20 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     let field_line =
         |label: &str, value: &str, is_active: bool, width: u16| -> (Line<'static>, Line<'static>) {
             let label_style = if is_active {
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             };
             let label_line = Line::from(vec![Span::styled(label.to_owned(), label_style)]);
             let bracket_style = if is_active {
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::default().fg(accent()).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(MUTED)
+                Style::default().fg(muted())
             };
             let text_style = if is_active {
-                Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+                Style::default().fg(text()).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(TEXT)
+                Style::default().fg(text())
             };
             let mut spans = vec![
                 Span::styled("[ ", bracket_style),
@@ -114,7 +114,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
                 ),
             ];
             if is_active {
-                spans.push(Span::styled("▌", Style::default().fg(ACCENT)));
+                spans.push(Span::styled("▌", Style::default().fg(accent())));
             }
             spans.push(Span::styled(" ]", bracket_style));
             (label_line, Line::from(spans))
@@ -158,9 +158,9 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     lines.push(Line::from(vec![Span::styled(
         "Models:",
         if models_active {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         },
     )]));
 
@@ -172,9 +172,9 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     models_spans.push(Span::styled(
         "name: [ ",
         if name_active {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         },
     ));
     models_spans.push(Span::styled(
@@ -182,26 +182,26 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
             &connect.custom_model_name,
             usize::from(half).saturating_sub(12),
         ),
-        Style::default().fg(TEXT),
+        Style::default().fg(text()),
     ));
     if name_active {
-        models_spans.push(Span::styled("▌", Style::default().fg(ACCENT)));
+        models_spans.push(Span::styled("▌", Style::default().fg(accent())));
     }
     models_spans.push(Span::styled(
         " ]  ",
         if name_active {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         },
     ));
 
     models_spans.push(Span::styled(
         "modelID: [ ",
         if id_active {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         },
     ));
     models_spans.push(Span::styled(
@@ -209,17 +209,17 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
             &connect.custom_model_id,
             usize::from(half).saturating_sub(14),
         ),
-        Style::default().fg(TEXT),
+        Style::default().fg(text()),
     ));
     if id_active {
-        models_spans.push(Span::styled("▌", Style::default().fg(ACCENT)));
+        models_spans.push(Span::styled("▌", Style::default().fg(accent())));
     }
     models_spans.push(Span::styled(
         " ]",
         if id_active {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         },
     ));
     lines.push(Line::from(models_spans));
@@ -246,10 +246,10 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     let done_style = if done_active {
         Style::default()
             .fg(Color::Black)
-            .bg(ACCENT)
+            .bg(accent())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+        Style::default().fg(text()).add_modifier(Modifier::BOLD)
     };
     lines.push(Line::from(vec![Span::styled(
         if done_active {
@@ -264,12 +264,12 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     if let Some(error) = &connect.error {
         lines.push(Line::styled(
             format!("✗ {error}"),
-            Style::default().fg(ERROR),
+            Style::default().fg(crate::theme::current().error),
         ));
     } else {
         lines.push(Line::styled(
             "Tab switch box · Enter submit · Esc cancel",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ));
     }
 
@@ -288,11 +288,11 @@ pub(super) fn draw_connect_list(
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     SPINNER[spinner % SPINNER.len()],
-                    Style::default().fg(ACCENT),
+                    Style::default().fg(accent()),
                 ),
                 Span::styled(
                     connect.loading_detail().to_owned(),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 ),
             ])),
             area,
@@ -307,7 +307,7 @@ pub(super) fn draw_connect_list(
         let line = Rect::new(area.x, area.y, area.width, 1);
         frame.render_widget(
             Paragraph::new(truncate(error, usize::from(area.width)))
-                .style(Style::default().fg(ERROR)),
+                .style(Style::default().fg(crate::theme::current().error)),
             line,
         );
         area = Rect {
@@ -330,7 +330,7 @@ pub(super) fn draw_connect_list(
     if items.is_empty() {
         if connect.error.is_none() {
             frame.render_widget(
-                Paragraph::new("No matches.").style(Style::default().fg(MUTED)),
+                Paragraph::new("No matches.").style(Style::default().fg(muted())),
                 area,
             );
         }
@@ -362,7 +362,7 @@ pub(super) fn draw_connect_list(
             frame.render_widget(
                 Paragraph::new(Line::styled(
                     format!("  ─{label}{}", "─".repeat(remaining)),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(muted()),
                 )),
                 rect,
             );
@@ -372,22 +372,22 @@ pub(super) fn draw_connect_list(
         let chosen = *index == selected;
         let marker = if chosen { "› " } else { "  " };
         let logo_style = if chosen {
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+            Style::default().fg(text()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(ACCENT)
+            Style::default().fg(accent())
         };
         let title_style = if chosen {
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+            Style::default().fg(text()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TEXT)
+            Style::default().fg(text())
         };
         let detail_style = if chosen {
-            Style::default().fg(TEXT)
+            Style::default().fg(text())
         } else {
-            Style::default().fg(MUTED)
+            Style::default().fg(muted())
         };
         let mut spans = vec![
-            Span::styled(marker, Style::default().fg(ACCENT)),
+            Span::styled(marker, Style::default().fg(accent())),
             Span::styled(item.logo.to_string(), logo_style),
             Span::styled("  ", Style::default()),
             Span::styled(fit_to(&item.title, title_width), title_style),
@@ -395,10 +395,10 @@ pub(super) fn draw_connect_list(
         // A tick marks the provider and model this session is already using.
         spans.push(Span::styled(
             if item.active { "✓ " } else { "  " },
-            Style::default().fg(ADDED).add_modifier(Modifier::BOLD),
+            Style::default().fg(added()).add_modifier(Modifier::BOLD),
         ));
         if connect.stage == ConnectStage::Providers {
-            spans.push(Span::styled("→", Style::default().fg(MUTED)));
+            spans.push(Span::styled("→", Style::default().fg(muted())));
             spans.push(Span::styled("  ", Style::default()));
         } else {
             spans.push(Span::styled("  ", Style::default()));
@@ -453,5 +453,5 @@ pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area:
         }
         ConnectStage::Unlock => "enter unlock · esc back".to_owned(),
     };
-    frame.render_widget(Paragraph::new(text).style(Style::default().fg(MUTED)), area);
+    frame.render_widget(Paragraph::new(text).style(Style::default().fg(muted())), area);
 }

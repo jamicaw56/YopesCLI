@@ -13,14 +13,14 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MUTED))
+        .border_style(Style::default().fg(muted()))
         .title_top(Line::styled(
             " help ",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::styled(
             " esc close · ↑↓ scroll ",
-            Style::default().fg(MUTED),
+            Style::default().fg(muted()),
         ))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = block.inner(popup);
@@ -44,6 +44,10 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         help_row("ctrl+n", "new session"),
         help_row("ctrl+u", "clear input"),
         help_row("ctrl+w", "delete previous word"),
+        help_row("ctrl+t", "new tab"),
+        help_row("alt+w", "close tab"),
+        help_row("alt+←/→", "switch tab"),
+        help_row("alt+1-9", "jump to tab"),
         help_row("ctrl+c", "save and quit"),
         Line::raw(""),
         help_section("commands"),
@@ -64,14 +68,14 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 pub(super) fn help_section(title: &'static str) -> Line<'static> {
     Line::styled(
         title,
-        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        Style::default().fg(muted()).add_modifier(Modifier::BOLD),
     )
 }
 
 pub(super) fn help_row(key: impl Into<String>, description: &'static str) -> Line<'static> {
     let key = key.into();
     Line::from(vec![
-        Span::styled(format!("{key:<14}"), Style::default().fg(TEXT)),
-        Span::styled(description, Style::default().fg(MUTED)),
+        Span::styled(format!("{key:<14}"), Style::default().fg(text())),
+        Span::styled(description, Style::default().fg(muted())),
     ])
 }
