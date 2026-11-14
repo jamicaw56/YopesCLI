@@ -163,3 +163,28 @@ jobs:
           fi
 
           gh release create "$TAG" dist/* --title "$TAG" --notes-file "$notes" --target "$GITHUB_SHA"
+
+  notify:
+    name: Notify Discord
+    needs: [prepare, build, release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send webhook
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        if: env.WEBHOOK != ''
+        run: |
+          if [ "$BUILD_RESULT" = success ] && [ "$RELEASE_RESULT" = success ]; then
+            msg="✅ Production \`$TAG\` published: https://github.com/$REPO/releases/tag/$TAG"
+          else
+            msg="❌ Production \`$TAG\` failed (build: $BUILD_RESULT, release: $RELEASE_RESULT): $RUN"
+          fi
+          curl -sf -X POST "$WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg content "$msg" '{content: $content}')"
