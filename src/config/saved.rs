@@ -269,38 +269,41 @@ pub(crate) fn save_connection(
     let mut saved = load_saved(path)?.unwrap_or_else(SavedConfig::empty);
     let endpoint = connection.base_url.trim_end_matches('/').to_owned();
     // Switching a model must not wipe or downgrade an existing key: when no new
-    // key was supplied, keep whatever is already stored for this endpoint.
+    // key was supplied, keep whatever is already stored for this endpoint. The
+    // lookup covers custom connections too: a custom save without a new key
+    // (the live key carried the connection, or the endpoint is keyless) used to
+    // reset the endpoint's stored secret to empty, and the next run reported
+    // the missing API key.
     let secret = if provided_secret.api_key.is_none() && provided_secret.ciphertext.is_none() {
-        match (connection.provider, &connection.custom_provider_id) {
+        // The saved entry of the custom provider being re-connected is the
+        // most specific key; it wins over the endpoint-wide map.
+        let entry_secret = match (connection.provider, &connection.custom_provider_id) {
             (ProviderKind::Custom, Some(id)) => saved
                 .custom_providers
                 .iter()
                 .find(|stored| stored.id == id.trim())
                 .map(|stored| stored.secret.clone())
-                .or_else(|| {
-                    // Legacy configs keep the active custom secret at the top
-                    // level, with no custom_providers entry to look up.
-                    (saved.provider == ProviderKind::Custom
-                        && saved.base_url.trim_end_matches('/')
-                            == connection.base_url.trim_end_matches('/'))
-                    .then(|| saved.secret.clone())
-                })
-                .unwrap_or_default(),
-            (ProviderKind::Custom, None) => StoredSecret::default(),
-            _ => {
-                // A catalog provider keeps its key under its own endpoint, so
-                // connecting another provider does not take this one away.
+                .filter(|secret| secret.has_key()),
+            _ => None,
+        };
+        entry_secret
+            .or_else(|| {
+                // The endpoint keeps its key in the per-provider map, so a
+                // custom connection without a new key finds it there too.
                 saved
                     .provider_keys
                     .get(&endpoint)
                     .map(|stored| stored.secret.clone())
-                    .or_else(|| {
-                        (saved.base_url.trim_end_matches('/') == endpoint)
-                            .then(|| saved.secret.clone())
-                    })
-                    .unwrap_or_default()
-            }
-        }
+                    .filter(|secret| secret.has_key())
+            })
+            .or_else(|| {
+                // Legacy configs keep the active connection's secret at the
+                // top level, with no custom_providers entry to look up.
+                (saved.base_url.trim_end_matches('/') == endpoint)
+                    .then(|| saved.secret.clone())
+                    .filter(|secret| secret.has_key())
+            })
+            .unwrap_or_default()
     } else {
         provided_secret
     };
@@ -1147,6 +1150,93 @@ mod tests {
         assert_eq!(saved.provider, ProviderKind::Custom);
         assert_eq!(saved.provider_name, "CustomTwo");
         assert!(saved.provider_keys.contains_key("https://shared.test/v1"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn custom_save_over_same_endpoint_keeps_the_stored_key() {
+        use std::{fs, process};
+
+        let path =
+            std::env::temp_dir().join(format!("yopes-custom-endpoint-test-{}.json", process::id()));
+        let _ = fs::remove_file(&path);
+        // A catalog connection stores its key for the endpoint...
+        let catalog = Connection {
+            provider: ProviderKind::OpenAi,
+            provider_name: "One".to_owned(),
+            model: "m".to_owned(),
+            base_url: "https://one.test/v1".to_owned(),
+            api_key: Some("sk-one".to_owned()),
+            api_key_env: None,
+            auth: AuthKind::Bearer,
+            models: Vec::new(),
+            models_url: None,
+            custom_provider_id: None,
+            provider_id: Some("one".to_owned()),
+            reuse_secret: false,
+        };
+        save_connection(&path, &catalog, None).unwrap();
+
+        // ...then the same endpoint is re-saved as a custom connection with no
+        // new key (the live backend key satisfied the token check). That used
+        // to wipe the stored key, and the next run asked for it again.
+        let custom = Connection {
+            provider: ProviderKind::Custom,
+            provider_name: "Reconnected".to_owned(),
+            model: "m".to_owned(),
+            base_url: "https://one.test/v1".to_owned(),
+            api_key: None,
+            api_key_env: None,
+            auth: AuthKind::Bearer,
+            models: Vec::new(),
+            models_url: None,
+            custom_provider_id: None,
+            provider_id: None,
+            reuse_secret: false,
+        };
+        save_connection(&path, &custom, None).unwrap();
+
+        let secret = load_endpoint_secret(&path, "https://one.test/v1").unwrap();
+        assert_eq!(secret.plaintext(), Some("sk-one"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unknown_custom_provider_id_keeps_the_stored_key() {
+        use std::{fs, process};
+
+        let path =
+            std::env::temp_dir().join(format!("yopes-custom-unknown-test-{}.json", process::id()));
+        let _ = fs::remove_file(&path);
+        let connection = Connection {
+            provider: ProviderKind::Custom,
+            provider_name: "One".to_owned(),
+            model: "m".to_owned(),
+            base_url: "https://one.test/v1".to_owned(),
+            api_key: Some("sk-one".to_owned()),
+            api_key_env: None,
+            auth: AuthKind::Bearer,
+            models: Vec::new(),
+            models_url: None,
+            custom_provider_id: None,
+            provider_id: None,
+            reuse_secret: false,
+        };
+        save_connection(&path, &connection, None).unwrap();
+
+        // A stale custom-provider id (legacy configs fabricate ids) misses the
+        // saved entry; the endpoint's key in the per-provider map must still
+        // survive a keep-secret save.
+        let mut stale = connection;
+        stale.api_key = None;
+        stale.custom_provider_id = Some("does-not-exist".to_owned());
+        stale.reuse_secret = true;
+        save_connection(&path, &stale, None).unwrap();
+
+        let secret = load_endpoint_secret(&path, "https://one.test/v1").unwrap();
+        assert_eq!(secret.plaintext(), Some("sk-one"));
+
         let _ = fs::remove_file(&path);
     }
 }

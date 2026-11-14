@@ -151,10 +151,17 @@ impl App {
             .as_ref()
             .map_or(AuthKind::Bearer, |provider| provider.auth);
         if auth.requires_token() && api_key.is_none() {
-            self.error(format!(
-                "{} has an encrypted key — run /connect to unlock it.",
-                choice.provider
-            ));
+            if secret.as_ref().is_some_and(|secret| secret.has_key()) {
+                self.error(format!(
+                    "{} has an encrypted key — run /connect to unlock it.",
+                    choice.provider
+                ));
+            } else {
+                self.error(format!(
+                    "{} has no API key stored — run /connect to enter one.",
+                    choice.provider
+                ));
+            }
             return;
         }
         let models = custom
