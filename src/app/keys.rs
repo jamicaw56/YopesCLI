@@ -1,5 +1,5 @@
-use super::*;
 use super::images::pasted_image_path;
+use super::*;
 
 impl App {
     pub(crate) fn handle_paste(&mut self, value: &str) {
@@ -230,9 +230,11 @@ impl App {
         // closes that tab, `+` opens one, the label switches to it.
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             let column = mouse.column;
-            if let Some(&(_, _, _, index)) = self.tab_close_hits.iter().find(|(start, end, hit_row, _)| {
-                mouse.row == *hit_row && column >= *start && column < *end
-            }) {
+            if let Some(&(_, _, _, index)) =
+                self.tab_close_hits.iter().find(|(start, end, hit_row, _)| {
+                    mouse.row == *hit_row && column >= *start && column < *end
+                })
+            {
                 self.close_tab_at(index);
                 return Action::None;
             }

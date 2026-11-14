@@ -453,5 +453,8 @@ pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area:
         }
         ConnectStage::Unlock => "enter unlock · esc back".to_owned(),
     };
-    frame.render_widget(Paragraph::new(text).style(Style::default().fg(muted())), area);
+    frame.render_widget(
+        Paragraph::new(text).style(Style::default().fg(muted())),
+        area,
+    );
 }

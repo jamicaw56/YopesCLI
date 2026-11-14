@@ -118,9 +118,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     if x.saturating_add(plus_w) <= end_x {
         title_spans.push(Span::styled(
             " +",
-            Style::default()
-                .fg(accent())
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ));
         x = x.saturating_add(plus_w);
         app.tab_new_hit = Some((x.saturating_sub(plus_w - 1), x, tab_row));
@@ -332,7 +330,10 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("Progress {done}/{total}"),
                 Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" · todo_write · click to fold", Style::default().fg(muted())),
+            Span::styled(
+                " · todo_write · click to fold",
+                Style::default().fg(muted()),
+            ),
         ]),
     );
     frame.render_widget(Paragraph::new(lines), inner);

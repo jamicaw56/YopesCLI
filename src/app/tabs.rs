@@ -15,9 +15,7 @@ use ratatui::text::Line;
 
 use anyhow::Result;
 
-use super::{
-    ActiveRequest, App, ChangeReport, Input, Mode, RunningTool, ToolApproval, ToolsMode,
-};
+use super::{ActiveRequest, App, ChangeReport, Input, Mode, RunningTool, ToolApproval, ToolsMode};
 use crate::session::{ImageAttachment, Session, ToolCall};
 
 /// Upper bound: one tab per Alt+1..9 jump.
@@ -323,12 +321,9 @@ impl App {
         if self.active.as_ref().is_some_and(|active| active.id == id) {
             return Some(self.tab);
         }
-        self.tabs.iter().position(|state| {
-            state
-                .active
-                .as_ref()
-                .is_some_and(|active| active.id == id)
-        })
+        self.tabs
+            .iter()
+            .position(|state| state.active.as_ref().is_some_and(|active| active.id == id))
     }
 
     /// Which tab owns the running tool call `call_id`?
@@ -353,9 +348,7 @@ impl App {
         if self.session.id == id {
             return Some(self.tab);
         }
-        self.tabs
-            .iter()
-            .position(|state| state.session.id == id)
+        self.tabs.iter().position(|state| state.session.id == id)
     }
 
     /// Whether tab `index` is mid-request, for the tab bar spinner.
@@ -371,9 +364,7 @@ impl App {
     /// tab bar marker.
     pub(crate) fn tab_busy(&self, index: usize) -> bool {
         if index == self.tab {
-            self.approval.is_some()
-                || self.running_tool.is_some()
-                || !self.pending_tools.is_empty()
+            self.approval.is_some() || self.running_tool.is_some() || !self.pending_tools.is_empty()
         } else {
             let state = &self.tabs[index];
             state.approval.is_some()

@@ -214,7 +214,8 @@ impl App {
         self.input.value.replace_range(start..end, "");
         self.input.cursor = start;
         if let Some(pasted) = self.image_paths.remove(&placeholder) {
-            self.attachments.retain(|image| image.name != pasted.attachment);
+            self.attachments
+                .retain(|image| image.name != pasted.attachment);
         }
         true
     }
@@ -288,7 +289,7 @@ mod tests {
         app.handle_paste(&second.display().to_string());
         assert_eq!(
             app.input.before_cursor(),
-            format!("[Image 1]just text[Image 2]")
+            "[Image 1]just text[Image 2]".to_string()
         );
         assert_eq!(app.attachments.len(), 2);
         assert_eq!(app.image_paths.len(), 2);
