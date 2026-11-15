@@ -6,6 +6,14 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Auto compaction is now probabilistic: above ~80% of the context window each
+  turn rolls for compaction, with the chance rising to about half near 90% and
+  certain at 100% (always past it), instead of firing on a fixed threshold.
+- The `compacting context` status renders in the warning color, so it reads
+  apart from the thinking caret, which stays in the accent color.
+
 ### Added
 
 - An npm package: `npm install -g yopes` downloads the release binary for

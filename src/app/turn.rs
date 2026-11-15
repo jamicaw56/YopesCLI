@@ -1,7 +1,33 @@
 use super::*;
+use chacha20poly1305::aead::{OsRng, rand_core::RngCore};
 
 fn home_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+}
+
+/// Whether the context is due for compaction: certain past the window, and a
+/// rising random chance above ~80% of it — about half the turns near 90%,
+/// every turn at 100%. A deterministic threshold would compact on the exact
+/// same turn every time; the roll spreads it out instead.
+fn compaction_due(total: u64, window: u64) -> bool {
+    if total >= window {
+        return true;
+    }
+    let mut bytes = [0u8; 8];
+    OsRng.fill_bytes(&mut bytes);
+    compaction_chance(total, window, u64::from_le_bytes(bytes))
+}
+
+/// The chance decision with the roll pinned, so tests can check the ramp.
+/// The chance rises linearly from 0 at `start` to 1 at the window itself.
+fn compaction_chance(total: u64, window: u64, roll: u64) -> bool {
+    let start = window / COMPACT_CHANCE_FRAC * (COMPACT_CHANCE_FRAC - 1);
+    if total < start {
+        return false;
+    }
+    let span = window.saturating_sub(start).max(1);
+    let progress = total - start;
+    roll / (u64::MAX / span) < progress
 }
 
 /// Whether a command can run while the model is still answering.
@@ -208,18 +234,15 @@ impl App {
         self.begin_turn()
     }
 
-    /// Start the next turn: when the history outgrows the context budget,
-    /// summarize the older turns first, then send the real request.
+    /// Start the next turn: the context load decides whether older turns are
+    /// summarized first, then the real request is sent.
     pub(crate) fn begin_turn(&mut self) -> Action {
         let total = Session::estimate_tokens(&self.session.messages);
         let window = self.model_context_window().unwrap_or(128_000);
-        let (threshold, keep) = (
-            window / COMPACTION_THRESHOLD_FRAC,
-            window / COMPACTION_KEEP_FRAC,
-        );
-        if self.auto_compact && total > threshold {
+        let keep = window / COMPACTION_KEEP_FRAC;
+        if self.auto_compact {
             if let Some(split) = self.session.compaction_split(keep) {
-                if split > 0 {
+                if split > 0 && compaction_due(total, window) {
                     return self.begin_compaction(split);
                 }
             }
@@ -834,6 +857,24 @@ pub(crate) mod tests {
             None,
             false,
         )
+    }
+
+    #[test]
+    fn the_compaction_chance_ramps_to_certain() {
+        let window = 100_000u64;
+        let quarter = u64::MAX / 4;
+        let three_quarters = u64::MAX / 4 * 3;
+        // Below the 80% start: never, whatever the roll.
+        assert!(!compaction_chance(60_000, window, 0));
+        // At 80%: the chance just begins; nothing compacts yet.
+        assert!(!compaction_chance(80_000, window, 0));
+        // At 90%: about half the rolls compact.
+        assert!(compaction_chance(90_000, window, quarter));
+        assert!(!compaction_chance(90_000, window, three_quarters));
+        // At 99%: most rolls compact.
+        assert!(compaction_chance(99_000, window, quarter));
+        // Past the window: always, whatever the roll.
+        assert!(compaction_chance(150_000, window, u64::MAX));
     }
 
     #[test]
