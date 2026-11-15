@@ -340,6 +340,11 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
 // ponytail: reqwest still re-resolves at connect, so a short-TTL rebind can
 // slip through; the full fix needs a custom reqwest DNS resolver.
 fn check_resolved_host(url: &reqwest::Url) -> Result<()> {
+    // A proxy resolves the target itself, so a local lookup says nothing
+    // about the connection the proxy will make.
+    if proxy_env_set() {
+        return Ok(());
+    }
     let Some(host) = url.host_str() else {
         bail!("access to local or private network addresses is blocked");
     };
@@ -356,4 +361,25 @@ fn check_resolved_host(url: &reqwest::Url) -> Result<()> {
         bail!("access to local or private network addresses is blocked");
     }
     Ok(())
+}
+
+/// Whether a proxy is configured through the environment, the same way
+/// `reqwest` picks one up.
+// ponytail: `no_proxy` exceptions are not parsed, so a host listed there
+// skips the resolved-address check too.
+fn proxy_env_set() -> bool {
+    [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .iter()
+    .any(|name| {
+        env::var(name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    })
 }
