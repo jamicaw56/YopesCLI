@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
     path::PathBuf,
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Result;
@@ -68,6 +68,10 @@ const COMPACT_CHANCE_FRAC: u64 = 5; // chance starts at ~4/5 of window
 const COMPACTION_KEEP_FRAC: u64 = 8; // keep ~1/8 of window
 /// Default context window (128K) when no specific model context size is known.
 pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
+/// How many compaction requests one turn may run before the full history is
+/// sent regardless. Without a cap a provider that answers empty, or a summary
+/// that never shrinks the load, loops the turn forever.
+const MAX_COMPACTION_ATTEMPTS: u32 = 2;
 
 struct ActiveRequest {
     id: u64,
@@ -79,11 +83,12 @@ struct ActiveRequest {
     compacting: Option<Compaction>,
 }
 
-/// A compaction in flight: which history prefix it summarizes and the text
-/// streamed back so far.
-struct Compaction {
+/// A compaction in flight: which history prefix it summarizes, the text
+/// streamed back so far, and how many rounds already ran this turn.
+pub(crate) struct Compaction {
     split: usize,
     text: String,
+    attempts: u32,
 }
 
 pub struct ToolApproval {
@@ -317,6 +322,10 @@ pub struct App {
     spent_prompt_tokens: u64,
     /// Completion tokens billed across this session.
     spent_completion_tokens: u64,
+    /// Cached context-token estimate: (measured at, tokens). The header reads
+    /// this every frame, and counting every transcript character per keystroke
+    /// is part of what made typing lag while a long reply streamed.
+    context_cache: (Option<Instant>, u64),
     pub(crate) prompt_started: Option<Instant>,
     /// This tab's own working directory: relative tool paths resolve against
     /// it. One tab's `/cd` or `move_to` never reaches another conversation,
@@ -377,6 +386,7 @@ impl App {
             progress_row: None,
             composer_area: None,
             diff_sides: true,
+            context_cache: (None, 0),
             active: None,
             next_request_id: 0,
             pending_tools: VecDeque::new(),
@@ -523,8 +533,20 @@ impl App {
     }
 
     /// Estimated tokens the next request would send, the context window load.
-    pub fn context_tokens(&self) -> u64 {
-        Session::estimate_tokens(&self.session.messages)
+    ///
+    /// Cached for a quarter second: the header draws this every frame, and
+    /// recounting the whole transcript per keystroke is lag nobody needs.
+    pub fn context_tokens(&mut self) -> u64 {
+        if self
+            .context_cache
+            .0
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(250))
+        {
+            return self.context_cache.1;
+        }
+        let tokens = Session::estimate_tokens(&self.session.messages);
+        self.context_cache = (Some(Instant::now()), tokens);
+        tokens
     }
 
     /// Context-window size of the active model from its saved metadata, if known.
@@ -550,11 +572,10 @@ impl App {
     /// Record whether the terminal has focus.
     ///
     /// A background terminal shows nothing, so the ticker stops and the
-    /// spinner freezes instead of burning power on frames nobody sees.
+    /// spinner freezes instead of burning power on frames nobody sees. The
+    /// retry notice stays: the retry runs in the background, and dropping its
+    /// footer text makes a waiting request look like a silent hang.
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
-        if !focused {
-            self.retry = None;
-        }
     }
 }

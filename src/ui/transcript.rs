@@ -190,7 +190,18 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     lines.extend(parsed);
                 }
             } else {
-                lines.extend(markdown_lines(&message.content, inner.width));
+                // Only the tail is parsed while it streams: running the whole
+                // markdown parser over the reply so far on every frame is
+                // what made typing lag. The full parse happens once when the
+                // message finishes, and the result is cached.
+                let tail = streaming_tail(&message.content);
+                if tail.len() != message.content.len() {
+                    lines.push(Line::styled(
+                        "… earlier reply hidden while it streams".to_owned(),
+                        Style::default().fg(muted()),
+                    ));
+                }
+                lines.extend(markdown_lines(tail, inner.width));
             }
         }
         // Pasted screenshots show up as pixel art directly under the text.
