@@ -388,7 +388,10 @@ mod tests {
     fn the_model_names_a_task_and_the_row_shows_it() {
         let (mut app, run) = app_with_run();
         // Until the name arrives the row falls back to the task excerpt.
-        assert_eq!(app.subagents[0].row_label(), "Write the tests for the parser");
+        assert_eq!(
+            app.subagents[0].row_label(),
+            "Write the tests for the parser"
+        );
 
         app.on_delegate_update(DelegateUpdate::Named {
             run,

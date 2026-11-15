@@ -289,20 +289,26 @@ impl Backend {
                 Err(anyhow!("no API key configured; run /connect"))
             }
             ProviderKind::OpenAi | ProviderKind::Custom => {
-                self.stream_openai(request_id, &messages, tooling, mode_note, &workspace, &events)
-                    .await
+                self.stream_openai(
+                    request_id, &messages, tooling, mode_note, &workspace, &events,
+                )
+                .await
             }
             ProviderKind::Ollama => {
                 self.stream_ollama(request_id, &messages, mode_note, &workspace, &events)
                     .await
             }
             ProviderKind::Anthropic => {
-                self.stream_anthropic(request_id, &messages, tooling, mode_note, &workspace, &events)
-                    .await
+                self.stream_anthropic(
+                    request_id, &messages, tooling, mode_note, &workspace, &events,
+                )
+                .await
             }
             ProviderKind::Gemini => {
-                self.stream_gemini(request_id, &messages, tooling, mode_note, &workspace, &events)
-                    .await
+                self.stream_gemini(
+                    request_id, &messages, tooling, mode_note, &workspace, &events,
+                )
+                .await
             }
         };
         match result {

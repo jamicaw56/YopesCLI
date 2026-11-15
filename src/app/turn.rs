@@ -540,10 +540,7 @@ impl App {
     pub(crate) fn change_directory(&mut self, value: &str) {
         let value = value.trim();
         if value.is_empty() {
-            self.info(format!(
-                "Working directory: {}",
-                self.working_dir.display()
-            ));
+            self.info(format!("Working directory: {}", self.working_dir.display()));
             return;
         }
         let expanded = if let Some(rest) = value

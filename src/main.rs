@@ -749,10 +749,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         Some(message) => {
                             let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                                 run,
-                                text: format!(
-                                    "⚠ {} — {}",
-                                    requested_call.function.name, message
-                                ),
+                                text: format!("⚠ {} — {}", requested_call.function.name, message),
                             });
                             Err(message)
                         }

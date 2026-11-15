@@ -637,12 +637,28 @@ mod tests {
             Message::tool_result("call_1", "contents"),
         ];
 
-        let tooling = request_messages(&messages, true, ImageStyle::None, None, None, Path::new(".")).unwrap();
+        let tooling = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert_eq!(tooling[0]["role"], "system");
         assert_eq!(tooling[2]["tool_calls"][0]["function"]["name"], "read_file");
         assert_eq!(tooling[3]["tool_call_id"], "call_1");
 
-        let plain = request_messages(&messages, false, ImageStyle::None, None, None, Path::new(".")).unwrap();
+        let plain = request_messages(
+            &messages,
+            false,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(
             plain
                 .iter()
@@ -658,7 +674,15 @@ mod tests {
     #[test]
     fn the_mode_instruction_lands_in_the_system_prompt() {
         let messages = vec![Message::new(Role::User, "hi")];
-        let plain = request_messages(&messages, true, ImageStyle::None, None, None, Path::new(".")).unwrap();
+        let plain = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         let plan = request_messages(
             &messages,
             true,
@@ -699,8 +723,24 @@ mod tests {
         assert!(system.find("Always answer").unwrap() < system.find("PLAN MODE").unwrap());
         // A blank prompt adds nothing.
         assert_eq!(
-            request_messages(&messages, true, ImageStyle::None, Some("  "), None, Path::new(".")).unwrap(),
-            request_messages(&messages, true, ImageStyle::None, None, None, Path::new(".")).unwrap()
+            request_messages(
+                &messages,
+                true,
+                ImageStyle::None,
+                Some("  "),
+                None,
+                Path::new(".")
+            )
+            .unwrap(),
+            request_messages(
+                &messages,
+                true,
+                ImageStyle::None,
+                None,
+                None,
+                Path::new(".")
+            )
+            .unwrap()
         );
     }
 
@@ -715,7 +755,15 @@ mod tests {
         });
         let messages = vec![message];
 
-        let parts = request_messages(&messages, true, ImageStyle::Parts, None, None, Path::new(".")).unwrap();
+        let parts = request_messages(
+            &messages,
+            true,
+            ImageStyle::Parts,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         let sent = parts
             .last()
             .unwrap()
@@ -731,12 +779,28 @@ mod tests {
         assert!(parts.last().unwrap().get("images").is_none());
 
         // Ollama wants a flat base64 array on the message itself.
-        let ollama = request_messages(&messages, true, ImageStyle::Ollama, None, None, Path::new(".")).unwrap();
+        let ollama = request_messages(
+            &messages,
+            true,
+            ImageStyle::Ollama,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         let last = ollama.last().unwrap();
         assert_eq!(last["content"], "what changed?");
         assert_eq!(last["images"][0], "aWNvbg==");
         // Plain requests keep the raw attachment field out.
-        let plain = request_messages(&messages, false, ImageStyle::None, None, None, Path::new(".")).unwrap();
+        let plain = request_messages(
+            &messages,
+            false,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(plain.last().unwrap().get("images").is_none());
         assert_eq!(plain.last().unwrap()["role"], "user");
     }
@@ -764,7 +828,15 @@ mod tests {
             Message::new(Role::User, "thanks, now list the files"),
         ];
 
-        let request = request_messages(&messages, true, ImageStyle::Parts, None, None, Path::new(".")).unwrap();
+        let request = request_messages(
+            &messages,
+            true,
+            ImageStyle::Parts,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         // system, user, assistant, tool, user(images), assistant, user
         assert_eq!(request.len(), 7);
         assert_eq!(request[3]["role"], "tool");
@@ -809,7 +881,15 @@ mod tests {
             Message::tool_result("call_2", "text of b"),
         ];
 
-        let request = request_messages(&messages, true, ImageStyle::Parts, None, None, Path::new(".")).unwrap();
+        let request = request_messages(
+            &messages,
+            true,
+            ImageStyle::Parts,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         // system, user, assistant, tool, tool, user(images): the images
         // message waits for the whole run so tool-call pairing stays valid.
         assert_eq!(request.len(), 6);
@@ -842,7 +922,8 @@ mod tests {
             Message::tool_result("call_42", "fn main() {}"),
         ];
 
-        let (system, payload) = anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        let (system, payload) =
+            anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert!(system.is_some());
         assert_eq!(payload.len(), 3);
         assert_eq!(payload[0]["role"], "user");
@@ -870,7 +951,8 @@ mod tests {
             Message::tool_result("call_99", "file.txt"),
         ];
 
-        let (instruction, contents) = gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        let (instruction, contents) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert!(instruction.is_some());
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[0]["role"], "user");
@@ -892,17 +974,27 @@ mod tests {
             Message::tool_result("user-cmd-1", "hi"),
         ];
 
-        let openai = request_messages(&messages, true, ImageStyle::None, None, None, Path::new(".")).unwrap();
+        let openai = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert_eq!(openai.len(), 3);
         assert_eq!(openai[1]["role"], "user");
         assert_eq!(openai[2]["role"], "user");
         assert!(openai[2]["content"].as_str().unwrap().contains("hi"));
 
-        let (_, anthropic) = anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        let (_, anthropic) =
+            anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert_eq!(anthropic.len(), 1);
         assert_eq!(anthropic[0]["role"], "user");
 
-        let (_, gemini) = gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        let (_, gemini) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert_eq!(gemini.len(), 1);
         assert_eq!(gemini[0]["role"], "user");
     }

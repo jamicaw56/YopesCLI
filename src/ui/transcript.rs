@@ -361,7 +361,9 @@ fn transcript_window(
         }
         (first, accumulated.saturating_sub(height), starts.len())
     } else {
-        let first = starts.partition_point(|&row| row <= scroll).saturating_sub(1);
+        let first = starts
+            .partition_point(|&row| row <= scroll)
+            .saturating_sub(1);
         let last = starts.partition_point(|&row| row < scroll + height);
         (first, scroll - starts[first], last)
     }

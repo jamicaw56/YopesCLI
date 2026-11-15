@@ -100,7 +100,8 @@ pub fn scoped_workspace<T>(root: &Path, body: impl FnOnce() -> T) -> T {
 /// Where relative tool paths resolve against right now: the scoped root when
 /// one is set, the process working directory otherwise.
 pub fn workspace() -> PathBuf {
-    WORKSPACE.with(|cell| cell.borrow().clone())
+    WORKSPACE
+        .with(|cell| cell.borrow().clone())
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
@@ -491,7 +492,12 @@ mod tests {
         let arguments = format!(r#"{{"job_id":{id}}}"#);
         let mut output = String::new();
         for _ in 0..50 {
-            output = execute(&ToolCall::new("call_42", "bash_output", &arguments), None, Path::new(".")).unwrap();
+            output = execute(
+                &ToolCall::new("call_42", "bash_output", &arguments),
+                None,
+                Path::new("."),
+            )
+            .unwrap();
             if output.contains("Exit code") {
                 break;
             }
@@ -523,10 +529,20 @@ mod tests {
         .unwrap();
         let id = job_id(&sleeper);
         let arguments = format!(r#"{{"job_id":{id}}}"#);
-        let killed = execute(&ToolCall::new("call_45", "bash_kill", &arguments), None, Path::new(".")).unwrap();
+        let killed = execute(
+            &ToolCall::new("call_45", "bash_kill", &arguments),
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(killed.contains("Killed"), "{killed}");
         thread::sleep(Duration::from_millis(50));
-        let after = execute(&ToolCall::new("call_46", "bash_output", &arguments), None, Path::new(".")).unwrap();
+        let after = execute(
+            &ToolCall::new("call_46", "bash_output", &arguments),
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(after.contains("Exit code"), "{after}");
     }
 
@@ -536,7 +552,9 @@ mod tests {
         let search = ToolCall::new("call_3", "web_search", r#"{"query":"rust 2026 release"}"#);
         assert_eq!(preview(&search), "rust 2026 release");
 
-        let error = execute(&search, None, Path::new(".")).unwrap_err().to_string();
+        let error = execute(&search, None, Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("TAVILY_API_KEY"));
         let empty = ToolCall::new("call_4", "web_search", r#"{"query":"  "}"#);
         let error = execute(&empty, Some("tvly-test"), Path::new("."))
@@ -550,20 +568,28 @@ mod tests {
         use super::execute;
         use super::web::strip_html;
         let empty = ToolCall::new("call_30", "web_fetch", r#"{"url":"  "}"#);
-        let error = execute(&empty, None, Path::new(".")).unwrap_err().to_string();
+        let error = execute(&empty, None, Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("url"), "{error}");
         let scheme = ToolCall::new("call_31", "web_fetch", r#"{"url":"ftp://example.test"}"#);
-        let error = execute(&scheme, None, Path::new(".")).unwrap_err().to_string();
+        let error = execute(&scheme, None, Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("http"), "{error}");
         let local = ToolCall::new("call_32", "web_fetch", r#"{"url":"http://127.0.0.1:8080"}"#);
-        let error = execute(&local, None, Path::new(".")).unwrap_err().to_string();
+        let error = execute(&local, None, Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("blocked"), "{error}");
         let meta = ToolCall::new(
             "call_33",
             "web_fetch",
             r#"{"url":"http://169.254.169.254"}"#,
         );
-        let error = execute(&meta, None, Path::new(".")).unwrap_err().to_string();
+        let error = execute(&meta, None, Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("blocked"), "{error}");
 
         assert_eq!(
@@ -673,7 +699,12 @@ mod tests {
                 dir.display().to_string()
             )
         };
-        let every = execute(&ToolCall::new("call_13", "grep", args("")), None, Path::new(".")).unwrap();
+        let every = execute(
+            &ToolCall::new("call_13", "grep", args("")),
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(every.contains("top.txt:1:"), "{every}");
         assert!(every.contains("top.txt:3:"), "{every}");
         assert!(every.contains("code.rs:1:"), "{every}");
@@ -700,7 +731,12 @@ mod tests {
             r#"{{"pattern":"absent-nowhere","path":{:?}}}"#,
             dir.display().to_string()
         );
-        let absent = execute(&ToolCall::new("call_16", "grep", absent_args), None, Path::new(".")).unwrap();
+        let absent = execute(
+            &ToolCall::new("call_16", "grep", absent_args),
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(absent.contains("(no matches)"), "{absent}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -725,7 +761,9 @@ mod tests {
         let listing = ToolCall::new("call_8", "read_file", r#"{"path":"."}"#);
         assert!(execute(&listing, None, Path::new(".")).is_ok());
         let ranged = ToolCall::new("call_9", "read_file", r#"{"path":".","start_line":2}"#);
-        let error = execute(&ranged, None, Path::new(".")).unwrap_err().to_string();
+        let error = execute(&ranged, None, Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("directory"), "{error}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -867,7 +905,11 @@ mod tests {
 
         // A missing target fails the same way.
         let error = execute(
-            &ToolCall::new("call_32", "move_to", json!({ "path": "absent" }).to_string()),
+            &ToolCall::new(
+                "call_32",
+                "move_to",
+                json!({ "path": "absent" }).to_string(),
+            ),
             None,
             Path::new(&workspace),
         )
