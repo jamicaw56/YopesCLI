@@ -4,6 +4,7 @@
 use crate::config::AuthKind;
 use crate::diff::FileDiff;
 use crate::session::{Message, ToolCall};
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoticeKind {
@@ -14,6 +15,9 @@ pub enum NoticeKind {
 pub struct Notice {
     pub kind: NoticeKind,
     pub message: String,
+    /// When the notice was raised: the footer dismisses it after a few
+    /// seconds instead of leaving an old error sitting over new output.
+    pub started: Instant,
 }
 
 pub enum Action {
@@ -26,6 +30,9 @@ pub enum Action {
         mode_note: Option<&'static str>,
     },
     Cancel(u64),
+    /// Kill the foreground commands one session owns: the Esc interrupt is
+    /// scoped to the interrupting tab, so other tabs' commands survive.
+    KillCommands(u64),
     RunTool {
         call: ToolCall,
     },

@@ -39,11 +39,32 @@ pub(super) fn draw_agents_sidebar(frame: &mut Frame, app: &mut App, area: Rect) 
         app.sidebar_hits.clear();
         return;
     }
+    // Running runs pin to the top so live work is never pushed off screen by
+    // finished ones stacking below; finished runs follow, most recent first.
+    // The hit index maps back to the run's position in `subagents`.
+    let mut rows: Vec<(usize, &crate::app::Subagent)> = Vec::new();
+    for (index, agent) in app.subagents.iter().enumerate() {
+        if agent.status == crate::app::SubagentStatus::Running {
+            rows.push((index, agent));
+        }
+    }
+    let running = rows.len();
+    for (index, agent) in app.subagents.iter().enumerate().rev() {
+        if agent.status != crate::app::SubagentStatus::Running {
+            rows.push((index, agent));
+        }
+    }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(muted()))
         .title_top(Line::styled(
-            format!(" agents {} ", app.subagents.len()),
+            // The badge counts live work apart from the stack: a finished run
+            // must not make the sidebar look busier than it is.
+            format!(
+                " agents {} running · {} done ",
+                running,
+                app.subagents.len().saturating_sub(running)
+            ),
             Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::styled(
@@ -55,17 +76,15 @@ pub(super) fn draw_agents_sidebar(frame: &mut Frame, app: &mut App, area: Rect) 
 
     app.sidebar_hits.clear();
     let visible = usize::from(inner.height);
-    // The runs stack downward; the newest stay visible when the list outgrows
-    // the panel, so live work is never pushed off screen.
-    let skip = app.subagents.len().saturating_sub(visible);
-    for (row, agent) in app.subagents.iter().skip(skip).enumerate() {
+    let skip = rows.len().saturating_sub(visible);
+    for (row, (index, agent)) in rows.iter().skip(skip).enumerate() {
         let y = inner.y.saturating_add(row as u16);
         frame.render_widget(
             Paragraph::new(agent_row(agent, app.spinner)),
             Rect::new(inner.x, y, inner.width, 1),
         );
         app.sidebar_hits
-            .push((area.x, area.x + area.width, y, skip + row));
+            .push((area.x, area.x + area.width, y, *index));
     }
 }
 

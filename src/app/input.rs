@@ -1,11 +1,33 @@
 //! The composer's text buffer: insertion, cursor motion, selection, and word edits,
-//! all UTF-8-safe.
+//! all UTF-8-safe and grapheme-aware: an emoji is one user-facing character, so
+//! motion and edits never split one in half.
+
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Default)]
 pub struct Input {
     pub(crate) value: String,
     pub(crate) cursor: usize,
     pub(crate) selection_anchor: Option<usize>,
+}
+
+/// The byte offset just before the previous grapheme, so the cursor never
+/// steps inside an emoji: a grapheme can be several chars (ZWJ sequences,
+/// flags, skin tones), and char-level motion would land mid-emoji where
+/// backspace then breaks it in half.
+fn previous_grapheme(text: &str, from: usize) -> Option<usize> {
+    text[..from]
+        .grapheme_indices(true)
+        .next_back()
+        .map(|(index, _)| index)
+}
+
+/// The byte offset just after the next grapheme.
+fn next_grapheme(text: &str, from: usize) -> Option<usize> {
+    text[from..]
+        .graphemes(true)
+        .next()
+        .map(|grapheme| from + grapheme.len())
 }
 
 impl Input {
@@ -96,8 +118,10 @@ impl Input {
         if self.delete_selection() {
             return;
         }
-        if let Some((index, _)) = self.value[..self.cursor].char_indices().next_back() {
-            self.value.remove(index);
+        // One whole grapheme goes, not one char: a backspace over 👩‍💻 or 🇺🇸
+        // removes the emoji itself instead of leaving a broken half behind.
+        if let Some(index) = previous_grapheme(&self.value, self.cursor) {
+            self.value.replace_range(index..self.cursor, "");
             self.cursor = index;
         }
     }
@@ -106,8 +130,8 @@ impl Input {
         if self.delete_selection() {
             return;
         }
-        if self.cursor < self.value.len() {
-            self.value.remove(self.cursor);
+        if let Some(end) = next_grapheme(&self.value, self.cursor) {
+            self.value.replace_range(self.cursor..end, "");
         }
     }
 
@@ -124,20 +148,12 @@ impl Input {
     }
 
     pub(crate) fn left(&mut self, select: bool) {
-        let target = self.value[..self.cursor]
-            .char_indices()
-            .next_back()
-            .map_or(0, |(index, _)| index);
+        let target = previous_grapheme(&self.value, self.cursor).unwrap_or(0);
         self.move_cursor(target, select);
     }
 
     pub(crate) fn right(&mut self, select: bool) {
-        let target = self.value[self.cursor..]
-            .chars()
-            .next()
-            .map_or(self.value.len(), |character| {
-                self.cursor + character.len_utf8()
-            });
+        let target = next_grapheme(&self.value, self.cursor).unwrap_or(self.value.len());
         self.move_cursor(target, select);
     }
 
@@ -149,11 +165,13 @@ impl Input {
         self.move_cursor(self.value.len(), select);
     }
 
-    /// Move vertically while preserving the cursor's character column.
+    /// Move vertically while preserving the cursor's grapheme column: an
+    /// emoji counts as one column regardless of how many chars encode it, so
+    /// up and down never land mid-emoji.
     pub(crate) fn move_vertical(&mut self, down: bool, select: bool) {
         let before = &self.value[..self.cursor];
         let line_start = before.rfind('\n').map_or(0, |index| index + 1);
-        let column = before[line_start..].chars().count();
+        let column = before[line_start..].graphemes(true).count();
         let line_end = self.value[line_start..]
             .find('\n')
             .map_or(self.value.len(), |n| line_start + n);
@@ -174,7 +192,7 @@ impl Input {
             .find('\n')
             .map_or(self.value.len(), |n| target_start + n);
         let target = self.value[target_start..target_end]
-            .char_indices()
+            .grapheme_indices(true)
             .nth(column)
             .map_or(target_end, |(offset, _)| target_start + offset);
         self.move_cursor(target, select);
@@ -201,14 +219,16 @@ impl Input {
         let mut current_row = 0;
         let mut byte_offset = 0;
 
+        // Graphemes, not chars: the click map must match how the composer
+        // renders, and one emoji spans several chars but one display column.
         for line in self.value.split('\n') {
             let mut col = 0;
             let mut line_bytes = 0;
-            for ch in line.chars() {
+            for grapheme in line.graphemes(true) {
                 if current_row == rel_y && col >= rel_x {
                     return byte_offset + line_bytes;
                 }
-                let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                let w = unicode_width::UnicodeWidthStr::width(grapheme);
                 if col + w > width {
                     current_row += 1;
                     col = 0;
@@ -217,7 +237,7 @@ impl Input {
                     }
                 }
                 col += w;
-                line_bytes += ch.len_utf8();
+                line_bytes += grapheme.len();
             }
             if current_row == rel_y {
                 return byte_offset + line_bytes;
@@ -232,6 +252,64 @@ impl Input {
 #[cfg(test)]
 mod tests {
     use super::Input;
+
+    /// A multi-char emoji is one unit: motion never steps inside it and
+    /// backspace never leaves a broken half behind.
+    #[test]
+    fn motion_and_backspace_stay_whole_graphemes() {
+        let mut input = Input::default();
+        // 👩‍💻 is one grapheme (ZWJ sequence) and 🇺🇸 is one (flag pair); both
+        // move and delete as a unit.
+        input.insert_str("a👩‍💻b🇺🇸");
+        // A backspace at the end takes the whole flag, not one regional
+        // indicator.
+        input.backspace();
+        assert_eq!(input.value, "a👩‍💻b", "backspace removes the whole flag");
+        // Left walks whole graphemes: before 'b', then before the ZWJ emoji
+        // — each stop is a boundary, never inside an emoji.
+        input.left(false);
+        input.left(false);
+        assert_eq!(input.selected_text(), None);
+        assert_eq!(input.value, "a👩‍💻b", "left over an emoji never splits it");
+        assert_eq!(input.cursor, 1, "lefts land on grapheme boundaries");
+        input.right(false);
+        input.right(false);
+        assert_eq!(
+            input.cursor,
+            input.value.len(),
+            "right clears the whole ZWJ emoji"
+        );
+        input.backspace();
+        assert_eq!(input.value, "a👩‍💻", "backspace removes 'b'");
+        input.backspace();
+        assert_eq!(input.value, "a", "backspace removes the whole ZWJ emoji");
+        input.right(false);
+        assert_eq!(
+            input.cursor,
+            input.value.len(),
+            "right at the end stays put"
+        );
+        input.delete();
+        assert_eq!(input.value, "a", "delete past the end is a no-op");
+    }
+
+    /// Vertical motion lands on grapheme boundaries, not inside an emoji.
+    #[test]
+    fn vertical_motion_lands_on_grapheme_boundaries() {
+        let mut input = Input::default();
+        input.insert_str("🦀🦀🦀🦀\nline");
+        // The cursor ends before 'n' (column 2 of "line"); up must land after
+        // the second crab — a grapheme boundary — not mid-emoji, and down
+        // returns to the same column.
+        input.left(false);
+        input.left(false);
+        let before_n = input.cursor;
+        input.move_vertical(false, false);
+        assert_eq!(input.cursor, 8, "up lands after the second crab");
+        input.move_vertical(true, false);
+        assert_eq!(input.cursor, before_n, "down restores the grapheme column");
+        assert_eq!(input.value, "🦀🦀🦀🦀\nline");
+    }
 
     #[test]
     fn editing_respects_utf8_boundaries() {

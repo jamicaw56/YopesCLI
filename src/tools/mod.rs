@@ -28,7 +28,13 @@ pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets, move_target};
 pub use policy::{requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
+pub(crate) use shell::BashNotice;
+pub(crate) use shell::kill_commands_for;
 pub(crate) use shell::kill_spawned_commands;
+pub(crate) use shell::poll_bash_jobs;
+
+mod subagents;
+pub(crate) use subagents::{register_subagent_run, unregister_subagent_run};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -51,7 +57,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 18] = [
+pub const TOOL_NAMES: [&str; 20] = [
     "list_dir",
     "read_file",
     "multi_read",
@@ -65,6 +71,8 @@ pub const TOOL_NAMES: [&str; 18] = [
     "run_command",
     "bash_background",
     "bash_output",
+    "message_subagent",
+    "stop_subagent",
     "bash_kill",
     "web_search",
     "web_fetch",
@@ -84,6 +92,10 @@ thread_local! {
     /// against. Every tab carries its own directory, so `execute` scopes it
     /// per task; without a scope the process working directory applies.
     static WORKSPACE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// The session id that owns the current tool task: `run_command` registers
+    /// its process under it, so one tab's Esc interrupt kills only its own
+    /// commands instead of every tab's.
+    static OWNER: RefCell<Option<u64>> = const { RefCell::new(None) };
 }
 
 /// Run `body` with relative paths resolving against `root`. The previous
@@ -95,6 +107,23 @@ pub fn scoped_workspace<T>(root: &Path, body: impl FnOnce() -> T) -> T {
         *cell.borrow_mut() = previous;
         result
     })
+}
+
+/// Run `body` with spawned commands registered under `session_id`, so an
+/// interrupt from that session can kill them without touching other tabs'.
+pub fn scoped_owner<T>(session_id: u64, body: impl FnOnce() -> T) -> T {
+    OWNER.with(|cell| {
+        let previous = cell.borrow_mut().replace(session_id);
+        let result = body();
+        *cell.borrow_mut() = previous;
+        result
+    })
+}
+
+/// The session id the current tool task belongs to: `0` when no scope is
+/// set, a bucket only process shutdown clears.
+pub fn current_owner() -> u64 {
+    OWNER.with(|cell| cell.borrow().unwrap_or(0))
 }
 
 /// Where relative tool paths resolve against right now: the scoped root when
@@ -124,6 +153,10 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         "web_search" => web::web_search(&call.function.arguments, web_key),
         "web_fetch" => web::web_fetch(&call.function.arguments),
         "todo_write" => todo::todo_write(&call.function.arguments),
+        // Control tools for running subagents: corrections steer a run
+        // mid-flight, stop flags end it cooperatively.
+        "message_subagent" => subagents::subagent_message(&call.function.arguments),
+        "stop_subagent" => subagents::subagent_stop(&call.function.arguments),
         // Handled by the session loop: the subagent needs the backend.
         "delegate" => bail!("delegate cannot run outside the session loop"),
         other => bail!("unknown tool `{other}`"),
@@ -196,7 +229,11 @@ where
 }
 
 fn clip(text: &str, width: usize) -> String {
-    let mut characters = text.chars();
+    // Newlines collapse to spaces: a preview lands in the transcript as one
+    // Line, and an embedded newline makes the row estimator count rows
+    // ratatui never renders.
+    let flat = text.replace("\r\n", " ").replace(['\n', '\r'], " ");
+    let mut characters = flat.chars();
     let mut result = characters.by_ref().take(width).collect::<String>();
     if characters.next().is_some() {
         result.pop();

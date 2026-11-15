@@ -274,7 +274,7 @@ pub fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "bash_background",
-                "description": "Start one bash shell command in the background and get a job id. Its output lands in a log: read it with bash_output, stop it with bash_kill. Set risk to true for anything destructive or hard to undo so the user is asked first.",
+                "description": "Start one bash shell command in the background and get a job id. Its output lands in a log; the app notifies this conversation automatically when the job finishes or times out, so never poll bash_output in a loop. Stop it with bash_kill when it has served its purpose. Set risk to true for anything destructive or hard to undo so the user is asked first.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -299,7 +299,7 @@ pub fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "bash_output",
-                "description": "Read a background bash job: everything it printed so far and whether it still runs or has exited. Pass the job id from bash_background.",
+                "description": "Read a background bash job: everything it printed so far and whether it still runs or has exited. Pass the job id from bash_background. Usually not needed: the app notifies the conversation automatically when the job finishes, so call this only to peek at progress mid-run, never in a loop.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -309,6 +309,44 @@ pub fn definitions() -> Value {
                         }
                     },
                     "required": ["job_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "message_subagent",
+                "description": "Send a correction to one running subagent: the message lands in its conversation as a user message and it continues, answering within its run. Pass the run id from a delegate call's result. Use it to fix course mid-run instead of waiting for a wrong answer.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run": {
+                            "type": "integer",
+                            "description": "The subagent run id, shown in its tool result as [subagent run N]."
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "The correction or extra instruction."
+                        }
+                    },
+                    "required": ["run", "message"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "stop_subagent",
+                "description": "Ask one running subagent to stop: it answers with what it has instead of being killed mid-work. Pass the run id from a delegate call's result.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run": {
+                            "type": "integer",
+                            "description": "The subagent run id, shown in its tool result as [subagent run N]."
+                        }
+                    },
+                    "required": ["run"]
                 }
             }
         },

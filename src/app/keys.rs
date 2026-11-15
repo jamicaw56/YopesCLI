@@ -527,6 +527,10 @@ impl App {
                 }
                 KeyCode::Char('e') => self.input.cursor = self.input.value.len(),
                 KeyCode::Char('v' | 'V') => return Action::PasteImage,
+                // Windows Terminal swallows Ctrl+V and does its own text-only
+                // paste before the key reaches the app, so an image clipboard
+                // needs a binding no terminal intercepts: Ctrl+G grabs it.
+                KeyCode::Char('g' | 'G') => return Action::PasteImage,
                 KeyCode::Char('p' | 'P') => {
                     if self.palette_open() {
                         self.palette_move(true);
@@ -886,6 +890,12 @@ impl App {
             // The turn continues only when nothing runs anymore: parallel
             // subagents keep the conversation waiting for their results.
             if self.running_delegates.is_empty() {
+                // A message queued while the agents ran joins the
+                // conversation here, before the continuation sends it
+                // together with their results.
+                if self.flush_queued_message() {
+                    return self.begin_turn();
+                }
                 return self.continue_after_tools();
             }
             return Action::None;
@@ -919,6 +929,21 @@ impl App {
         }
         self.pending_tools.pop_front();
         self.start_and_advance(call)
+    }
+
+    /// A message queued while subagents still ran: it joins the conversation
+    /// here, so the continuation sends it together with their results. True
+    /// when a queued message was flushed.
+    fn flush_queued_message(&mut self) -> bool {
+        let Some(value) = self.queued_message.take() else {
+            return false;
+        };
+        let mut message = Message::new(Role::User, value);
+        message.images = std::mem::take(&mut self.queued_images);
+        self.session.messages.push(message);
+        self.follow_tail = true;
+        self.save_session();
+        true
     }
 
     pub(crate) fn continue_after_tools(&mut self) -> Action {

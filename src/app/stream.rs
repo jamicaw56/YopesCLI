@@ -347,6 +347,7 @@ impl App {
         self.notice = Some(Notice {
             kind: NoticeKind::Info,
             message: message.into(),
+            started: std::time::Instant::now(),
         });
     }
 
@@ -354,6 +355,7 @@ impl App {
         self.notice = Some(Notice {
             kind: NoticeKind::Error,
             message: message.into(),
+            started: std::time::Instant::now(),
         });
     }
 
