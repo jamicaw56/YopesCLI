@@ -54,8 +54,8 @@ pub use mode::{Mode, ToolsMode};
 
 use tabs::TabState;
 
-/// Fraction of the model context window at which compaction triggers.
-const COMPACTION_THRESHOLD_FRAC: u64 = 3; // fire at ~1/3 of window
+/// Fraction of the model context window where the compaction chance begins.
+const COMPACT_CHANCE_FRAC: u64 = 5; // chance starts at ~4/5 of window
 /// Fraction of the model context window kept intact after compaction.
 const COMPACTION_KEEP_FRAC: u64 = 8; // keep ~1/8 of window
 /// Default context window (128K) when no specific model context size is known.
