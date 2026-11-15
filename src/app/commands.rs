@@ -27,7 +27,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 18] = [
+pub const COMMANDS: [CommandSpec; 19] = [
     CommandSpec {
         name: "/help",
         description: "Show keys and commands",
@@ -66,6 +66,11 @@ pub const COMMANDS: [CommandSpec; 18] = [
     CommandSpec {
         name: "/sessions",
         description: "Switch between saved sessions",
+        argument: None,
+    },
+    CommandSpec {
+        name: "/agents",
+        description: "View subagent responses from delegate calls",
         argument: None,
     },
     CommandSpec {
@@ -174,6 +179,7 @@ mod tests {
                 "/cd",
                 "/models",
                 "/sessions",
+                "/agents",
                 "/tab",
                 "/tools",
                 "/theme",
@@ -194,6 +200,7 @@ mod tests {
         assert_eq!(command_names("/t"), vec!["/tab", "/tools", "/theme"]);
         assert_eq!(command_names("/e"), vec!["/effort"]);
         assert_eq!(command_names("/v"), vec!["/version"]);
+        assert_eq!(command_names("/a"), vec!["/agents"]);
         assert_eq!(command_names("/MO"), vec!["/models"]);
         assert!(command_names("/model gpt").is_empty());
         assert!(command_names("hello").is_empty());

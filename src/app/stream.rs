@@ -170,7 +170,6 @@ impl App {
                     .is_some_and(|active| active.compacting.is_some());
                 self.active = None;
                 self.retry = None;
-                self.active = None;
                 if compacting {
                     // The queued turn never started, so continue without the
                     // summary instead of failing it too.
@@ -194,6 +193,24 @@ impl App {
     }
 
     pub(crate) fn on_tool_result(&mut self, event: ToolEvent) -> Action {
+        // A subagent result lands even while other delegates still stream:
+        // drop its tracker, record the answer, and continue when the queue
+        // and every parallel run are done.
+        if let Some(position) = self
+            .running_delegates
+            .iter()
+            .position(|running| running.call.id == event.call.id)
+        {
+            self.running_delegates.remove(position);
+            let content = match event.result {
+                Ok(output) => output,
+                Err(error) => format!("Error: {error}"),
+            };
+            self.record_tool_result(event.call.id, content);
+            self.follow_tail = true;
+            self.save_session();
+            return self.advance_tools();
+        }
         let Some(running) = self
             .running_tool
             .take()

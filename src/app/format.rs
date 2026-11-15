@@ -73,6 +73,19 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Elapsed milliseconds as `12s`, `1m05s` or `1h02m`: compact enough for a
+/// sidebar row.
+pub fn format_duration_ms(millis: u64) -> String {
+    let seconds = millis / 1000;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h{:02}m", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{format_bytes, format_tokens};

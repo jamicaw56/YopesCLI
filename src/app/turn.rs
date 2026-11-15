@@ -41,6 +41,7 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
         name,
         "/help"
             | "/models"
+            | "/agents"
             | "/tools"
             | "/permission"
             | "/permissions"
@@ -366,6 +367,7 @@ impl App {
                 self.info(format!("yopes {}", crate::update::current_version()));
             }
             "/sessions" => self.open_session_picker(),
+            "/agents" => self.open_agents_picker(),
             "/revert" => self.open_revert_picker(),
             "/tab" => {
                 let value = parts.next().unwrap_or_default().to_ascii_lowercase();
@@ -591,16 +593,36 @@ impl App {
     }
 
     /// Run a shell command in the workspace directly for the user.
+    /// Run a command the user typed (`!cmd` or `/run cmd`). The command runs
+    /// in the background through `Action::RunUserCommand`, so a long build
+    /// cannot soft-lock the event loop; the result lands as its own message.
     pub(crate) fn run_user_command(&mut self, command: &str) -> Action {
         let command = command.trim();
         if command.is_empty() {
             self.info("Usage: /run <command> or !<command>");
             return Action::None;
         }
+        if self.user_command_running {
+            self.input.set(format!("!{command}"));
+            self.info("A command is still running; Esc interrupts it.");
+            return Action::None;
+        }
         self.notice = None;
+        self.user_command_running = true;
         let user_msg = Message::new(Role::User, format!("$ {command}"));
         self.session.messages.push(user_msg);
-        let output = match tools::run_user_command(command) {
+        self.follow_tail = true;
+        self.save_session();
+        Action::RunUserCommand {
+            command: command.to_owned(),
+        }
+    }
+
+    /// A background user command finished: record its output where the `$ cmd`
+    /// message sits.
+    pub(crate) fn on_user_command_result(&mut self, result: Result<String, String>) {
+        self.user_command_running = false;
+        let output = match result {
             Ok(output) => output,
             Err(error) => format!("Command failed: {error:#}"),
         };
@@ -608,6 +630,25 @@ impl App {
         tool_msg.tool_call_id = Some(format!("user-cmd-{}", self.session.messages.len()));
         self.session.messages.push(tool_msg);
         self.follow_tail = true;
+        self.save_session();
+    }
+
+    /// Esc while a command or tool runs: kill the foreground commands and
+    /// discard the queued tools, so a long run cannot hold the turn hostage.
+    pub(crate) fn interrupt_tools(&mut self) -> Action {
+        let killed = tools::kill_spawned_commands();
+        self.discard_pending_tools("The user interrupted before this tool could run.");
+        if self.user_command_running {
+            self.user_command_running = false;
+        }
+        if killed > 0 {
+            self.info(format!(
+                "Interrupted {killed} running command{}.",
+                if killed == 1 { "" } else { "s" }
+            ));
+        } else {
+            self.info("Interrupted. Pending tools were discarded.");
+        }
         self.save_session();
         Action::None
     }
@@ -936,10 +977,15 @@ pub(crate) mod tests {
 
         app.input.set("!echo hello_active");
         let action = app.submit();
-        assert!(matches!(action, Action::None));
+        assert!(matches!(action, Action::RunUserCommand { .. }));
         assert!(!app.is_streaming());
-        assert_eq!(app.session.messages.len(), 2);
+        assert!(app.user_command_running);
+        assert_eq!(app.session.messages.len(), 1);
         assert_eq!(app.session.messages[0].content, "$ echo hello_active");
+        // The result lands through the background channel.
+        app.on_user_command_result(Ok("hello_active\n".to_owned()));
+        assert!(!app.user_command_running);
+        assert_eq!(app.session.messages.len(), 2);
         assert!(app.session.messages[1].content.contains("hello_active"));
     }
 
@@ -948,19 +994,23 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.input.set("!echo hello_bang");
         let action = app.submit();
-        assert!(matches!(action, Action::None));
-        assert_eq!(app.session.messages.len(), 2);
+        assert!(matches!(action, Action::RunUserCommand { .. }));
+        assert_eq!(app.session.messages.len(), 1);
         assert_eq!(app.session.messages[0].role, Role::User);
         assert_eq!(app.session.messages[0].content, "$ echo hello_bang");
+        app.on_user_command_result(Ok("hello_bang\n".to_owned()));
+        assert_eq!(app.session.messages.len(), 2);
         assert_eq!(app.session.messages[1].role, Role::Tool);
         assert!(app.session.messages[1].content.contains("hello_bang"));
 
         app.input.set("/run echo hello_slash");
         let action = app.submit();
-        assert!(matches!(action, Action::None));
-        assert_eq!(app.session.messages.len(), 4);
+        assert!(matches!(action, Action::RunUserCommand { .. }));
+        assert_eq!(app.session.messages.len(), 3);
         assert_eq!(app.session.messages[2].role, Role::User);
         assert_eq!(app.session.messages[2].content, "$ echo hello_slash");
+        app.on_user_command_result(Ok("hello_slash\n".to_owned()));
+        assert_eq!(app.session.messages.len(), 4);
         assert_eq!(app.session.messages[3].role, Role::Tool);
         assert!(app.session.messages[3].content.contains("hello_slash"));
     }

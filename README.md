@@ -6,6 +6,8 @@ A better coding CLI, built with Rust, Ratatui, and Tokio.
 
 - Streaming OpenAI-compatible providers, including custom endpoints.
 - Tool calling for reading, writing, editing, and running commands, with per-tool approval and a diff viewer.
+- A real delegate system: `delegate` hands a subtask to a subagent on the same provider. Runs stream live in a right-hand sidebar, stack in parallel, and every response is readable with `/agents`.
+- Image pasting: `Ctrl+V` and right-click attach clipboard images, file paths paste as attachments, and `read_image` sends screenshots to vision models.
 - A quiet, minimal interface with a popout command palette.
 - Provider and model discovery from [models.dev](https://models.dev) plus custom endpoints with `/connect`.
 - One-command self-updates with `yopes update`.
@@ -47,11 +49,10 @@ In the checkout: [Architecture](docs/ARCHITECTURE.md), [Adding a tool](docs/ADDI
 
 ## Known limitations
 
-- **Clipboard image pasting does not work and is recorded as unsolved.** On
-  Windows the clipboard is read through PowerShell, which on many setups sees
-  neither a bitmap nor PNG data, so `Ctrl+V` reports "the clipboard holds
-  neither text nor an image". Workaround: paste or type an image **file path**
-  as plain text — path pasting and `read_image` both work.
+- **`Ctrl+V` on Windows Terminal** performs the terminal's own text-only
+  paste, so a screenshot-only clipboard sends nothing to the app. Use
+  **right-click** to paste a clipboard image, or paste an image file path as
+  plain text; both attach the image for vision models.
 
 ## Tests
 

@@ -231,6 +231,23 @@ pub fn definitions() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "move_to",
+                "description": "Change the working directory all relative paths resolve against. The path must exist and be a directory; moving outside the workspace or the temp root asks the user first. Use it when a task lives in another folder, and move back when done.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory to move into, absolute or relative to the current working directory."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "run_command",
                 "description": "Run a shell command in the workspace and return its output. Set risk to true for anything destructive or hard to undo: deleting or overwriting files, git resets or force pushes, installing or uninstalling software, stopping services, or anything reaching outside the working directory. Risky commands ask the user before they run. When the user requests running commands or actions, execute them directly with this tool rather than just describing the command.",
                 "parameters": {
@@ -385,7 +402,7 @@ pub fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "delegate",
-                "description": "Hand one self-contained subtask to a subagent running on the same provider and model, and receive its final answer. The subagent has no tools: it cannot read files, run commands, or search the web, so the task must include every file excerpt, code snippet, and fact it needs. Use it for focused drafts, second opinions, or research recaps, and split large work into several delegate calls.",
+                "description": "Hand one self-contained subtask to a subagent running on the same provider and model, and receive its final answer. The subagent has no tools: it cannot read files, run commands, or search the web, so the task must include every file excerpt, code snippet, and fact it needs. Several delegate calls in one turn run in parallel and stream live in the sidebar; the user can read every response with /agents. Use it for focused drafts, second opinions, or research recaps, and split large work into several delegate calls.",
                 "parameters": {
                     "type": "object",
                     "properties": {

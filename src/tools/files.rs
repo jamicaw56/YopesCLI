@@ -64,6 +64,45 @@ struct ReadImageArgs {
     path: String,
 }
 
+/// Change the process working directory the tools resolve relative paths
+/// against. The path is normalized (`..` collapsed) and must exist; moving
+/// outside the workspace or the temp root asks the user first.
+pub(super) fn move_to(arguments: &str) -> Result<String> {
+    let args: ReadImageArgs = parse(arguments)?;
+    let requested = args.path.trim();
+    if requested.is_empty() {
+        bail!("path cannot be empty");
+    }
+    let target = normalize_target(&resolve(requested));
+    if !target.is_dir() {
+        bail!("{} is not a directory", requested);
+    }
+    let previous = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    env::set_current_dir(&target).with_context(|| format!("moving to {}", target.display()))?;
+    Ok(format!(
+        "Working directory moved from {} to {}.",
+        previous.display(),
+        target.display()
+    ))
+}
+
+/// Collapse `.` and `..` components of an already-resolved path without
+/// touching the filesystem, so a move target reads as the real location.
+fn normalize_target(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 /// Validate an image and report it; the app reads the pixels itself and sends
 /// them as a real image part, which a text tool result cannot carry.
 pub(super) fn read_image(arguments: &str) -> Result<String> {
