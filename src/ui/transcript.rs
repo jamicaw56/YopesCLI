@@ -253,7 +253,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         lines.push(Line::styled(
             "compacting context",
-            Style::default().fg(muted()).add_modifier(Modifier::BOLD),
+            // Warning color, so compaction reads apart from the thinking
+            // caret above, which stays in the accent color.
+            Style::default().fg(warning()).add_modifier(Modifier::BOLD),
         ));
         if summary.trim().is_empty() {
             lines.push(Line::styled(
