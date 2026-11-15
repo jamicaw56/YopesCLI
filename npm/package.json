@@ -5,7 +5,7 @@
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Jamicaw56/YopesCLI.git"
+    "url": "https://github.com/jamicaw56/YopesCLI"
   },
   "bin": {
     "yopes": "bin/yopes.js"
