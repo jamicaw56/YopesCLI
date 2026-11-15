@@ -171,33 +171,6 @@ fn header_right(
     joined(&segments)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::header_right;
-
-    #[test]
-    fn header_right_shows_the_context_load_and_drops_segments_when_narrow() {
-        // Full width: everything shows, with the window and its percent.
-        let wide = header_right(
-            "anthropic",
-            "claude-sonnet-4",
-            "$0.12",
-            12_800,
-            128_000,
-            200,
-        );
-        assert_eq!(
-            wide,
-            "anthropic · claude-sonnet-4 · $0.12 · ctx 12.8k/128.0k (10%)"
-        );
-        // Narrow: provider and model drop, the spend and context load survive.
-        let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 12_800, 128_000, 30);
-        assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k (10%)");
-        // A malformed window of 0 never divides by zero.
-        assert!(header_right("p", "m", "—", 500, 0, 200).contains("(50000%)"));
-    }
-}
-
 pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
     let inner = padded(area, 2);
     if inner.width == 0 {
@@ -535,5 +508,32 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 .style(Style::default().fg(muted())),
             columns[1],
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::header_right;
+
+    #[test]
+    fn header_right_shows_the_context_load_and_drops_segments_when_narrow() {
+        // Full width: everything shows, with the window and its percent.
+        let wide = header_right(
+            "anthropic",
+            "claude-sonnet-4",
+            "$0.12",
+            12_800,
+            128_000,
+            200,
+        );
+        assert_eq!(
+            wide,
+            "anthropic · claude-sonnet-4 · $0.12 · ctx 12.8k/128.0k (10%)"
+        );
+        // Narrow: provider and model drop, the spend and context load survive.
+        let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 12_800, 128_000, 30);
+        assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k (10%)");
+        // A malformed window of 0 never divides by zero.
+        assert!(header_right("p", "m", "—", 500, 0, 200).contains("(50000%)"));
     }
 }
