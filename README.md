@@ -13,6 +13,9 @@ A better coding CLI, built with Rust, Ratatui, and Tokio.
 
 ## Install
 
+`npm install -g yopes` (Node 16+): the package downloads the release binary for
+your platform, verifies its checksum, and installs the `yopes` command.
+
 Download the latest build for your platform from [Releases](https://github.com/Jamicaw56/YopesCLI/releases): `yopes-Windows-X64.zip` (Windows) or `yopes-Linux-X64.tar.gz` (Linux), then install it with PowerShell on Windows:
 
 ```powershell
