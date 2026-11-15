@@ -112,8 +112,8 @@ const MAX_APPROVAL_LINES: usize = 4;
 /// ball of yarn that rolls beneath it.
 const CAT_ROWS: [&str; 6] = [
     "  /\\_/\\  ",
-    "+ ( o.o ) +",
-    "  #> ^ <#  ",
+    " ( o.o ) ",
+    "  > ^ <  ",
     "  /| . |\\  ",
     " (_|   |_)",
     "   \"   \"  ",
