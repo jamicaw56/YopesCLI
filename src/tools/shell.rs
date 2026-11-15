@@ -48,7 +48,10 @@ pub(super) fn run_command(arguments: &str) -> Result<String> {
     let mut child = process
         .spawn()
         .with_context(|| format!("running `{command}`"))?;
-    spawned_pids().push(child.id());
+    // Registered under this session's id, so an Esc interrupt from another
+    // tab leaves it running.
+    let owner = current_owner();
+    spawned_pids().entry(owner).or_default().push(child.id());
     let started = Instant::now();
     let mut timed_out = false;
     let status = loop {
@@ -65,7 +68,9 @@ pub(super) fn run_command(arguments: &str) -> Result<String> {
 
     // The command is over, however it ended: stop tracking its pid.
     let pid = child.id();
-    spawned_pids().retain(|registered| *registered != pid);
+    if let Some(registered) = spawned_pids().get_mut(&owner) {
+        registered.retain(|tracked| *tracked != pid);
+    }
 
     let output = read_log(&log_path);
     let _ = fs::remove_file(&log_path);
@@ -93,6 +98,9 @@ struct BashJob {
     log_path: PathBuf,
     child: Option<ProcessChild>,
     exit: Option<i32>,
+    /// The session id that started the job: the completion notice routes to
+    /// its own conversation.
+    owner: u64,
 }
 
 impl Drop for BashJob {
@@ -105,22 +113,38 @@ const MAX_BASH_JOBS: usize = 16;
 static BASH_JOBS: OnceLock<Mutex<HashMap<u32, BashJob>>> = OnceLock::new();
 static JOB_SEQ: AtomicU32 = AtomicU32::new(1);
 
-/// The process ids of foreground commands still running: a `spawn_blocking`
-/// tool call cannot be cancelled from the event loop, so the Esc interrupt
-/// kills the processes through this registry instead.
-static SPAWNED_PIDS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+/// The process ids of foreground commands still running, keyed by the
+/// session id that owns them: a `spawn_blocking` tool call cannot be
+/// cancelled from the event loop, so the Esc interrupt kills the processes
+/// through this registry — and only the interrupting session's own entries,
+/// so one tab's Esc never kills another tab's running command.
+static SPAWNED_PIDS: OnceLock<Mutex<HashMap<u64, Vec<u32>>>> = OnceLock::new();
 
-fn spawned_pids() -> MutexGuard<'static, Vec<u32>> {
+fn spawned_pids() -> MutexGuard<'static, HashMap<u64, Vec<u32>>> {
     SPAWNED_PIDS
-        .get_or_init(|| Mutex::new(Vec::new()))
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Kill every foreground command still running. Returns how many were
-/// interrupted.
+/// Kill every foreground command still running for one session. Returns how
+/// many were interrupted.
+pub(crate) fn kill_commands_for(session_id: u64) -> usize {
+    let pids: Vec<u32> = spawned_pids().remove(&session_id).unwrap_or_default();
+    kill_pids(pids)
+}
+
+/// Kill every foreground command still running, whatever session owns it:
+/// process shutdown only, so no tool leaves an orphan behind.
 pub(crate) fn kill_spawned_commands() -> usize {
-    let pids: Vec<u32> = std::mem::take(&mut *spawned_pids());
+    let pids: Vec<u32> = std::mem::take(&mut *spawned_pids())
+        .into_values()
+        .flatten()
+        .collect();
+    kill_pids(pids)
+}
+
+fn kill_pids(pids: Vec<u32>) -> usize {
     let count = pids.len();
     for pid in pids {
         #[cfg(windows)]
@@ -260,6 +284,7 @@ pub(super) fn bash_background(arguments: &str) -> Result<String> {
             log_path,
             child: Some(child),
             exit: None,
+            owner: current_owner(),
         },
     );
     Ok(format!(
@@ -350,4 +375,79 @@ fn kill_process_tree(child: &mut ProcessChild) {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// One finished background job, delivered to the event loop: the exit code
+/// and the tail of its log, so the owning conversation learns the outcome
+/// without ever polling `bash_output`.
+pub(crate) struct BashNotice {
+    pub(crate) job_id: u32,
+    pub(crate) owner: u64,
+    pub(crate) output: String,
+}
+
+/// How much of a finished job's log enters the notice: a huge log must not
+/// flood the conversation; the tail carries the outcome.
+const NOTICE_TAIL_BYTES: usize = 8192;
+
+/// Scan the running bash jobs once: finish the ones that exited (or timed
+/// out) and return their notices. Called from a watcher task every 500ms —
+/// no model turn is ever spent polling.
+pub(crate) fn poll_bash_jobs() -> Vec<BashNotice> {
+    let mut jobs = bash_jobs();
+    let ids: Vec<u32> = jobs.keys().copied().collect();
+    let mut notices = Vec::new();
+    for id in ids {
+        let Some(job) = jobs.get_mut(&id) else {
+            continue;
+        };
+        let mut held = job.child.take();
+        let Some(child) = held.as_mut() else {
+            continue;
+        };
+        let Ok(status) = child.try_wait() else {
+            job.child = held;
+            continue;
+        };
+        let (exit, timed_out) = match status {
+            Some(status) => (status.code().unwrap_or(-1), false),
+            None => {
+                // Still running: enforce the timeout here, so a hung job
+                // cannot hold a child forever when nobody polls.
+                if job.started.elapsed() < Duration::from_secs(job.timeout) {
+                    job.child = held;
+                    continue;
+                }
+                kill_process_tree(child);
+                (-1, true)
+            }
+        };
+        job.exit = Some(exit);
+        let owner = job.owner;
+        let timeout = job.timeout;
+        let log = read_log(&job.log_path);
+        let tail = if log.len() > NOTICE_TAIL_BYTES {
+            let cut = log.len() - NOTICE_TAIL_BYTES;
+            let cut = (0..=cut)
+                .rev()
+                .find(|index| log.is_char_boundary(*index))
+                .unwrap_or(cut);
+            format!("… earlier output omitted\n{}", &log[cut..])
+        } else {
+            log
+        };
+        let output = if timed_out {
+            format!("bash job {id} timed out after {timeout}s.\n{tail}")
+        } else {
+            format!("bash job {id} finished (exit {exit}):\n{tail}")
+        };
+        // The job forgets itself: its Drop removes the log file.
+        jobs.remove(&id);
+        notices.push(BashNotice {
+            job_id: id,
+            owner,
+            output,
+        });
+    }
+    notices
 }

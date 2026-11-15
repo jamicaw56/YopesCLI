@@ -1,5 +1,27 @@
 use super::*;
 
+/// Lines of an expanded read result the frame shows: expansion peeks at the
+/// file instead of flooding the whole transcript with it.
+const READ_EXPAND_LINES: usize = 200;
+/// File summary rows a `multi_read` shows before the rest folds into a count.
+const MULTI_READ_SUMMARY_FILES: usize = 8;
+
+/// Whether one line is a read result's file header: `path (N lines)`. The
+/// format is unambiguous, so reads are detected from the result itself when
+/// the owning assistant message is no longer resolvable.
+fn is_file_header(line: &str) -> bool {
+    let Some(open) = line.rfind(" (") else {
+        return false;
+    };
+    let Some(count) = line
+        .get(open + 2..)
+        .and_then(|rest| rest.strip_suffix(" lines)"))
+    else {
+        return false;
+    };
+    !line[..open].trim().is_empty() && count.trim().parse::<usize>().is_ok()
+}
+
 /// A small prompt for a risky command. It shows the command and, for a write
 /// or edit, the change itself. The border pulses on the idle ticker so the
 /// dialog pulls the eye.
@@ -131,16 +153,54 @@ pub(super) fn tool_result_lines(
     let mut label: Option<String> = None;
     let mut quiet = false;
     // A read stays quiet: its header and range replace the contents, and
-    // clicking the frame still reveals everything it returned.
-    if !failed && matches!(call_name, Some("read_file") | Some("multi_read")) {
-        if let Some((path, summary)) = read_result_summary(&message.content) {
-            quiet = true;
-            label = Some(path);
-            for line in summary {
-                body.push(Line::styled(
-                    truncate(&line, inner_width),
-                    Style::default().fg(text()),
-                ));
+    // clicking the frame still reveals a capped window. The header format
+    // `path (N lines)` is unambiguous, so a read is detected from the result
+    // itself too — an older session or a dropped assistant turn must not
+    // turn a read back into a flooding 7-line preview.
+    if !failed
+        && (matches!(call_name, Some("read_file") | Some("multi_read"))
+            || is_file_header(message.content.lines().next().unwrap_or_default()))
+    {
+        if matches!(call_name, Some("multi_read")) {
+            // Several files in one result: one summary row per file, capped,
+            // instead of one header for the first file and silence for the
+            // rest.
+            let headers: Vec<&str> = message
+                .content
+                .lines()
+                .filter(|line| is_file_header(line))
+                .collect();
+            if headers.len() > 1 {
+                quiet = true;
+                label = Some(format!("{} files", headers.len()));
+                let shown = headers.len().min(MULTI_READ_SUMMARY_FILES);
+                for line in &headers[..shown] {
+                    body.push(Line::styled(
+                        truncate(line, inner_width),
+                        Style::default().fg(text()),
+                    ));
+                }
+                if headers.len() > MULTI_READ_SUMMARY_FILES {
+                    body.push(Line::styled(
+                        truncate(
+                            &format!("… +{} more files", headers.len() - shown),
+                            inner_width,
+                        ),
+                        Style::default().fg(muted()),
+                    ));
+                }
+            }
+        }
+        if !quiet {
+            if let Some((path, summary)) = read_result_summary(&message.content) {
+                quiet = true;
+                label = Some(path);
+                for line in summary {
+                    body.push(Line::styled(
+                        truncate(&line, inner_width),
+                        Style::default().fg(text()),
+                    ));
+                }
             }
         }
     }
@@ -207,14 +267,28 @@ pub(super) fn tool_result_lines(
             ));
         }
     } else if quiet {
-        for content_line in &rendered_all() {
+        // Expansion peeks, not floods: a capped window keeps a 5,000-line
+        // read from taking over the whole screen; `/read` shows the rest.
+        let all = rendered_all();
+        let shown = all.len().min(READ_EXPAND_LINES);
+        for content_line in &all[..shown] {
             body.push(Line::styled(
                 truncate(content_line, inner_width),
                 Style::default().fg(text()),
             ));
         }
+        let hidden = all.len().saturating_sub(shown);
+        let hint = if hidden > 0 {
+            format!(
+                "… {} more line{} · click to collapse",
+                hidden,
+                if hidden == 1 { "" } else { "s" }
+            )
+        } else {
+            "· click to collapse".to_owned()
+        };
         body.push(Line::styled(
-            truncate("· click to collapse", inner_width),
+            truncate(&hint, inner_width),
             Style::default().fg(muted()),
         ));
     } else {

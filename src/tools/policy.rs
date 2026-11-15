@@ -135,8 +135,9 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              facts, and cite the URL you used. \
              Use web_fetch to read the text of a specific page, such as one surfaced by \
              web_search. \
-             Start long-running or detached work with bash_background, then read it with \
-             bash_output and stop it with bash_kill when it has served its purpose. \
+             Start long-running or detached work with bash_background; the app notifies \
+             this conversation automatically when the job finishes, so never poll \
+             bash_output in a loop — stop the job with bash_kill when it has served its purpose. \
              Maintain the session task checklist dynamically with todo_write: call it at the \
              start of any multi-step task to establish the plan, update it as items are \
              completed (marking them done), and send an empty list to close the checklist once \

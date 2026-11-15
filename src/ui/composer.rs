@@ -4,19 +4,6 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
     let context = app.context_tokens();
     let window = app.model_context_window().unwrap_or(DEFAULT_CONTEXT_WINDOW);
-    let right = header_right(
-        app.backend.provider_label(),
-        app.backend.model(),
-        &app.spent_cost(),
-        context,
-        window,
-        inner.width as usize / 2,
-    );
-    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(inner.width / 2);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(4), Constraint::Length(right_width)])
-        .split(inner);
 
     // No product branding in the working view: the mode dot, the permission
     // badge and the session tabs are what need the space.
@@ -51,19 +38,9 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     title_spans.push(Span::styled("  ", Style::default()));
 
-    // Session tabs: `◐` while a tab streams, `!` when it wants a decision.
-    // Click or Alt+1..9 to switch; the active one is accent + bold.
-    app.tab_hits.clear();
-    app.tab_close_hits.clear();
-    app.tab_new_hit = None;
-    let tab_row = area.y;
-    let active = app.tab_index();
-    let mut x = inner.x
-        + title_spans
-            .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-            .sum::<usize>() as u16;
-    let end_x = columns[0].x + columns[0].width;
+    // The tab row is the interactive element and wins the space fight: its
+    // need is computed first, and the passive right side (provider, model,
+    // spend, context load) takes only what the tabs do not use.
     let count = app.tab_count();
     let markers: Vec<&'static str> = (0..count)
         .map(|index| {
@@ -84,19 +61,59 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let labels: Vec<String> = (0..count)
         .map(|index| format!("{} {}", index + 1, app.tab_title(index)))
         .collect();
-    // Full labels first; when they do not fit, every label shrinks to an
-    // equal share so the whole stack stays visible — a tab never poofs just
-    // because the terminal is small.
     let full: u16 = (0..count)
         .map(|index| tab_width(index, &labels[index]))
         .sum();
+    // The smallest useful form is the tab number alone.
+    let smallest: u16 = (0..count).map(|index| tab_width(index, "9")).sum();
+    let title_w = title_spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>() as u16;
+    // The `+` button's columns are reserved up front, so a full row of tabs
+    // never overflows into a "+N" count the budget promised to keep.
+    let plus_w: u16 = 3; // " +"
+    let tabs_full = full.saturating_add(plus_w);
+    let tabs_min = smallest.saturating_add(plus_w);
+    let available = inner.width.saturating_sub(title_w);
+    let right_budget = if tabs_full <= available {
+        available - tabs_full
+    } else {
+        available.saturating_sub(tabs_min)
+    }
+    .min(inner.width / 2);
+    let right = header_right(
+        app.backend.provider_label(),
+        app.backend.model(),
+        &app.spent_cost(),
+        context,
+        window,
+        right_budget as usize,
+    );
+    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(right_budget);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(4), Constraint::Length(right_width)])
+        .split(inner);
+
+    // Session tabs: `◐` while a tab streams, `!` when it wants a decision.
+    // Click or Alt+1..9 to switch; the active one is accent + bold.
+    app.tab_hits.clear();
+    app.tab_close_hits.clear();
+    app.tab_new_hit = None;
+    let tab_row = area.y;
+    let active = app.tab_index();
+    let mut x = inner.x + title_w;
+    let end_x = columns[0].x + columns[0].width;
+    // Full labels first; when they do not fit, every label shrinks to an
+    // equal share so the whole stack stays visible — a tab never poofs just
+    // because the terminal is small. The active tab earns twice the share:
+    // its title is the one worth reading on a cramped row.
     let mut budget: Option<usize> = None;
-    if full > end_x.saturating_sub(x) {
-        let available = end_x.saturating_sub(x);
-        // The smallest useful form is the tab number alone.
-        let smallest: u16 = (0..count).map(|index| tab_width(index, "9")).sum();
-        if count > 0 && available >= smallest {
-            budget = Some(usize::from((available - smallest) / count as u16) + 1);
+    if tabs_full > end_x.saturating_sub(x) {
+        let shareable = end_x.saturating_sub(x).saturating_sub(plus_w);
+        if count > 0 && shareable >= smallest {
+            budget = Some(usize::from((shareable - smallest) / count as u16) + 1);
         }
     }
     let mut overflow = 0usize;
@@ -106,7 +123,16 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         let marker_w: u16 = if marker.is_empty() { 0 } else { 2 };
         let close_w: u16 = 2; // " ×"
         let label = match budget {
-            Some(share) => truncate(&labels[index], share),
+            Some(share) => {
+                // The active tab earns twice the share: its title is the one
+                // worth reading on a cramped row.
+                let cells = if index == active {
+                    share.saturating_mul(2)
+                } else {
+                    share
+                };
+                truncate(&labels[index], cells)
+            }
             None => labels[index].clone(),
         };
         let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
@@ -151,7 +177,6 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         ));
     }
     // `+` after the last tab: opens one. A click past the limit is told so.
-    let plus_w: u16 = 3; // " +"
     if x.saturating_add(plus_w) <= end_x {
         title_spans.push(Span::styled(
             " +",
@@ -241,7 +266,9 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let (prompt_marker, prompt_style) = if app.tools_mode == ToolsMode::Auto {
         (
-            "⚡",
+            // A custom armed-mode marker: reads as "aimed at the target", and
+            // avoids the lightning bolt every other terminal tool uses.
+            "◉",
             Style::default().fg(warning()).add_modifier(Modifier::BOLD),
         )
     } else if pulse {

@@ -634,24 +634,29 @@ impl App {
         self.save_session();
     }
 
-    /// Esc while a command or tool runs: kill the foreground commands and
-    /// discard the queued tools, so a long run cannot hold the turn hostage.
+    /// A background bash job finished (or timed out): record the outcome
+    /// where the model can read it, so it never needs to poll `bash_output`.
+    pub(crate) fn on_bash_notice(&mut self, notice: crate::tools::BashNotice) {
+        let mut msg = Message::new(Role::Tool, notice.output);
+        msg.tool_call_id = Some(format!("bash-job-{}", notice.job_id));
+        self.session.messages.push(msg);
+        self.follow_tail = true;
+        self.save_session();
+    }
+
+    /// Esc while a command or tool runs: kill this session's foreground
+    /// commands and discard the queued tools, so a long run cannot hold the
+    /// turn hostage — and other tabs' running commands stay untouched.
     pub(crate) fn interrupt_tools(&mut self) -> Action {
-        let killed = tools::kill_spawned_commands();
         self.discard_pending_tools("The user interrupted before this tool could run.");
         if self.user_command_running {
             self.user_command_running = false;
         }
-        if killed > 0 {
-            self.info(format!(
-                "Interrupted {killed} running command{}.",
-                if killed == 1 { "" } else { "s" }
-            ));
-        } else {
-            self.info("Interrupted. Pending tools were discarded.");
-        }
+        self.info("Interrupted. Running commands were stopped.");
         self.save_session();
-        Action::None
+        // The kill goes through the event loop: the registry is keyed by
+        // session id, so only this tab's commands die.
+        Action::KillCommands(self.session.id)
     }
 
     /// Forget the key stored for one endpoint, resetting the session when it is

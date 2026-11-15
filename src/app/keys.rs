@@ -527,6 +527,10 @@ impl App {
                 }
                 KeyCode::Char('e') => self.input.cursor = self.input.value.len(),
                 KeyCode::Char('v' | 'V') => return Action::PasteImage,
+                // Windows Terminal swallows Ctrl+V and does its own text-only
+                // paste before the key reaches the app, so an image clipboard
+                // needs a binding no terminal intercepts: Ctrl+G grabs it.
+                KeyCode::Char('g' | 'G') => return Action::PasteImage,
                 KeyCode::Char('p' | 'P') => {
                     if self.palette_open() {
                         self.palette_move(true);

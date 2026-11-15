@@ -567,6 +567,18 @@ impl App {
 
     pub fn tick(&mut self) {
         self.spinner = self.spinner.wrapping_add(1);
+        // A notice is transient: it dismisses itself after a few seconds, so
+        // an old error stops sitting over output that arrived after it. The
+        // ticker runs while a notice is up (see main's loop condition), which
+        // is what fires this check and redraws.
+        const NOTICE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(6);
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|notice| notice.started.elapsed() >= NOTICE_LIFETIME)
+        {
+            self.notice = None;
+        }
     }
 
     /// Record whether the terminal has focus.

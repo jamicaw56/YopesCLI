@@ -15,7 +15,10 @@ use ratatui::text::Line;
 
 use anyhow::Result;
 
-use super::{ActiveRequest, App, ChangeReport, Input, Mode, RunningTool, ToolApproval, ToolsMode};
+use super::{
+    ActiveRequest, App, ChangeReport, Input, Mode, Notice, RetryNotice, RunningTool, ToolApproval,
+    ToolsMode,
+};
 use crate::backend::Backend;
 use crate::session::{ImageAttachment, Session, ToolCall};
 
@@ -60,6 +63,14 @@ pub(crate) struct TabState {
     pub(crate) prompt_started: Option<Instant>,
     markdown_cache: HashMap<usize, (u16, usize, Vec<Line<'static>>)>,
     pub(crate) working_dir: PathBuf,
+    /// Footer notices belong to the tab that raised them: an error from one
+    /// conversation must not sit over every other tab's view.
+    pub(crate) notice: Option<Notice>,
+    /// A retry notice belongs to the tab whose request is retrying.
+    pub(crate) retry: Option<RetryNotice>,
+    /// Whether this tab's `/run` command is running, so another tab's
+    /// command is not blocked by it.
+    pub(crate) user_command_running: bool,
 }
 
 impl Default for TabState {
@@ -100,6 +111,9 @@ impl Default for TabState {
             prompt_started: None,
             markdown_cache: HashMap::new(),
             working_dir: PathBuf::from("."),
+            notice: None,
+            retry: None,
+            user_command_running: false,
         }
     }
 }
@@ -143,6 +157,9 @@ impl TabState {
             prompt_started: app.prompt_started.take(),
             markdown_cache: std::mem::take(&mut app.markdown_cache),
             working_dir: std::mem::take(&mut app.working_dir),
+            notice: app.notice.take(),
+            retry: app.retry.take(),
+            user_command_running: std::mem::take(&mut app.user_command_running),
         }
     }
 
@@ -183,6 +200,9 @@ impl TabState {
         app.prompt_started = self.prompt_started;
         app.markdown_cache = self.markdown_cache;
         app.working_dir = self.working_dir;
+        app.notice = self.notice;
+        app.retry = self.retry;
+        app.user_command_running = self.user_command_running;
     }
 
     fn is_streaming(&self) -> bool {

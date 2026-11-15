@@ -28,7 +28,10 @@ pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets, move_target};
 pub use policy::{requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
+pub(crate) use shell::kill_commands_for;
 pub(crate) use shell::kill_spawned_commands;
+pub(crate) use shell::poll_bash_jobs;
+pub(crate) use shell::BashNotice;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -84,6 +87,10 @@ thread_local! {
     /// against. Every tab carries its own directory, so `execute` scopes it
     /// per task; without a scope the process working directory applies.
     static WORKSPACE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// The session id that owns the current tool task: `run_command` registers
+    /// its process under it, so one tab's Esc interrupt kills only its own
+    /// commands instead of every tab's.
+    static OWNER: RefCell<Option<u64>> = const { RefCell::new(None) };
 }
 
 /// Run `body` with relative paths resolving against `root`. The previous
@@ -95,6 +102,23 @@ pub fn scoped_workspace<T>(root: &Path, body: impl FnOnce() -> T) -> T {
         *cell.borrow_mut() = previous;
         result
     })
+}
+
+/// Run `body` with spawned commands registered under `session_id`, so an
+/// interrupt from that session can kill them without touching other tabs'.
+pub fn scoped_owner<T>(session_id: u64, body: impl FnOnce() -> T) -> T {
+    OWNER.with(|cell| {
+        let previous = cell.borrow_mut().replace(session_id);
+        let result = body();
+        *cell.borrow_mut() = previous;
+        result
+    })
+}
+
+/// The session id the current tool task belongs to: `0` when no scope is
+/// set, a bucket only process shutdown clears.
+pub fn current_owner() -> u64 {
+    OWNER.with(|cell| cell.borrow().unwrap_or(0))
 }
 
 /// Where relative tool paths resolve against right now: the scoped root when

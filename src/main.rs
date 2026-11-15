@@ -99,6 +99,7 @@ async fn run() -> Result<()> {
     let (paste_sender, mut paste_receiver) =
         mpsc::unbounded_channel::<Result<(String, String), String>>();
     let (title_sender, mut title_receiver) = mpsc::unbounded_channel::<(u64, String)>();
+    let (bash_sender, mut bash_receiver) = mpsc::unbounded_channel::<tools::BashNotice>();
     let channels = Channels {
         events: sender,
         tools: tool_sender,
@@ -110,6 +111,18 @@ async fn run() -> Result<()> {
         paste: paste_sender,
         titles: title_sender,
     };
+    // One watcher scans the background bash jobs: finished (or timed-out)
+    // ones become notices the owning conversation reads without ever
+    // spending a model turn polling `bash_output`.
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            for notice in tools::poll_bash_jobs() {
+                let _ = bash_sender.send(notice);
+            }
+        }
+    });
     let mut terminal_events = EventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -371,6 +384,17 @@ async fn run() -> Result<()> {
                 }
                 redraw_now = true;
             }
+            notice = bash_receiver.recv() => {
+                let Some(notice) = notice else { break; };
+                // The notice routes to the session that started the job; a
+                // closed session falls back to the tab on screen.
+                let owner = app.tab_for_session(notice.owner);
+                match owner {
+                    Some(owner) => app.with_tab(owner, |app| app.on_bash_notice(notice)),
+                    None => app.on_bash_notice(notice),
+                }
+                redraw_now = true;
+            }
             _ = &mut interrupt => break,
             _ = term_signal.as_mut() => break,
             _ = ticker.tick(),
@@ -379,7 +403,11 @@ async fn run() -> Result<()> {
                     || app.connect_open()
                     || app.any_tools_busy()
                     || app.any_subagent_running()
-                    || app.session.messages.is_empty()) =>
+                    || app.session.messages.is_empty()
+                    // A notice dismisses itself after a few seconds: the
+                    // ticker is what runs that expiry and redraws the footer.
+                    || app.notice.is_some()
+                    || app.retry.is_some()) =>
             {
                 app.tick();
                 redraw_now = true;
@@ -390,6 +418,9 @@ async fn run() -> Result<()> {
     for (_, task) in active_tasks.drain() {
         task.abort();
     }
+    // Any foreground command still running dies with the process: no tool
+    // leaves an orphan behind.
+    tools::kill_spawned_commands();
     drop(terminal);
     app.persist_all()
 }
@@ -435,6 +466,17 @@ fn dispatch(
             active_tasks.insert(request_id, task);
         }
         Action::Cancel(request_id) => cancel_task(active_tasks, request_id),
+        Action::KillCommands(session_id) => {
+            // Only this session's foreground commands die: the registry is
+            // keyed by the session that spawned them.
+            let killed = tools::kill_commands_for(session_id);
+            if killed > 0 {
+                app.info(format!(
+                    "Interrupted {killed} running command{}.",
+                    if killed == 1 { "" } else { "s" }
+                ));
+            }
+        }
         Action::PasteImage => {
             let sender = channels.paste.clone();
             tokio::spawn(async move {
@@ -562,6 +604,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
     let mode = app.mode;
     let approved_tools = app.approved_tools.clone();
     let workspace = app.working_dir().to_path_buf();
+    // Tool commands register under the owning session's id, so an Esc
+    // interrupt is scoped to the tab that spawned them.
+    let session_id = app.session.id;
     for call in calls {
         if call.function.name != "delegate" {
             let sender = tools.clone();
@@ -570,7 +615,11 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             tokio::spawn(async move {
                 let task_call = call.clone();
                 let joined = tokio::task::spawn_blocking(move || {
-                    tools::execute(&task_call, web_key.as_deref(), &workspace)
+                    // Registered under the spawning session, so an Esc
+                    // interrupt from another tab leaves this command alone.
+                    tools::scoped_owner(session_id, || {
+                        tools::execute(&task_call, web_key.as_deref(), &workspace)
+                    })
                 })
                 .await;
                 let result = match joined {
@@ -766,7 +815,12 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                             let web_key = web_key.clone();
                             let root = workspace.clone();
                             let joined = tokio::task::spawn_blocking(move || {
-                                tools::execute(&task_call, web_key.as_deref(), &root)
+                                // A subagent's commands belong to the session
+                                // that delegated the work: an interrupt from
+                                // its own tab kills them; other tabs' survive.
+                                tools::scoped_owner(session_id, || {
+                                    tools::execute(&task_call, web_key.as_deref(), &root)
+                                })
                             })
                             .await;
                             let result = match joined {
