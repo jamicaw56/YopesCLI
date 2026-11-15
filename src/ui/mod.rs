@@ -12,9 +12,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     app::{
-        App, COMMANDS, ChangeReport, CommandSpec, ConnectStage, ConnectState, Input, ListPicker,
-        ListRow, Mode, ModelRow, NoticeKind, ToolApproval, ToolsMode, format_bytes, format_tokens,
-        list_row_of,
+        App, COMMANDS, ChangeReport, CommandSpec, ConnectStage, ConnectState,
+        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, Mode, ModelRow, NoticeKind,
+        ToolApproval, ToolsMode, format_bytes, format_tokens, list_row_of,
     },
     diff::{ChangeKind, DiffLine, FileDiff},
     session::{Message, Role, Usage},
@@ -112,8 +112,8 @@ const MAX_APPROVAL_LINES: usize = 4;
 /// ball of yarn that rolls beneath it.
 const CAT_ROWS: [&str; 6] = [
     "  /\\_/\\  ",
-    "+ ( o.o ) +",
-    "  #> ^ <#  ",
+    " ( o.o ) ",
+    "  > ^ <  ",
     "  /| . |\\  ",
     " (_|   |_)",
     "   \"   \"  ",
@@ -300,7 +300,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         0
     };
     let popup_height = palette_height + picker_height + session_height;
-    let composer_height = composer_height(app, area.width);
+    let composer_height = composer_height(app, area.width, area.height);
     let progress_height = if tasks {
         if app.progress_collapsed {
             1
