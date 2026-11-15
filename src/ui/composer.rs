@@ -134,7 +134,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// The header's right side: provider, model, spend and the context load as
-/// `ctx used/window (percent)`.
+/// `ctx used/window`.
 ///
 /// A narrow terminal drops the least useful segments from the front — model
 /// name first — so the context load and the spend survive instead of being
@@ -157,11 +157,9 @@ fn header_right(
     segments.push(cost.to_owned());
     if context > 0 {
         segments.push(format!(
-            "ctx {}/{} ({}%)",
+            "ctx {}/{}",
             format_tokens(context),
-            format_tokens(window),
-            // A window of 0 is malformed input, not a division.
-            context * 100 / window.max(1)
+            format_tokens(window)
         ));
     }
     let joined = |segments: &[String]| segments.join(" · ");
@@ -517,7 +515,7 @@ mod tests {
 
     #[test]
     fn header_right_shows_the_context_load_and_drops_segments_when_narrow() {
-        // Full width: everything shows, with the window and its percent.
+        // Full width: everything shows, with the window.
         let wide = header_right(
             "anthropic",
             "claude-sonnet-4",
@@ -528,12 +526,12 @@ mod tests {
         );
         assert_eq!(
             wide,
-            "anthropic · claude-sonnet-4 · $0.12 · ctx 12.8k/128.0k (10%)"
+            "anthropic · claude-sonnet-4 · $0.12 · ctx 12.8k/128.0k"
         );
         // Narrow: provider and model drop, the spend and context load survive.
         let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 12_800, 128_000, 30);
-        assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k (10%)");
-        // A malformed window of 0 never divides by zero.
-        assert!(header_right("p", "m", "—", 500, 0, 200).contains("(50000%)"));
+        assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k");
+        // A malformed window of 0 renders without panicking.
+        assert!(header_right("p", "m", "—", 500, 0, 200).contains("ctx 500/0"));
     }
 }
