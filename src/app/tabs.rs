@@ -319,9 +319,6 @@ impl App {
         if index >= self.tabs.len() || index == self.tab {
             return;
         }
-        if self.tabs[index].is_busy() {
-            self.info("That tab is busy; switch anyway with /tab? It streams on.");
-        }
         self.stash();
         self.tab = index;
         self.unstash();

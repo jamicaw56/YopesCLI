@@ -2,19 +2,16 @@ use super::*;
 
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
-    let mut right = if app.backend.model().is_empty() {
-        format!("{} · {}", app.backend.provider_label(), app.spent_cost())
-    } else {
-        format!(
-            "{} · {} · {}",
-            app.backend.provider_label(),
-            app.backend.model(),
-            app.spent_cost()
-        )
-    };
-    if app.context_tokens() > 0 {
-        right.push_str(&format!(" · ctx {}", format_tokens(app.context_tokens())));
-    }
+    let context = app.context_tokens();
+    let window = app.model_context_window().unwrap_or(DEFAULT_CONTEXT_WINDOW);
+    let right = header_right(
+        app.backend.provider_label(),
+        app.backend.model(),
+        &app.spent_cost(),
+        context,
+        window,
+        inner.width as usize / 2,
+    );
     let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(inner.width / 2);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -136,6 +133,71 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// The header's right side: provider, model, spend and the context load as
+/// `ctx used/window (percent)`.
+///
+/// A narrow terminal drops the least useful segments from the front — model
+/// name first — so the context load and the spend survive instead of being
+/// cut mid-string.
+fn header_right(
+    provider: &str,
+    model: &str,
+    cost: &str,
+    context: u64,
+    window: u64,
+    budget: usize,
+) -> String {
+    let mut segments: Vec<String> = Vec::new();
+    if !provider.is_empty() {
+        segments.push(provider.to_owned());
+    }
+    if !model.is_empty() {
+        segments.push(model.to_owned());
+    }
+    segments.push(cost.to_owned());
+    if context > 0 {
+        segments.push(format!(
+            "ctx {}/{} ({}%)",
+            format_tokens(context),
+            format_tokens(window),
+            // A window of 0 is malformed input, not a division.
+            context * 100 / window.max(1)
+        ));
+    }
+    let joined = |segments: &[String]| segments.join(" · ");
+    while segments.len() > 2 && UnicodeWidthStr::width(joined(&segments).as_str()) > budget {
+        segments.remove(0);
+    }
+    joined(&segments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::header_right;
+
+    #[test]
+    fn header_right_shows_the_context_load_and_drops_segments_when_narrow() {
+        // Full width: everything shows, with the window and its percent.
+        let wide = header_right(
+            "anthropic",
+            "claude-sonnet-4",
+            "$0.12",
+            12_800,
+            128_000,
+            200,
+        );
+        assert_eq!(
+            wide,
+            "anthropic · claude-sonnet-4 · $0.12 · ctx 12.8k/128.0k (10%)"
+        );
+        // Narrow: provider and model drop, the spend and context load survive.
+        let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 12_800, 128_000, 30);
+        assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k (10%)");
+        // A malformed window of 0 never divides by zero.
+        assert!(header_right("p", "m", "—", 500, 0, 200).contains("(50000%)"));
+    }
+}
+
 pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
     let inner = padded(area, 2);
     if inner.width == 0 {
@@ -147,10 +209,12 @@ pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
     );
 }
 
-pub(super) fn composer_height(app: &App, width: u16) -> u16 {
+pub(super) fn composer_height(app: &App, width: u16, height: u16) -> u16 {
     let content_width = width.saturating_sub(6).max(1);
     let lines = wrapped_line_count(&app.input.with_cursor(), content_width);
-    (lines as u16).clamp(1, 6)
+    // A short terminal keeps its transcript rows: the composer shrinks first.
+    let max = (height.saturating_sub(6) / 2).clamp(1, 6);
+    (lines as u16).clamp(1, max)
 }
 
 pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
