@@ -68,6 +68,18 @@ impl App {
         if mouse.kind == MouseEventKind::Down(MouseButton::Right) {
             return Action::PasteImage;
         }
+        // The run viewer captures the wheel so a live subagent reads without
+        // scrolling the transcript beneath it.
+        if self.subagent_view.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.subagent_scroll = self.subagent_scroll.saturating_sub(3)
+                }
+                MouseEventKind::ScrollDown => self.subagent_scroll += 3,
+                _ => {}
+            }
+            return Action::None;
+        }
         if let Some(approval) = self.approval.as_mut() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -137,6 +149,19 @@ impl App {
                 }
                 _ => {}
             }
+            return Action::None;
+        }
+        // Sidebar runs: a click opens that run in the viewer.
+        if let Some(index) = self
+            .sidebar_hits
+            .iter()
+            .find(|(start, end, hit_row, _)| {
+                mouse.row == *hit_row && mouse.column >= *start && mouse.column < *end
+            })
+            .map(|&(_, _, _, index)| index)
+        {
+            self.subagent_view = Some(index);
+            self.subagent_scroll = 0;
             return Action::None;
         }
         if self.model_picker.is_some() {
@@ -279,10 +304,10 @@ impl App {
                     return Action::None;
                 }
             }
-            if let Some(&(_, _, index)) = self
-                .tab_hits
-                .iter()
-                .find(|(start, end, _)| column >= *start && column < *end)
+            if let Some(&(_, _, _, index)) =
+                self.tab_hits.iter().find(|(start, end, hit_row, _)| {
+                    mouse.row == *hit_row && column >= *start && column < *end
+                })
             {
                 self.select_tab(index);
                 return Action::None;
@@ -434,6 +459,14 @@ impl App {
         if self.connect.is_some() {
             return self.handle_connect_key(key);
         }
+        // The subagent run viewer is an overlay: it captures scroll and Esc
+        // so a live run reads without touching the composer beneath it.
+        if self.subagent_view.is_some() {
+            return self.handle_viewer_key(key);
+        }
+        if self.agents_picker.is_some() {
+            return self.handle_agents_picker_key(key);
+        }
         if key.code == KeyCode::F(1) {
             self.show_help = !self.show_help;
             self.help_scroll = 0;
@@ -537,6 +570,9 @@ impl App {
                 Action::None
             }
             KeyCode::Esc if self.is_streaming() => self.stop_streaming(),
+            // While a command or tool runs, Esc interrupts instead of doing
+            // nothing: a long build cannot hold the turn hostage.
+            KeyCode::Esc if self.tools_busy() => self.interrupt_tools(),
             KeyCode::Esc => Action::None,
             KeyCode::BackTab if self.palette_open() => {
                 self.palette_move(false);
@@ -740,7 +776,7 @@ impl App {
         if always {
             self.approved_tools.insert(call.function.name.clone());
         }
-        self.start_tool(call)
+        self.start_and_advance(call)
     }
 
     pub(crate) fn deny_pending_tool(&mut self) -> Action {
@@ -757,17 +793,75 @@ impl App {
         self.advance_tools()
     }
 
-    pub(crate) fn start_tool(&mut self, call: ToolCall) -> Action {
-        let preview = tools::change_preview(&call);
-        self.running_tool = Some(RunningTool {
-            existed: tools::target_existed(&call),
-            before: preview.before,
-            targets: tools::edit_targets(&call),
+    /// Track one approved delegate: subagent runs stream in parallel and are
+    /// NOT the sequential `running_tool`, so the queue keeps advancing.
+    fn begin_delegate(&mut self, call: ToolCall) {
+        self.running_delegates.push(RunningTool {
+            existed: false,
+            before: None,
+            targets: Vec::new(),
             call: call.clone(),
             started: Instant::now(),
         });
+    }
+
+    /// Start `call`, then keep draining auto-approved delegate calls so
+    /// several subagents stack up instead of waiting on each other.
+    fn start_and_advance(&mut self, call: ToolCall) -> Action {
+        let is_delegate = call.function.name == "delegate";
+        if is_delegate {
+            self.begin_delegate(call.clone());
+        } else {
+            let preview = tools::change_preview(&call);
+            self.running_tool = Some(RunningTool {
+                existed: tools::target_existed(&call),
+                before: preview.before,
+                targets: tools::edit_targets(&call),
+                call: call.clone(),
+                started: Instant::now(),
+            });
+        }
         self.follow_tail = true;
-        Action::RunTool { call }
+        let mut calls = vec![call];
+        // Drain every already-approved delegate behind it: several approved
+        // subagents run at once, and the first non-delegate stops the drain.
+        loop {
+            if self.is_streaming() || self.approval.is_some() || self.running_tool.is_some() {
+                break;
+            }
+            let Some(next) = self.pending_tools.front().cloned() else {
+                break;
+            };
+            if self.mode.denied(&next.function.name) {
+                self.pending_tools.pop_front();
+                let id = next.id.clone();
+                self.record_tool_result(
+                    id,
+                    format!(
+                        "This tool call was blocked: {} mode only proposes work. Switch to build \
+                         mode (Tab) to let changes run.",
+                        self.mode.label()
+                    ),
+                );
+                self.save_session();
+                continue;
+            }
+            if self.tools_mode.needs_approval(&next, &self.approved_tools) {
+                break;
+            }
+            if next.function.name != "delegate" {
+                // The sequential machinery runs one non-delegate at a time.
+                break;
+            }
+            self.pending_tools.pop_front();
+            self.begin_delegate(next.clone());
+            calls.push(next);
+        }
+        if calls.len() == 1 {
+            let call = calls.remove(0);
+            return Action::RunTool { call };
+        }
+        Action::RunTools { calls }
     }
 
     pub(crate) fn advance_tools(&mut self) -> Action {
@@ -775,7 +869,12 @@ impl App {
             return Action::None;
         }
         let Some(call) = self.pending_tools.front().cloned() else {
-            return self.continue_after_tools();
+            // The turn continues only when nothing runs anymore: parallel
+            // subagents keep the conversation waiting for their results.
+            if self.running_delegates.is_empty() {
+                return self.continue_after_tools();
+            }
+            return Action::None;
         };
         if self.mode.denied(&call.function.name) {
             self.pending_tools.pop_front();
@@ -805,7 +904,7 @@ impl App {
             return Action::None;
         }
         self.pending_tools.pop_front();
-        self.start_tool(call)
+        self.start_and_advance(call)
     }
 
     pub(crate) fn continue_after_tools(&mut self) -> Action {

@@ -64,22 +64,54 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
             .sum::<usize>() as u16;
     let end_x = columns[0].x + columns[0].width;
-    for index in 0..app.tab_count() {
-        let streaming = app.tab_streaming(index);
-        let busy = app.tab_busy(index);
-        let marker = if streaming {
-            "◐ "
-        } else if busy {
-            "! "
-        } else {
-            ""
-        };
-        let label = format!("{} {}", index + 1, app.tab_title(index));
+    let count = app.tab_count();
+    let markers: Vec<&'static str> = (0..count)
+        .map(|index| {
+            if app.tab_streaming(index) {
+                "◐ "
+            } else if app.tab_busy(index) {
+                "! "
+            } else {
+                ""
+            }
+        })
+        .collect();
+    let tab_width = |index: usize, label: &str| -> u16 {
         let sep_w: u16 = if index > 0 { 3 } else { 0 };
+        let marker_w: u16 = if markers[index].is_empty() { 0 } else { 2 };
+        sep_w + marker_w + UnicodeWidthStr::width(label) as u16 + 2 // " ×"
+    };
+    let labels: Vec<String> = (0..count)
+        .map(|index| format!("{} {}", index + 1, app.tab_title(index)))
+        .collect();
+    // Full labels first; when they do not fit, every label shrinks to an
+    // equal share so the whole stack stays visible — a tab never poofs just
+    // because the terminal is small.
+    let full: u16 = (0..count)
+        .map(|index| tab_width(index, &labels[index]))
+        .sum();
+    let mut budget: Option<usize> = None;
+    if full > end_x.saturating_sub(x) {
+        let available = end_x.saturating_sub(x);
+        // The smallest useful form is the tab number alone.
+        let smallest: u16 = (0..count).map(|index| tab_width(index, "9")).sum();
+        if count > 0 && available >= smallest {
+            budget = Some(usize::from((available - smallest) / count as u16) + 1);
+        }
+    }
+    let mut overflow = 0usize;
+    for index in 0..count {
+        let sep_w: u16 = if index > 0 { 3 } else { 0 };
+        let marker = markers[index];
         let marker_w: u16 = if marker.is_empty() { 0 } else { 2 };
         let close_w: u16 = 2; // " ×"
+        let label = match budget {
+            Some(share) => truncate(&labels[index], share),
+            None => labels[index].clone(),
+        };
         let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
         if x.saturating_add(sep_w + marker_w + label_w + close_w) > end_x {
+            overflow = count - index;
             break;
         }
         if index > 0 {
@@ -87,7 +119,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             x = x.saturating_add(sep_w);
         }
         if !marker.is_empty() {
-            let marker_style = if busy && !streaming {
+            let marker_style = if app.tab_busy(index) && !app.tab_streaming(index) {
                 Style::default().fg(warning()).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(accent())
@@ -103,12 +135,20 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         title_spans.push(Span::styled(label, style));
         x = x.saturating_add(label_w);
         let start = x.saturating_sub(label_w + marker_w);
-        app.tab_hits.push((start, x, index));
+        app.tab_hits.push((start, x, tab_row, index));
         // `×` after each label: mouse users close that tab without switching.
         title_spans.push(Span::styled(" ×", Style::default().fg(muted())));
         x = x.saturating_add(close_w);
         let close_start = x.saturating_sub(close_w);
         app.tab_close_hits.push((close_start, x, tab_row, index));
+    }
+    if overflow > 0 {
+        // Hidden tabs are never silent: the marker counts what did not fit,
+        // and Alt+1..9 still reaches every one of them.
+        title_spans.push(Span::styled(
+            format!(" +{overflow}"),
+            Style::default().fg(muted()),
+        ));
     }
     // `+` after the last tab: opens one. A click past the limit is told so.
     let plus_w: u16 = 3; // " +"
@@ -533,5 +573,38 @@ mod tests {
         assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k");
         // A malformed window of 0 renders without panicking.
         assert!(header_right("p", "m", "—", 500, 0, 200).contains("ctx 500/0"));
+    }
+
+    /// Nine tabs with long titles must all stay visible on a terminal that
+    /// cannot fit them at full width: the labels shrink to the tab numbers,
+    /// no tab poofs.
+    #[test]
+    fn tabs_shrink_instead_of_poofing_on_a_small_terminal() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        for _ in 0..8 {
+            app.open_tab();
+        }
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let row: String = (0..120)
+            .map(|column| {
+                terminal.backend().buffer()[(column, 0)]
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
+        for index in 1..=9u16 {
+            assert!(
+                row.contains(&index.to_string()),
+                "tab {index} is missing from the header: {row}"
+            );
+        }
+        // Every tab keeps a click hit-box, so switching still reaches all of them.
+        assert_eq!(app.tab_hits.len(), 9);
     }
 }

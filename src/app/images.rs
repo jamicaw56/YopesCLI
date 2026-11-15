@@ -6,7 +6,7 @@ const MAX_IMAGE_DIMENSION: u32 = 1568;
 
 /// Image file extensions the bundled decoders actually support: anything
 /// else falls through to the composer as plain text.
-const IMAGE_EXTENSIONS: [&str; 3] = [".png", ".jpg", ".jpeg"];
+const IMAGE_EXTENSIONS: [&str; 6] = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
 
 /// The file path of a pasted image, if it points at a readable image file:
 /// trims whitespace and quotes, understands `file://` URIs with percent

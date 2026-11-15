@@ -71,6 +71,7 @@ pub fn preview(call: &ToolCall) -> String {
                 .map_or(0, Vec::len);
             format!("{edits} edits")
         }
+        "move_to" => string("path"),
         "run_command" => clip(&string("command"), 160),
         "bash_background" => clip(&string("command"), 160),
         "bash_output" | "bash_kill" => {

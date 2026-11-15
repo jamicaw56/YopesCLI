@@ -10,8 +10,8 @@ loop owns all I/O, and rendering is a pure function of `App`.
 | `main.rs` | CLI subcommand dispatch, the `tokio::select!` event loop, `dispatch` (turns an `Action` into a spawned task). |
 | `clipboard.rs` | Platform-gated clipboard reads (image first, then text). |
 | `terminal.rs` | `TerminalGuard` (raw mode, alternate screen, RAII restore) and the Ctrl+C interrupt future. |
-| `app/` | The state machine. `mod.rs` holds `App` and the live-request state; `action.rs` holds `Action` and the report types, `commands.rs` the slash-command table, `input.rs` the composer buffer, `keys.rs` key routing, `turn.rs` the turn lifecycle, `stream.rs` streaming events, `connect/` the `/connect` wizard (`state.rs` the stage machine, `keys.rs`/`text.rs`/`finish.rs` its handlers), plus `pickers.rs`, `palette.rs`, `images.rs`, `format.rs`, and `mode.rs`. |
-| `ui/` | Rendering only. Reads `&App`, writes ratatui frames. `mod.rs` holds `draw`, the palette constants, and text helpers; `transcript.rs`, `composer.rs`, `pickers.rs`, `approval.rs`, `connect.rs`, and `help.rs` draw one panel each; `markdown/` renders Markdown (`mod.rs` blocks, `inline.rs` spans, `table.rs` tables). |
+| `app/` | The state machine. `mod.rs` holds `App` and the live-request state; `action.rs` holds `Action` and the report types, `commands.rs` the slash-command table, `delegate.rs` the subagent run records and `/agents` handling, `input.rs` the composer buffer, `keys.rs` key routing, `turn.rs` the turn lifecycle, `stream.rs` streaming events, `connect/` the `/connect` wizard (`state.rs` the stage machine, `keys.rs`/`text.rs`/`finish.rs` its handlers), plus `pickers.rs`, `palette.rs`, `images.rs`, `format.rs`, and `mode.rs`. |
+| `ui/` | Rendering only. Reads `&App`, writes ratatui frames. `mod.rs` holds `draw`, the palette constants, and text helpers; `transcript.rs`, `composer.rs`, `agents.rs` (the subagent sidebar, `/agents` picker, and run viewer), `pickers.rs`, `approval.rs`, `connect.rs`, and `help.rs` draw one panel each; `markdown/` renders Markdown (`mod.rs` blocks, `inline.rs` spans, `table.rs` tables). |
 | `backend/` | HTTP client for OpenAI-compatible and Ollama endpoints: `mod.rs` (`Backend`, `StreamEvent`), `messages.rs` request bodies, `retry.rs` backoff, `sse.rs` stream parsing. |
 | `config/` | CLI arguments (`cli.rs`), `Config` and the provider types (`mod.rs`), the saved-config JSON and persistence (`saved.rs`). |
 | `credentials.rs` | Sealing and opening API keys (argon2 + chacha20poly1305). |
@@ -19,7 +19,7 @@ loop owns all I/O, and rendering is a pure function of `App`.
 | `session.rs` | `Session`, `Message`, `ToolCall`, save/load, token estimation, compaction. |
 | `diff.rs` | Line diffing, hunks, and side-by-side rows. |
 | `skills.rs` | `SKILL.md` discovery, frontmatter parsing, slash expansion. |
-| `tools/` | The tool surface: `definitions.rs` schemas, `policy.rs` approval rules and system prompt, `preview.rs` change previews, `mod.rs` registry and execution, one module per family (`files`, `search`, `shell`, `web`, `todo`). |
+| `tools/` | The tool surface: `definitions.rs` schemas, `policy.rs` approval rules and system prompt, `preview.rs` change previews, `mod.rs` registry and execution, one module per family (`files`, `search`, `shell`, `web`, `todo`). `delegate` is dispatched by `main.rs`, which owns the backend the subagent streams through. |
 | `update.rs` | `yopes update` self-update. |
 
 ## Data flow

@@ -48,6 +48,7 @@ pub(super) fn run_command(arguments: &str) -> Result<String> {
     let mut child = process
         .spawn()
         .with_context(|| format!("running `{command}`"))?;
+    spawned_pids().push(child.id());
     let started = Instant::now();
     let mut timed_out = false;
     let status = loop {
@@ -61,6 +62,10 @@ pub(super) fn run_command(arguments: &str) -> Result<String> {
         }
         thread::sleep(Duration::from_millis(25));
     };
+
+    // The command is over, however it ended: stop tracking its pid.
+    let pid = child.id();
+    spawned_pids().retain(|registered| *registered != pid);
 
     let output = read_log(&log_path);
     let _ = fs::remove_file(&log_path);
@@ -99,6 +104,40 @@ impl Drop for BashJob {
 const MAX_BASH_JOBS: usize = 16;
 static BASH_JOBS: OnceLock<Mutex<HashMap<u32, BashJob>>> = OnceLock::new();
 static JOB_SEQ: AtomicU32 = AtomicU32::new(1);
+
+/// The process ids of foreground commands still running: a `spawn_blocking`
+/// tool call cannot be cancelled from the event loop, so the Esc interrupt
+/// kills the processes through this registry instead.
+static SPAWNED_PIDS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+
+fn spawned_pids() -> MutexGuard<'static, Vec<u32>> {
+    SPAWNED_PIDS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Kill every foreground command still running. Returns how many were
+/// interrupted.
+pub(crate) fn kill_spawned_commands() -> usize {
+    let pids: Vec<u32> = std::mem::take(&mut *spawned_pids());
+    let count = pids.len();
+    for pid in pids {
+        #[cfg(windows)]
+        {
+            let _ = ProcessCommand::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .output();
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = ProcessCommand::new("kill")
+                .args(["-9", &pid.to_string()])
+                .output();
+        }
+    }
+    count
+}
 
 fn bash_jobs() -> MutexGuard<'static, HashMap<u32, BashJob>> {
     BASH_JOBS

@@ -6,6 +6,24 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A real delegate system: the `delegate` tool now spawns a subagent run that
+  streams live into a right-hand sidebar (status glyph, elapsed time, task
+  excerpt, stacked as they start). Several delegate calls in one turn run in
+  parallel, and the queue keeps advancing while they stream. `/agents` opens a
+  filterable list of runs; picking one (or clicking it in the sidebar) opens a
+  scrollable viewer with the task, the reasoning, and the full streamed
+  response. Delegate tasks are capped at 60,000 characters so one call cannot
+  silently burn the context.
+- A `move_to` tool: the model changes the working directory that relative
+  paths resolve against. The target is normalized and must be an existing
+  directory; moving outside the workspace or the temp root asks for approval.
+- Background user commands: `!cmd` and `/run cmd` run off the event loop
+  instead of soft-locking it, and their output lands as its own message when
+  the command finishes. `Esc` now interrupts a running command or tool: the
+  foreground processes are killed and queued tools are discarded.
+
 ### Changed
 
 - Auto compaction is now probabilistic: above ~80% of the context window each
@@ -38,13 +56,18 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- A tab-bar click hit anywhere in a tab's column range switched tabs, even on
+  a lower panel that shared the column range: clicking the Progress title to
+  fold it on a second tab switched to tab one instead. Hit-boxes now carry the
+  header row, so a click only switches tabs when it lands on the tab bar.
 - Pasting an image path or a clipboard image now shows an `[Image N]`
   placeholder in the composer instead of nothing. The real path stays hidden
   in an internal map and is swapped back on submit (non-vision models get the
   path as text, vision models also get the image block); backspace deletes a
   whole placeholder with its map entry, and the numbering restarts with every
   sent prompt. `file://` URIs with percent escapes and shell-escaped spaces
-  are understood.
+  are understood. An empty paste event now reads the clipboard for an image,
+  and `.webp`, `.gif` and `.bmp` file paths attach like the other formats.
 - `/theme` is registered as a built-in command: the palette now shows it, `/t`
   completion offers it, and it runs while a response streams.
 

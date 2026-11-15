@@ -764,7 +764,10 @@ mod tests {
         // The images follow their tool result directly, in the turn they
         // were read in.
         assert_eq!(request[4]["role"], "user");
-        assert_eq!(request[4]["content"][0]["text"], "Images read by the tools:");
+        assert_eq!(
+            request[4]["content"][0]["text"],
+            "Images read by the tools:"
+        );
         assert_eq!(
             request[4]["content"][1]["image_url"]["url"],
             "data:image/png;base64,aWNvbg=="
@@ -805,7 +808,10 @@ mod tests {
         assert_eq!(request[3]["tool_call_id"], "call_1");
         assert_eq!(request[4]["tool_call_id"], "call_2");
         let images_message = request.last().unwrap();
-        assert_eq!(images_message["content"][0]["text"], "Images read by the tools:");
+        assert_eq!(
+            images_message["content"][0]["text"],
+            "Images read by the tools:"
+        );
         assert_eq!(
             images_message["content"][1]["image_url"]["url"],
             "data:image/png;base64,aW1hZ2U="

@@ -29,6 +29,18 @@ pub enum Action {
     RunTool {
         call: ToolCall,
     },
+    /// Start several tool calls at once. Delegate calls in the batch run as
+    /// concurrent subagents (they stack in the sidebar); at most one call is
+    /// a non-delegate, tracked by the sequential tool machinery.
+    RunTools {
+        calls: Vec<ToolCall>,
+    },
+    /// Run a user command (from `!` or `/run`) in the background, so a long
+    /// run cannot soft-lock the event loop; the result lands as its own
+    /// message.
+    RunUserCommand {
+        command: String,
+    },
     /// Read the clipboard on Ctrl+V and attach an image when it holds one.
     PasteImage,
     /// Copy text to system clipboard.

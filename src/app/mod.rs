@@ -28,6 +28,7 @@ use crate::{
 mod action;
 mod commands;
 mod connect;
+mod delegate;
 mod format;
 mod images;
 mod input;
@@ -41,15 +42,19 @@ mod turn;
 
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
 pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, matching_commands};
+pub(crate) use delegate::{DelegateUpdate, SUBAGENT_BRIEF, Subagent, SubagentStatus};
 pub(crate) use input::Input;
 pub(crate) use pickers::{ListPicker, ModelChoice, ModelRow};
+
+#[cfg(test)]
+pub(crate) use turn::tests::test_app;
 
 use format::estimated_output_tokens;
 
 pub(crate) use connect::state::{
     AddProviderField, ConnectStage, ConnectState, ListRow, list_row_of,
 };
-pub use format::{format_bytes, format_cost, format_tokens};
+pub use format::{format_bytes, format_cost, format_duration_ms, format_tokens};
 pub use mode::{Mode, ToolsMode};
 
 use tabs::TabState;
@@ -236,6 +241,13 @@ pub struct App {
     /// Popup picker opened by `/revert`, listing the prompts already sent.
     pub revert_picker: Option<ListPicker>,
     pub running_tool: Option<RunningTool>,
+    /// Whether a user command (from `!` or `/run`) is running in the
+    /// background: a second one waits, and the Esc interrupt stops it.
+    pub user_command_running: bool,
+    /// Subagent runs in flight: several delegate calls stream in parallel
+    /// while the queue keeps advancing. Tracked per session like
+    /// `running_tool`, so results land in the tab that asked.
+    pub running_delegates: Vec<RunningTool>,
     /// Diffs for write and edit calls, shown under their results.
     pub changes: HashMap<String, ChangeReport>,
     /// Tool results the user expanded to see the full output.
@@ -267,6 +279,20 @@ pub struct App {
     pub(crate) markdown_cache: HashMap<usize, (u16, usize, Vec<ratatui::text::Line<'static>>)>,
     /// Tavily key for the web_search tool.
     tavily_api_key: Option<String>,
+    /// Subagent runs from delegate calls, streamed live and viewable with
+    /// `/agents`. App-global, so a run stays viewable from every tab.
+    pub(crate) subagents: Vec<Subagent>,
+    /// Counter giving each subagent run a unique id.
+    next_subagent_id: u64,
+    /// Popup picker opened by `/agents`.
+    pub(crate) agents_picker: Option<ListPicker>,
+    /// The subagent run the viewer shows, as an index into `subagents`.
+    pub(crate) subagent_view: Option<usize>,
+    /// How far the run viewer is scrolled down.
+    pub(crate) subagent_scroll: usize,
+    /// Click hit-boxes for the sidebar's run rows, refilled each draw:
+    /// (x_start, x_end, row, index into `subagents`).
+    pub(crate) sidebar_hits: Vec<(u16, u16, u16, usize)>,
     palette_index: usize,
     palette_hidden: bool,
     connect: Option<ConnectState>,
@@ -276,8 +302,10 @@ pub struct App {
     tabs: Vec<TabState>,
     /// Index of the active tab.
     tab: usize,
-    /// Click hit-boxes for the tab bar, refilled each draw: (x_start, x_end, index).
-    pub(crate) tab_hits: Vec<(u16, u16, usize)>,
+    /// Click hit-boxes for the tab bar, refilled each draw:
+    /// (x_start, x_end, row, index). The row keeps a click on a lower panel
+    /// that shares a tab's column range from switching tabs.
+    pub(crate) tab_hits: Vec<(u16, u16, u16, usize)>,
     /// Click hit-boxes for each tab's `×`: (x_start, x_end, row, index).
     pub(crate) tab_close_hits: Vec<(u16, u16, u16, usize)>,
     /// Click hit-box for the `+` new-tab button: (x_start, x_end, row).
@@ -333,6 +361,8 @@ impl App {
             session_picker: None,
             revert_picker: None,
             running_tool: None,
+            user_command_running: false,
+            running_delegates: Vec::new(),
             changes: HashMap::new(),
             expanded: HashSet::new(),
             output_rows: Vec::new(),
@@ -352,6 +382,12 @@ impl App {
             pending_logos: Vec::new(),
             markdown_cache: HashMap::new(),
             tavily_api_key,
+            subagents: Vec::new(),
+            next_subagent_id: 0,
+            agents_picker: None,
+            subagent_view: None,
+            subagent_scroll: 0,
+            sidebar_hits: Vec::new(),
             palette_index: 0,
             palette_hidden: false,
             connect: None,
@@ -368,6 +404,15 @@ impl App {
 
     pub fn connect_state(&self) -> Option<&ConnectState> {
         self.connect.as_ref()
+    }
+
+    /// Whether any subagent run is still streaming, so the event loop keeps
+    /// ticking and the viewer stays live while a delegate runs in the
+    /// background.
+    pub(crate) fn any_subagent_running(&self) -> bool {
+        self.subagents
+            .iter()
+            .any(|agent| agent.status == SubagentStatus::Running)
     }
 
     pub fn tavily_key(&self) -> Option<&str> {
@@ -387,7 +432,11 @@ impl App {
     }
 
     pub fn tools_busy(&self) -> bool {
-        self.approval.is_some() || self.running_tool.is_some() || !self.pending_tools.is_empty()
+        self.approval.is_some()
+            || self.running_tool.is_some()
+            || !self.running_delegates.is_empty()
+            || !self.pending_tools.is_empty()
+            || self.user_command_running
     }
 
     pub fn is_busy(&self) -> bool {

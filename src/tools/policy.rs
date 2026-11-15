@@ -50,6 +50,12 @@ fn is_external_modification(call: &ToolCall) -> bool {
                         .is_some_and(|p| !is_within_allowed_roots(Path::new(p)))
                 })
             }),
+        // Moving the working directory outside the workspace or the temp root
+        // re-roots every relative path the tools see, so it asks first.
+        "move_to" => args
+            .get("path")
+            .and_then(Value::as_str)
+            .is_some_and(|p| !is_within_allowed_roots(Path::new(p))),
         _ => false,
     }
 }
@@ -118,6 +124,8 @@ pub fn system_prompt(tools_enabled: bool) -> String {
              do not read whole directories blindly. \
              For several replacements in one or more files, batch them with multi_edit: \
              it applies every edit in order, and one failure refuses the whole batch. \
+             Change the working directory with move_to when a task lives in another folder: \
+             relative paths resolve against it, and moving outside the workspace asks first. \
              To read several files in one call, batch them with multi_read: \
              with `all: true` it reads every file directly inside each folder in `paths`. \
              Use web_search for anything newer than your knowledge or that needs current \
@@ -136,6 +144,8 @@ pub fn system_prompt(tools_enabled: bool) -> String {
              execution is requested. \
              For an independent subtask use delegate: hand the subagent one self-contained \
              task with all the context it needs — it has no tools and returns a final answer. \
+             Several delegate calls in one turn run in parallel and stream in the sidebar; the \
+             user reads every response with /agents. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \

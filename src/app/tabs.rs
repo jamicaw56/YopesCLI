@@ -43,6 +43,7 @@ pub(crate) struct TabState {
     image_width: u16,
     pub(crate) approval: Option<ToolApproval>,
     pub(crate) running_tool: Option<RunningTool>,
+    pub(crate) running_delegates: Vec<RunningTool>,
     pub(crate) changes: HashMap<String, ChangeReport>,
     pub(crate) expanded: HashSet<String>,
     pub(crate) output_rows: Vec<(u16, String)>,
@@ -81,6 +82,7 @@ impl Default for TabState {
             image_width: 0,
             approval: None,
             running_tool: None,
+            running_delegates: Vec::new(),
             changes: HashMap::new(),
             expanded: HashSet::new(),
             output_rows: Vec::new(),
@@ -122,6 +124,7 @@ impl TabState {
             image_width: std::mem::take(&mut app.image_width),
             approval: app.approval.take(),
             running_tool: app.running_tool.take(),
+            running_delegates: std::mem::take(&mut app.running_delegates),
             changes: std::mem::take(&mut app.changes),
             expanded: std::mem::take(&mut app.expanded),
             output_rows: std::mem::take(&mut app.output_rows),
@@ -160,6 +163,7 @@ impl TabState {
         app.image_width = self.image_width;
         app.approval = self.approval;
         app.running_tool = self.running_tool;
+        app.running_delegates = self.running_delegates;
         app.changes = self.changes;
         app.expanded = self.expanded;
         app.output_rows = self.output_rows;
@@ -184,6 +188,7 @@ impl TabState {
     fn is_busy(&self) -> bool {
         self.approval.is_some()
             || self.running_tool.is_some()
+            || !self.running_delegates.is_empty()
             || !self.pending_tools.is_empty()
             || self.active.is_some()
     }
@@ -334,21 +339,33 @@ impl App {
             .position(|state| state.active.as_ref().is_some_and(|active| active.id == id))
     }
 
-    /// Which tab owns the running tool call `call_id`?
+    /// Which tab owns the running tool call `call_id`? A delegate result
+    /// routes to the tab that spawned the subagent, whichever is on screen.
     pub(crate) fn tab_for_tool(&self, call_id: &str) -> Option<usize> {
         if self
             .running_tool
             .as_ref()
             .is_some_and(|running| running.call.id == call_id)
+            || self
+                .running_delegates
+                .iter()
+                .any(|running| running.call.id == call_id)
         {
             return Some(self.tab);
         }
-        self.tabs.iter().position(|state| {
+        if let Some(index) = self.tabs.iter().position(|state| {
             state
                 .running_tool
                 .as_ref()
                 .is_some_and(|running| running.call.id == call_id)
-        })
+                || state
+                    .running_delegates
+                    .iter()
+                    .any(|running| running.call.id == call_id)
+        }) {
+            return Some(index);
+        }
+        None
     }
 
     /// Which tab holds the session with id `id`?
@@ -372,11 +389,15 @@ impl App {
     /// tab bar marker.
     pub(crate) fn tab_busy(&self, index: usize) -> bool {
         if index == self.tab {
-            self.approval.is_some() || self.running_tool.is_some() || !self.pending_tools.is_empty()
+            self.approval.is_some()
+                || self.running_tool.is_some()
+                || !self.running_delegates.is_empty()
+                || !self.pending_tools.is_empty()
         } else {
             let state = &self.tabs[index];
             state.approval.is_some()
                 || state.running_tool.is_some()
+                || !state.running_delegates.is_empty()
                 || !state.pending_tools.is_empty()
         }
     }
@@ -425,6 +446,37 @@ mod tests {
 
     fn test_app() -> App {
         crate::app::turn::tests::test_app()
+    }
+
+    /// A click inside a tab's column range must switch tabs only when it is
+    /// on the tab bar's row: the Progress title at the bottom shares a tab's
+    /// column range, and a click to fold it there used to switch tabs.
+    #[test]
+    fn a_tab_hit_only_fires_on_the_header_row() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut app = test_app();
+        app.open_tab();
+        // The header refills hit-boxes every draw: tab 2 spans columns 10..20
+        // on the header row.
+        app.tab_hits.push((10, 20, 0, 1));
+
+        let click = |app: &mut App, column: u16, row: u16| {
+            app.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            });
+        };
+        // On the header row the click switches to tab 2.
+        click(&mut app, 12, 0);
+        assert_eq!(app.tab_index(), 1);
+        // Off the header row the same column must be ignored, so a click on
+        // a lower panel that shares the column range falls through to it.
+        app.tab_hits[0] = (10, 20, 0, 0);
+        click(&mut app, 12, 5);
+        assert_eq!(app.tab_index(), 1);
+        app.close_tab();
     }
 
     #[test]

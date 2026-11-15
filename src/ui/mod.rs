@@ -21,6 +21,7 @@ use crate::{
     tools,
 };
 
+mod agents;
 mod approval;
 mod composer;
 mod connect;
@@ -29,7 +30,7 @@ mod markdown;
 mod pickers;
 mod transcript;
 
-use self::{approval::*, composer::*, connect::*, help::*, pickers::*, transcript::*};
+use self::{agents::*, approval::*, composer::*, connect::*, help::*, pickers::*, transcript::*};
 
 /// How a `read_file` result surfaces in the transcript: quiet. The header and
 /// range lines render instead of the contents; a click still expands it.
@@ -271,6 +272,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let picker = app.model_picker.clone();
     let session_picker = app.session_picker.clone();
     let revert_picker = app.revert_picker.clone();
+    let agents_picker = app.agents_picker.clone();
     // The Progress panel steps aside once every task is done: a finished
     // checklist means finished work, not a panel parked over the composer.
     let tasks = app.session.tasks.iter().any(|task| !task.done);
@@ -280,6 +282,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         || picker.is_some()
         || session_picker.is_some()
         || revert_picker.is_some()
+        || agents_picker.is_some()
+        || app.subagent_view.is_some()
     {
         Vec::new()
     } else {
@@ -306,7 +310,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    let popup_height = palette_height + picker_height + session_height + revert_height;
+    let agents_height = if agents_picker.is_some() {
+        (app.agents_picker_count().clamp(1, 12) as u16).saturating_add(2)
+    } else {
+        0
+    };
+    let popup_height =
+        palette_height + picker_height + session_height + revert_height + agents_height;
     let composer_height = composer_height(app, area.width, area.height);
     let progress_height = if tasks {
         if app.progress_collapsed {
@@ -336,7 +346,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_header(frame, app, chunks[0]);
-    draw_transcript(frame, app, chunks[1]);
+    // The sidebar of subagent runs takes the transcript's right edge when
+    // there is room for it and anything to show.
+    let show_sidebar = !app.subagents.is_empty() && area.width >= SIDEBAR_MIN_WIDTH + 60;
+    let transcript_area = if show_sidebar {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(20), Constraint::Length(SIDEBAR_WIDTH)])
+            .split(chunks[1]);
+        draw_agents_sidebar(frame, app, columns[1]);
+        columns[0]
+    } else {
+        app.sidebar_hits.clear();
+        chunks[1]
+    };
+    draw_transcript(frame, app, transcript_area);
 
     let mut index = 2;
     if popup_height > 0 {
@@ -344,6 +368,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_revert_picker(frame, app, revert_picker, chunks[index]);
         } else if let Some(session_picker) = &session_picker {
             draw_session_picker(frame, app, session_picker, chunks[index]);
+        } else if let Some(agents_picker) = &agents_picker {
+            draw_agents_picker(frame, app, agents_picker, chunks[index]);
         } else if let Some(picker) = &picker {
             draw_model_picker(frame, app, picker, chunks[index]);
         } else {
@@ -371,6 +397,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_help(frame, app, area);
     } else if let Some(connect) = app.connect_state() {
         draw_connect(frame, app, connect, spinner, area);
+    } else if app.subagent_view.is_some() {
+        draw_agents_viewer(frame, app, area);
     }
 }
 

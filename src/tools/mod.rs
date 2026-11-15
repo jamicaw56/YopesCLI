@@ -27,6 +27,7 @@ pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets};
 pub use policy::{requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
+pub(crate) use shell::kill_spawned_commands;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -49,7 +50,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 17] = [
+pub const TOOL_NAMES: [&str; 18] = [
     "list_dir",
     "read_file",
     "multi_read",
@@ -59,6 +60,7 @@ pub const TOOL_NAMES: [&str; 17] = [
     "write_file",
     "edit_file",
     "multi_edit",
+    "move_to",
     "run_command",
     "bash_background",
     "bash_output",
@@ -87,6 +89,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>) -> Result<String> {
         "write_file" => files::write_file(&call.function.arguments),
         "edit_file" => files::edit_file(&call.function.arguments),
         "multi_edit" => files::multi_edit(&call.function.arguments),
+        "move_to" => files::move_to(&call.function.arguments),
         "run_command" => shell::run_command(&call.function.arguments),
         "bash_background" => shell::bash_background(&call.function.arguments),
         "bash_output" => shell::bash_output(&call.function.arguments),
@@ -111,6 +114,26 @@ pub fn delegate_task(call: &ToolCall) -> Option<String> {
                 .map(str::to_owned)
                 .filter(|task| !task.trim().is_empty())
         })
+}
+
+/// The longest `task` a `delegate` call may carry: about 15k tokens, so one
+/// runaway call cannot silently burn the user's whole context.
+pub const MAX_DELEGATE_TASK_CHARS: usize = 60_000;
+
+/// The checked `task` of a `delegate` call: present, non-empty, and within
+/// the size cap. The error text is the tool result the model sees.
+pub fn delegate_task_checked(call: &ToolCall) -> Result<String, String> {
+    let Some(task) = delegate_task(call) else {
+        return Err("delegate needs a task argument".to_owned());
+    };
+    let chars = task.chars().count();
+    if chars > MAX_DELEGATE_TASK_CHARS {
+        return Err(format!(
+            "delegate task is too large ({chars} characters; the limit is \
+             {MAX_DELEGATE_TASK_CHARS}). Trim it or split the work into several delegate calls."
+        ));
+    }
+    Ok(task)
 }
 
 /// Execute a command directly for a user.
@@ -767,5 +790,71 @@ mod tests {
 
         let command = ToolCall::new("call_2", "run_command", r#"{"command":"cargo fmt --all"}"#);
         assert_eq!(preview(&command), "cargo fmt --all");
+    }
+
+    /// Restores the process working directory when the test ends, however it
+    /// ends: `cargo test` runs tests in parallel and they share the cwd.
+    struct RestoreCwd(std::path::PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn move_to_changes_directory_and_normalizes_dots() {
+        use super::execute;
+        use std::fs;
+        let previous = std::env::current_dir().unwrap();
+        let _guard = RestoreCwd(previous.clone());
+        let dir = std::env::temp_dir().join(format!("yopes-moveto-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("inner/deeper")).unwrap();
+        fs::write(dir.join("f.txt"), "x").unwrap();
+
+        let into = |path: &str| {
+            execute(
+                &ToolCall::new("call_30", "move_to", json!({ "path": path }).to_string()),
+                None,
+            )
+        };
+        let absolute = dir.join("inner").display().to_string();
+        let output = into(&absolute).unwrap();
+        assert!(output.contains("Working directory moved"), "{output}");
+        assert_eq!(std::env::current_dir().unwrap(), dir.join("inner"));
+
+        // A relative target with `.` resolves against the new cwd, and `..`
+        // collapses instead of leaving the literal component in the path.
+        into(r#"./deeper"#).unwrap();
+        assert_eq!(std::env::current_dir().unwrap(), dir.join("inner/deeper"));
+
+        // A file target fails and the cwd stays put.
+        let file = dir.join("f.txt").display().to_string();
+        let error = into(&file).unwrap_err().to_string();
+        assert!(error.contains("is not a directory"), "{error}");
+        assert_eq!(std::env::current_dir().unwrap(), dir.join("inner/deeper"));
+
+        // A missing target fails the same way.
+        let missing = dir.join("absent").display().to_string();
+        let error = into(&missing).unwrap_err().to_string();
+        assert!(error.contains("is not a directory"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn move_to_within_the_workspace_runs_and_outside_asks() {
+        let call =
+            |path: &str| ToolCall::new("call_31", "move_to", json!({ "path": path }).to_string());
+        // A subdirectory of the workspace runs automatically.
+        assert!(!requires_approval(&call("src")));
+        // The temp root runs automatically; anywhere else asks.
+        let temp = crate::temp::platform_temp_root().display().to_string();
+        assert!(!requires_approval(&call(&temp)));
+        // Leaving the workspace entirely — `..` collapses past the root.
+        assert!(requires_approval(&call("../../outside")));
+        // A Windows absolute path is outside on Windows and a relative name
+        // on everything else, so only Windows can assert it as a drive path.
+        #[cfg(windows)]
+        assert!(requires_approval(&call("C:\\Windows\\System32")));
     }
 }
