@@ -19,8 +19,9 @@ pub(super) fn request_messages(
         .filter_map(|m| m.tool_calls.as_ref())
         .flat_map(|calls| calls.iter().map(|c| c.id.as_str()))
         .collect();
-    // Images returned by tools are sent after the tool messages, so every
-    // tool_call id still gets its own tool message first.
+    // Images a tool returned travel in a user message right after that
+    // turn's last tool result: every tool_call id still gets its own tool
+    // message first, and the image sits in the turn it was read in.
     let mut tool_images: Vec<&crate::session::ImageAttachment> = Vec::new();
     let mut system = tools::system_prompt(tooling);
     // The user's prompt may duplicate what a built-in line already says: send
@@ -45,7 +46,7 @@ pub(super) fn request_messages(
         "role": "system",
         "content": system,
     }));
-    for message in messages {
+    for (index, message) in messages.iter().enumerate() {
         // Parts and Ollama branches below carry the images themselves.
         let openai_parts = image_style == ImageStyle::Parts;
         // A provider failure is transcript decoration, not conversation:
@@ -89,16 +90,38 @@ pub(super) fn request_messages(
             }
             continue;
         }
-        // A tool message stays text; its images travel in a user message
-        // appended after all tool results, which keeps the tool-call pairing
-        // valid for every provider.
-        if message.role == Role::Tool && openai_parts && !message.images.is_empty() {
+        // A live tool message stays text; its images travel in a user
+        // message right after this turn's last tool result. That keeps the
+        // tool-call pairing valid for every provider and parks the image in
+        // the turn it was read in — collecting every image ever read into
+        // one message appended after the newest prompt made models treat
+        // them as freshly attached and re-mention them every turn.
+        if message.role == Role::Tool && tooling && is_valid_tool_call {
             let mut value = serde_json::to_value(message)?;
             if let Some(object) = value.as_object_mut() {
                 object.remove("images");
             }
             request.push(value);
-            tool_images.extend(message.images.iter());
+            if openai_parts {
+                tool_images.extend(message.images.iter());
+                // More tool results of this turn follow only when the next
+                // live message is another tool result; otherwise hand the
+                // buffered images over before the conversation moves on.
+                let more_tool_results = messages[index + 1..]
+                    .iter()
+                    .find(|next| next.error.is_none())
+                    .is_some_and(|next| {
+                        next.role == Role::Tool
+                            && next
+                                .tool_call_id
+                                .as_deref()
+                                .is_some_and(|id| valid_tool_call_ids.contains(id))
+                    });
+                if !more_tool_results && !tool_images.is_empty() {
+                    let images = std::mem::take(&mut tool_images);
+                    request.push(tool_images_message(&images));
+                }
+            }
             continue;
         }
         // Attached screenshots travel so a vision-capable model sees them:
@@ -163,20 +186,23 @@ pub(super) fn request_messages(
         }
         request.push(value);
     }
-    if !tool_images.is_empty() {
-        let mut parts = vec![serde_json::json!({
-            "type": "text",
-            "text": "Images read by the tools:",
-        })];
-        for image in tool_images {
-            parts.push(serde_json::json!({
-                "type": "image_url",
-                "image_url": { "url": format!("data:image/png;base64,{}", image.data) }
-            }));
-        }
-        request.push(serde_json::json!({ "role": "user", "content": parts }));
-    }
     Ok(request)
+}
+
+/// The user message that hands images a tool returned to the model: one
+/// text part, then one image part per image.
+fn tool_images_message(images: &[&crate::session::ImageAttachment]) -> serde_json::Value {
+    let mut parts = vec![serde_json::json!({
+        "type": "text",
+        "text": "Images read by the tools:",
+    })];
+    for image in images {
+        parts.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": format!("data:image/png;base64,{}", image.data) }
+        }));
+    }
+    serde_json::json!({ "role": "user", "content": parts })
 }
 
 /// How images ride along in request messages: OpenAI-compatible multimodal
@@ -705,6 +731,85 @@ mod tests {
         let plain = request_messages(&messages, false, ImageStyle::None, None, None).unwrap();
         assert!(plain.last().unwrap().get("images").is_none());
         assert_eq!(plain.last().unwrap()["role"], "user");
+    }
+
+    #[test]
+    fn tool_read_images_land_after_their_tool_run_not_after_every_later_prompt() {
+        use crate::session::ImageAttachment;
+
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![ToolCall::new(
+            "call_1",
+            "read_image",
+            r#"{"path":"shot.png"}"#,
+        )]);
+        let mut tool = Message::tool_result("call_1", "a screenshot");
+        tool.images = vec![ImageAttachment {
+            name: "shot.png".to_owned(),
+            data: "aWNvbg==".to_owned(),
+        }];
+        let messages = vec![
+            Message::new(Role::User, "what is in shot.png?"),
+            assistant,
+            tool,
+            Message::new(Role::Assistant, "It shows a red square."),
+            Message::new(Role::User, "thanks, now list the files"),
+        ];
+
+        let request = request_messages(&messages, true, ImageStyle::Parts, None, None).unwrap();
+        // system, user, assistant, tool, user(images), assistant, user
+        assert_eq!(request.len(), 7);
+        assert_eq!(request[3]["role"], "tool");
+        assert!(request[3].get("images").is_none());
+        // The images follow their tool result directly, in the turn they
+        // were read in.
+        assert_eq!(request[4]["role"], "user");
+        assert_eq!(request[4]["content"][0]["text"], "Images read by the tools:");
+        assert_eq!(
+            request[4]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,aWNvbg=="
+        );
+        // The newest user prompt stays last: no image dump is re-attached
+        // after it on every request.
+        assert_eq!(
+            request.last().unwrap()["content"],
+            "thanks, now list the files"
+        );
+    }
+
+    #[test]
+    fn one_run_of_tool_results_yields_one_images_message_after_the_last_result() {
+        use crate::session::ImageAttachment;
+
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![
+            ToolCall::new("call_1", "read_image", r#"{"path":"a.png"}"#),
+            ToolCall::new("call_2", "read_file", r#"{"path":"b.txt"}"#),
+        ]);
+        let mut first = Message::tool_result("call_1", "a screenshot");
+        first.images = vec![ImageAttachment {
+            name: "a.png".to_owned(),
+            data: "aW1hZ2U=".to_owned(),
+        }];
+        let messages = vec![
+            Message::new(Role::User, "look at a.png and b.txt"),
+            assistant,
+            first,
+            Message::tool_result("call_2", "text of b"),
+        ];
+
+        let request = request_messages(&messages, true, ImageStyle::Parts, None, None).unwrap();
+        // system, user, assistant, tool, tool, user(images): the images
+        // message waits for the whole run so tool-call pairing stays valid.
+        assert_eq!(request.len(), 6);
+        assert_eq!(request[3]["tool_call_id"], "call_1");
+        assert_eq!(request[4]["tool_call_id"], "call_2");
+        let images_message = request.last().unwrap();
+        assert_eq!(images_message["content"][0]["text"], "Images read by the tools:");
+        assert_eq!(
+            images_message["content"][1]["image_url"]["url"],
+            "data:image/png;base64,aW1hZ2U="
+        );
     }
 
     #[test]
