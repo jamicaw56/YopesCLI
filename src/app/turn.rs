@@ -245,6 +245,10 @@ impl App {
                 return self.begin_turn();
             }
         }
+        // Reports parked while the tab was busy come before the new message.
+        if !steering && !tool_busy {
+            self.flush_parked_reports();
+        }
         let mut message = Message::new(Role::User, value);
         message.images = std::mem::take(&mut self.attachments);
         self.session.messages.push(message);
@@ -642,7 +646,7 @@ impl App {
 
     /// A background user command finished: record its output where the `$ cmd`
     /// message sits.
-    pub(crate) fn on_user_command_result(&mut self, result: Result<String, String>) {
+    pub(crate) fn on_user_command_result(&mut self, result: Result<String, String>) -> Action {
         self.user_command_running = false;
         let output = match result {
             Ok(output) => output,
@@ -653,6 +657,11 @@ impl App {
         self.session.messages.push(tool_msg);
         self.follow_tail = true;
         self.save_session();
+        // A subagent that finished while the command ran reports now.
+        if !self.is_busy() && self.flush_parked_reports() {
+            return self.begin_turn();
+        }
+        Action::None
     }
 
     /// A background bash job finished (or timed out): record the outcome
@@ -885,6 +894,10 @@ impl App {
         self.remove_empty_response();
         self.info("Response stopped. Partial output was kept.");
         self.save_session();
+        // A subagent that finished while the turn streamed reports now.
+        if !self.is_busy() && self.flush_parked_reports() {
+            return self.begin_turn();
+        }
         Action::Cancel(active.id)
     }
 }

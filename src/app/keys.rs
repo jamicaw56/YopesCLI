@@ -893,7 +893,11 @@ impl App {
                 // A message queued while the agents ran joins the
                 // conversation here, before the continuation sends it
                 // together with their results.
-                if self.flush_queued_message() {
+                let queued = self.flush_queued_message();
+                // Finished subagents report after the tool results, so the
+                // model sees what happened in the same continuation.
+                let reported = self.flush_parked_reports();
+                if queued || reported {
                     return self.begin_turn();
                 }
                 return self.continue_after_tools();

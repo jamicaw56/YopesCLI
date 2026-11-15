@@ -74,11 +74,14 @@ pub(crate) struct TabState {
     /// Whether this tab's `/run` command is running, so another tab's
     /// command is not blocked by it.
     pub(crate) user_command_running: bool,
-    /// A message typed while subagents still stream: it queues here and the
-    /// post-delegate continuation sends it together with their results, so
-    /// their tool results never land inside a restarted conversation.
+    /// A message typed while a non-delegate tool runs: it queues here and
+    /// the post-tool continuation sends it together with the tool result, so
+    /// the tool results never land inside a restarted conversation.
     pub(crate) queued_message: Option<String>,
     pub(crate) queued_images: Vec<ImageAttachment>,
+    /// Finished subagent runs waiting to report in this session: parked
+    /// while the tab is busy, delivered at the next idle point.
+    pub(crate) pending_reports: VecDeque<(u64, String)>,
 }
 
 impl Default for TabState {
@@ -124,6 +127,7 @@ impl Default for TabState {
             user_command_running: false,
             queued_message: None,
             queued_images: Vec::new(),
+            pending_reports: VecDeque::new(),
         }
     }
 }
@@ -172,6 +176,7 @@ impl TabState {
             user_command_running: std::mem::take(&mut app.user_command_running),
             queued_message: app.queued_message.take(),
             queued_images: std::mem::take(&mut app.queued_images),
+            pending_reports: std::mem::take(&mut app.pending_reports),
         }
     }
 
@@ -217,6 +222,7 @@ impl TabState {
         app.user_command_running = self.user_command_running;
         app.queued_message = self.queued_message;
         app.queued_images = self.queued_images;
+        app.pending_reports = self.pending_reports;
     }
 
     fn is_streaming(&self) -> bool {

@@ -287,17 +287,42 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 .iter()
                 .filter(|call| !is_hidden_tool(&call.function.name))
             {
-                lines.push(Line::from(vec![
-                    Span::styled("→ ", Style::default().fg(accent())),
+                let mut spans = vec![
+                    Span::styled("→ ".to_owned(), Style::default().fg(accent())),
                     Span::styled(
                         call.function.name.clone(),
                         Style::default().fg(text()).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        format!("  {}", tools::preview(call)),
-                        Style::default().fg(muted()),
-                    ),
-                ]));
+                ];
+                // A delegate row shows its run: a live spinner while the
+                // subagent works, a check or cross once it ends, and the
+                // model-given name instead of the raw task text.
+                if call.function.name == "delegate" {
+                    if let Some(agent) = app.subagent_for_call(&call.id) {
+                        let (glyph, color) = match agent.status {
+                            crate::app::SubagentStatus::Running => {
+                                (SPINNER[app.spinner % SPINNER.len()], accent())
+                            }
+                            crate::app::SubagentStatus::Done => ("✓", muted()),
+                            crate::app::SubagentStatus::Failed => ("✗", error()),
+                        };
+                        spans.push(Span::styled(
+                            format!(" {glyph}"),
+                            Style::default().fg(color),
+                        ));
+                        spans.push(Span::styled(
+                            format!("  subagent · {}", agent.row_label()),
+                            Style::default().fg(muted()),
+                        ));
+                        lines.push(Line::from(spans));
+                        continue;
+                    }
+                }
+                spans.push(Span::styled(
+                    format!("  {}", tools::preview(call)),
+                    Style::default().fg(muted()),
+                ));
+                lines.push(Line::from(spans));
             }
         }
         if streaming {
