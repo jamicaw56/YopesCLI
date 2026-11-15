@@ -890,6 +890,12 @@ impl App {
             // The turn continues only when nothing runs anymore: parallel
             // subagents keep the conversation waiting for their results.
             if self.running_delegates.is_empty() {
+                // A message queued while the agents ran joins the
+                // conversation here, before the continuation sends it
+                // together with their results.
+                if self.flush_queued_message() {
+                    return self.begin_turn();
+                }
                 return self.continue_after_tools();
             }
             return Action::None;
@@ -923,6 +929,21 @@ impl App {
         }
         self.pending_tools.pop_front();
         self.start_and_advance(call)
+    }
+
+    /// A message queued while subagents still ran: it joins the conversation
+    /// here, so the continuation sends it together with their results. True
+    /// when a queued message was flushed.
+    fn flush_queued_message(&mut self) -> bool {
+        let Some(value) = self.queued_message.take() else {
+            return false;
+        };
+        let mut message = Message::new(Role::User, value);
+        message.images = std::mem::take(&mut self.queued_images);
+        self.session.messages.push(message);
+        self.follow_tail = true;
+        self.save_session();
+        true
     }
 
     pub(crate) fn continue_after_tools(&mut self) -> Action {

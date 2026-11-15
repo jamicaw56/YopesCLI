@@ -1,6 +1,45 @@
 use super::markdown::markdown_lines;
 use super::*;
 
+/// How many messages keep their rendered markdown in the cache: a very long
+/// session evicts the oldest instead of holding every message's lines.
+const MARKDOWN_CACHE_LIMIT: usize = 300;
+
+/// A cheap content fingerprint for the markdown cache: two different texts
+/// with the same byte length must not serve a stale render.
+fn content_hash(content: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Wrapped row counts for one message's rendered lines, computed once when
+/// the markdown cache fills: the transcript walk reuses them instead of
+/// re-wrapping every character of the session on every frame.
+fn line_counts(lines: &[Line<'static>], width: u16) -> Vec<usize> {
+    lines
+        .iter()
+        .map(|line| {
+            let mut scratch = String::new();
+            for span in &line.spans {
+                scratch.push_str(&span.content);
+            }
+            wrapped_line_count(&scratch, width)
+        })
+        .collect()
+}
+
+/// Wrapped rows for one transcript line: the same measure the walk applies
+/// to lines rebuilt this frame.
+fn measure_line(line: &Line<'_>, scratch: &mut String, width: u16) -> usize {
+    scratch.clear();
+    for span in &line.spans {
+        scratch.push_str(&span.content);
+    }
+    wrapped_line_count(scratch, width)
+}
+
 pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     app.output_rows.clear();
     let inner = Block::default()
@@ -72,6 +111,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut lines = Vec::new();
     let mut rows: Vec<(usize, String)> = Vec::new();
+    // Global line ranges whose wrap counts come from the markdown cache, so
+    // the walk below skips re-wrapping cached text.
+    let mut cached_counts_range: Vec<(usize, usize, usize)> = Vec::new();
     // Copied out: the summary is owned so the session can stay borrowed.
     let compaction = app.compaction_text().map(str::to_owned);
     for (index, message) in app.session.messages.iter().enumerate() {
@@ -172,22 +214,44 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         if !message.content.is_empty() {
             if !streaming {
-                if let Some((cached_width, cached_len, cached_lines)) =
+                let content_key = content_hash(&message.content);
+                if let Some((cached_width, cached_hash, cached_lines, cached_counts)) =
                     app.markdown_cache.get(&index)
                 {
-                    if *cached_width == inner.width && *cached_len == message.content.len() {
+                    if *cached_width == inner.width && *cached_hash == content_key {
+                        let start = lines.len();
                         lines.extend(cached_lines.clone());
+                        // The cached lines bring their wrap counts: the walk
+                        // below reuses them instead of re-wrapping every
+                        // character of the session on every keystroke.
+                        cached_counts_range.push((start, lines.len(), index));
                     } else {
                         let parsed = markdown_lines(&message.content, inner.width);
-                        app.markdown_cache
-                            .insert(index, (inner.width, message.content.len(), parsed.clone()));
+                        let counts = line_counts(&parsed, inner.width);
+                        app.markdown_cache.insert(
+                            index,
+                            (inner.width, content_key, parsed.clone(), counts),
+                        );
+                        let start = lines.len();
                         lines.extend(parsed);
+                        cached_counts_range.push((start, lines.len(), index));
                     }
                 } else {
                     let parsed = markdown_lines(&message.content, inner.width);
+                    let counts = line_counts(&parsed, inner.width);
                     app.markdown_cache
-                        .insert(index, (inner.width, message.content.len(), parsed.clone()));
+                        .insert(index, (inner.width, content_key, parsed.clone(), counts));
+                    let start = lines.len();
                     lines.extend(parsed);
+                    cached_counts_range.push((start, lines.len(), index));
+                    // One entry per message: a very long session must not
+                    // keep every message's rendered lines in memory forever.
+                    while app.markdown_cache.len() > MARKDOWN_CACHE_LIMIT {
+                        let Some(oldest) = app.markdown_cache.keys().copied().min() else {
+                            break;
+                        };
+                        app.markdown_cache.remove(&oldest);
+                    }
                 }
             } else {
                 // Only the tail is parsed while it streams: running the whole
@@ -279,16 +343,31 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Screen row of every transcript line, accounting for wrapped text above.
+    // Cached markdown lines bring their wrap counts from the cache, so one
+    // long session no longer re-wraps every character on every keystroke:
+    // only lines rebuilt this frame get measured.
     let mut starts: Vec<usize> = Vec::with_capacity(lines.len());
     let mut next_row = 0;
     let mut scratch = String::new();
-    for line in &lines {
+    let mut ranges = cached_counts_range.iter().copied().peekable();
+    let mut active: Option<(usize, usize, usize)> = ranges.next();
+    for (line_index, line) in lines.iter().enumerate() {
         starts.push(next_row);
-        scratch.clear();
-        for span in &line.spans {
-            scratch.push_str(&span.content);
+        if let Some((_, end, _)) = active {
+            if line_index >= end {
+                active = ranges.next();
+            }
         }
-        next_row += wrapped_line_count(&scratch, inner.width);
+        let count = match active {
+            Some((start, end, key)) if line_index >= start && line_index < end => {
+                app.markdown_cache
+                    .get(&key)
+                    .and_then(|(_, _, _, counts)| counts.get(line_index - start).copied())
+                    .unwrap_or_else(|| measure_line(line, &mut scratch, inner.width))
+            }
+            _ => measure_line(line, &mut scratch, inner.width),
+        };
+        next_row += count;
     }
     let total_lines = next_row;
     let maximum = total_lines.saturating_sub(usize::from(inner.height));

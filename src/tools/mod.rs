@@ -220,7 +220,11 @@ where
 }
 
 fn clip(text: &str, width: usize) -> String {
-    let mut characters = text.chars();
+    // Newlines collapse to spaces: a preview lands in the transcript as one
+    // Line, and an embedded newline makes the row estimator count rows
+    // ratatui never renders.
+    let flat = text.replace("\r\n", " ").replace(['\n', '\r'], " ");
+    let mut characters = flat.chars();
     let mut result = characters.by_ref().take(width).collect::<String>();
     if characters.next().is_some() {
         result.pop();

@@ -19,7 +19,11 @@ pub fn preview(call: &ToolCall) -> String {
             .to_owned()
     };
     match call.function.name.as_str() {
-        "delegate" => format!("subagent · {}", string("task")),
+        // The task is clipped: an unclipped multi-line task landed in the
+        // transcript as one Line with embedded newlines, which the row
+        // estimator counts as dozens of rows ratatui never renders — the
+        // drift that made delegation blank out the transcript.
+        "delegate" => format!("subagent · {}", clip(&string("task"), 160)),
         "list_dir" => {
             let path = string("path");
             if path.is_empty() {

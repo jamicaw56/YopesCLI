@@ -102,7 +102,12 @@ impl App {
             self.info("Approve or deny the pending tool first.");
             return Action::None;
         }
-        let tool_busy = self.running_tool.is_some() || !self.pending_tools.is_empty();
+        let tool_busy = self.running_tool.is_some()
+            || !self.pending_tools.is_empty()
+            // Parallel subagents keep the turn waiting: a message sent while
+            // they run queues for the post-tool continuation instead of
+            // starting an overlapping turn their results would land inside.
+            || !self.running_delegates.is_empty();
         if steering
             && self
                 .active
@@ -203,9 +208,25 @@ impl App {
         // Swap `[Image N]` placeholders back to their real paths: the model
         // and the transcript see the path, the composer never did.
         value = self.resolve_image_placeholders(value);
-        if steering {
+        if !self.running_delegates.is_empty() {
+            // Delegates still run: their tool results must follow the
+            // assistant turn that asked for them, so a message typed now
+            // queues for the post-delegate continuation instead of landing
+            // between the tool calls and their results.
+            let images = std::mem::take(&mut self.attachments);
+            self.queued_message = match self.queued_message.take() {
+                Some(existing) => Some(format!("{existing}\n\n{value}")),
+                None => Some(value),
+            };
+            self.queued_images.extend(images);
+            self.info("Queued — it sends when the running agents finish.");
+            return Action::None;
+        }
+        if steering && self.running_delegates.is_empty() {
             // Drop the blank reply the interrupted request left behind, then
             // fold the steer into the conversation and restart the turn.
+            // Delegates still running keep the turn instead: their results
+            // must not land inside a restarted conversation.
             self.discard_pending_tools("The user steered the response before this tool could run.");
             self.remove_empty_response();
             // Several steers before the model answered read as one message
