@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{env, net::ToSocketAddrs, time::Duration};
 
 use super::*;
 
@@ -103,6 +103,7 @@ pub(super) fn web_fetch(arguments: &str) -> Result<String> {
     if is_blocked_destination(&parsed_url) {
         bail!("access to local or private network addresses is blocked");
     }
+    check_resolved_host(&parsed_url)?;
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
@@ -235,6 +236,59 @@ fn decode_entities(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{is_blocked_destination, is_blocked_ip};
+    use std::net::IpAddr;
+
+    fn blocked(host: &str) -> bool {
+        is_blocked_destination(&reqwest::Url::parse(&format!("http://{host}")).unwrap())
+    }
+
+    #[test]
+    fn local_and_private_destinations_are_blocked() {
+        for host in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "10.0.0.5",
+            "192.168.1.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "100.64.0.1",
+            "255.255.255.255",
+            "240.0.0.1",
+            "localhost",
+            "metadata.internal",
+            "[::1]",
+            "[::]",
+            "[::ffff:127.0.0.1]",
+            "[::ffff:169.254.169.254]",
+            "[::127.0.0.1]",
+            "[fe80::1]",
+            "[fc00::1]",
+        ] {
+            assert!(blocked(host), "{host} should be blocked");
+        }
+        assert!(is_blocked_ip("::ffff:10.0.0.5".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn public_destinations_stay_allowed() {
+        for host in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "example.com",
+            "example.org",
+            "[2606:4700:4700::1111]",
+        ] {
+            assert!(!blocked(host), "{host} should stay allowed");
+        }
+        assert!(!is_blocked_ip(
+            "2606:4700:4700::1111".parse::<IpAddr>().unwrap()
+        ));
+    }
+}
+
 fn is_blocked_destination(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return true;
@@ -247,22 +301,59 @@ fn is_blocked_destination(url: &reqwest::Url) -> bool {
     {
         return true;
     }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return match ip {
-            std::net::IpAddr::V4(ipv4) => {
-                ipv4.is_loopback()
-                    || ipv4.is_private()
-                    || ipv4.is_link_local()
-                    || ipv4.is_unspecified()
-                    || (ipv4.octets()[0] == 100 && (ipv4.octets()[1] & 0xC0 == 64))
+    host.parse::<std::net::IpAddr>()
+        .map(is_blocked_ip)
+        .unwrap_or(false)
+}
+
+/// One address: loopback, private, link-local, this network, carrier-grade
+/// NAT, broadcast, reserved — or an IPv6 form that routes like one of those.
+fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ipv4) => {
+            ipv4.is_loopback()
+                || ipv4.is_private()
+                || ipv4.is_link_local()
+                || ipv4.is_unspecified()
+                || ipv4.is_broadcast()
+                || ipv4.is_reserved()
+                || ipv4.octets()[0] == 0
+                || (ipv4.octets()[0] == 100 && (ipv4.octets()[1] & 0xC0 == 64))
+        }
+        std::net::IpAddr::V6(ipv6) => {
+            if ipv6.is_loopback()
+                || ipv6.is_unspecified()
+                || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
+                || ((ipv6.segments()[0] & 0xffc0) == 0xfe80)
+            {
+                return true;
             }
-            std::net::IpAddr::V6(ipv6) => {
-                ipv6.is_loopback()
-                    || ipv6.is_unspecified()
-                    || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
-                    || ((ipv6.segments()[0] & 0xffc0) == 0xfe80)
-            }
-        };
+            // ::ffff:a.b.c.d and ::a.b.c.d route like the embedded IPv4, so
+            // the plain filter above never catches them.
+            ipv6.to_ipv4().map(is_blocked_ip).unwrap_or(false)
+        }
     }
-    false
+}
+
+/// Re-check the host after DNS resolution: a public hostname that resolves
+/// into a private network address is the classic rebinding trick.
+// ponytail: reqwest still re-resolves at connect, so a short-TTL rebind can
+// slip through; the full fix needs a custom reqwest DNS resolver.
+fn check_resolved_host(url: &reqwest::Url) -> Result<()> {
+    let Some(host) = url.host_str() else {
+        bail!("access to local or private network addresses is blocked");
+    };
+    let host = host.trim_matches('[').trim_matches(']');
+    // A literal IP was checked before this call; resolving it repeats that.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let port = url.port_or_known_default().unwrap_or(80);
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .with_context(|| format("resolving {host}"))?;
+    if addrs.any(|socket| is_blocked_ip(socket.ip())) {
+        bail!("access to local or private network addresses is blocked");
+    }
+    Ok(())
 }

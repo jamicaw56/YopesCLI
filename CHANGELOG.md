@@ -18,6 +18,12 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- `web_fetch` SSRF hardening: IPv4-mapped and IPv4-compatible IPv6 addresses
+  (`::ffff:127.0.0.1` and friends), the `0.0.0.0/8` and `240.0.0.0/4` ranges,
+  and the broadcast address are now blocked alongside the existing
+  private-network filter, and the hostname is resolved and re-checked before
+  the request so a public name that resolves into a private address is
+  refused.
 - Pasting an image path or a clipboard image now shows an `[Image N]`
   placeholder in the composer instead of nothing. The real path stays hidden
   in an internal map and is swapped back on submit (non-vision models get the
