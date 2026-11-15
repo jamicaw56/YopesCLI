@@ -153,9 +153,7 @@ impl App {
                 }
                 return self.command(&prompt);
             }
-            let expanded = std::env::current_dir()
-                .ok()
-                .and_then(|cwd| skills::expand(&prompt, &cwd));
+            let expanded = skills::expand(&prompt, self.working_dir());
             match expanded {
                 // A skill invocation becomes a normal turn that carries the
                 // skill body, so it works with tools off too.
@@ -278,7 +276,9 @@ impl App {
         let request_id = self.next_request_id;
         let tools_enabled = self.mode != Mode::Chat && self.tools_mode.advertised();
         let mode_note = self.mode.instruction(self.tools_mode);
-        let prompt_chars = tools::system_prompt(tools_enabled).chars().count()
+        let prompt_chars = tools::system_prompt(tools_enabled, self.working_dir())
+            .chars()
+            .count()
             + self
                 .backend
                 .system_prompt()
@@ -526,8 +526,7 @@ impl App {
     /// List what is installed, one line per skill, including where it came
     /// from. Nothing here reads files; discovery only checks names.
     pub(crate) fn show_skills(&mut self) {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let message = skills::summary(&cwd).unwrap_or_else(|| {
+        let message = skills::summary(self.working_dir()).unwrap_or_else(|| {
             "No skills installed · add Skill.md files under ~/.yopes/skills/<name>/ \
              or .yopes/skills/<name>/"
                 .to_owned()
@@ -535,15 +534,13 @@ impl App {
         self.info(message);
     }
 
-    /// Switch the process working directory, so every path-based tool and the
-    /// next session resolve from there.
+    /// Switch this tab's working directory, so every path-based tool in the
+    /// tab resolves from there. Other tabs keep their own directory and the
+    /// process working directory never changes.
     pub(crate) fn change_directory(&mut self, value: &str) {
         let value = value.trim();
         if value.is_empty() {
-            match std::env::current_dir() {
-                Ok(cwd) => self.info(format!("Working directory: {}", cwd.display())),
-                Err(error) => self.error(format!("Could not read the working directory: {error}")),
-            }
+            self.info(format!("Working directory: {}", self.working_dir.display()));
             return;
         }
         let expanded = if let Some(rest) = value
@@ -563,13 +560,7 @@ impl App {
         let path = if path.is_absolute() {
             path
         } else {
-            match std::env::current_dir() {
-                Ok(cwd) => cwd.join(path),
-                Err(error) => {
-                    self.error(format!("Could not read the working directory: {error}"));
-                    return;
-                }
-            }
+            self.working_dir.join(path)
         };
         let path = match path.canonicalize() {
             Ok(path) => path,
@@ -582,14 +573,10 @@ impl App {
             self.error(format!("{} is not a directory.", path.display()));
             return;
         }
-        match std::env::set_current_dir(&path) {
-            Ok(()) => {
-                self.scroll = 0;
-                self.follow_tail = true;
-                self.info(format!("Working directory: {}", path.display()));
-            }
-            Err(error) => self.error(format!("Could not change directory: {error}")),
-        }
+        self.working_dir = path.clone();
+        self.scroll = 0;
+        self.follow_tail = true;
+        self.info(format!("Working directory: {}", path.display()));
     }
 
     /// Run a shell command in the workspace directly for the user.

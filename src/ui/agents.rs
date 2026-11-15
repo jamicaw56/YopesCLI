@@ -11,7 +11,8 @@ pub(super) const SIDEBAR_WIDTH: u16 = 26;
 /// transcript width.
 pub(super) const SIDEBAR_MIN_WIDTH: u16 = 90;
 
-/// One sidebar row: the status glyph, the elapsed time and the task excerpt.
+/// One sidebar row: the status glyph, the elapsed time and the row label —
+/// the name the model gave the task, not the task text itself.
 fn agent_row(agent: &crate::app::Subagent, spinner: usize) -> Line<'static> {
     let (glyph, color) = match agent.status {
         crate::app::SubagentStatus::Running => (SPINNER[spinner % SPINNER.len()], accent()),
@@ -25,11 +26,11 @@ fn agent_row(agent: &crate::app::Subagent, spinner: usize) -> Line<'static> {
         _ => agent.elapsed_ms,
     };
     let elapsed = crate::app::format_duration_ms(elapsed_ms);
-    let excerpt = agent.task_excerpt();
+    let label = agent.row_label();
     Line::from(vec![
         Span::styled(format!("{glyph} "), Style::default().fg(color)),
         Span::styled(format!("{elapsed} "), Style::default().fg(muted())),
-        Span::styled(excerpt, Style::default().fg(text())),
+        Span::styled(label, Style::default().fg(text())),
     ])
 }
 
@@ -228,7 +229,7 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
         };
         let line = Line::from(vec![
             Span::styled(format!("{} ", glyph), glyph_style),
-            Span::styled(agent.task_excerpt(), style),
+            Span::styled(agent.row_label(), style),
         ]);
         frame.render_widget(
             Paragraph::new(line),

@@ -64,9 +64,12 @@ struct ReadImageArgs {
     path: String,
 }
 
-/// Change the process working directory the tools resolve relative paths
-/// against. The path is normalized (`..` collapsed) and must exist; moving
-/// outside the workspace or the temp root asks the user first.
+/// Switch the workspace the tools resolve relative paths against. The path
+/// is normalized (`..` collapsed) and must exist; moving outside the
+/// workspace or the temp root asks the user first. The caller applies the
+/// result to its own working directory — the session for the tab, the loop
+/// for a subagent — so the process working directory never changes and every
+/// tab keeps its own.
 pub(super) fn move_to(arguments: &str) -> Result<String> {
     let args: ReadImageArgs = parse(arguments)?;
     let requested = args.path.trim();
@@ -77,13 +80,20 @@ pub(super) fn move_to(arguments: &str) -> Result<String> {
     if !target.is_dir() {
         bail!("{} is not a directory", requested);
     }
-    let previous = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    env::set_current_dir(&target).with_context(|| format!("moving to {}", target.display()))?;
-    Ok(format!(
-        "Working directory moved from {} to {}.",
-        previous.display(),
-        target.display()
-    ))
+    Ok(format!("Working directory: {}.", target.display()))
+}
+
+/// The absolute target of a `move_to` call, resolved against `workspace`:
+/// the caller updates its own working directory with it when the call ran.
+pub fn move_target(call: &ToolCall, workspace: &Path) -> Option<PathBuf> {
+    let args: ReadImageArgs = parse(&call.function.arguments).ok()?;
+    let requested = args.path.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    Some(scoped_workspace(workspace, || {
+        normalize_target(&resolve(requested))
+    }))
 }
 
 /// Collapse `.` and `..` components of an already-resolved path without

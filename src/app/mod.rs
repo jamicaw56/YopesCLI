@@ -42,7 +42,10 @@ mod turn;
 
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
 pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, matching_commands};
-pub(crate) use delegate::{DelegateUpdate, SUBAGENT_BRIEF, Subagent, SubagentStatus};
+pub(crate) use delegate::{
+    DelegateUpdate, MAX_SUBAGENT_TOOL_ROUNDS, SUBAGENT_BRIEF, SUBAGENT_NAME_BRIEF, Subagent,
+    SubagentStatus,
+};
 pub(crate) use input::Input;
 pub(crate) use pickers::{ListPicker, ModelChoice, ModelRow};
 
@@ -265,7 +268,7 @@ pub struct App {
     active: Option<ActiveRequest>,
     next_request_id: u64,
     pending_tools: VecDeque<ToolCall>,
-    approved_tools: HashSet<String>,
+    pub(crate) approved_tools: HashSet<String>,
     session_path: Option<PathBuf>,
     /// Directory holding every saved session file, when saving.
     sessions_dir: Option<PathBuf>,
@@ -315,6 +318,10 @@ pub struct App {
     /// Completion tokens billed across this session.
     spent_completion_tokens: u64,
     pub(crate) prompt_started: Option<Instant>,
+    /// This tab's own working directory: relative tool paths resolve against
+    /// it. One tab's `/cd` or `move_to` never reaches another conversation,
+    /// and the process working directory never changes.
+    working_dir: PathBuf,
 }
 
 impl App {
@@ -399,7 +406,13 @@ impl App {
             spent_prompt_tokens: 0,
             spent_completion_tokens: 0,
             prompt_started: None,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
+    }
+
+    /// The tab's own working directory: where its relative paths resolve.
+    pub(crate) fn working_dir(&self) -> &std::path::Path {
+        &self.working_dir
     }
 
     pub fn connect_state(&self) -> Option<&ConnectState> {

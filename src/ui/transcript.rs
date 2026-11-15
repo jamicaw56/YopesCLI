@@ -71,7 +71,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     app.warm_image_cache(inner.width.clamp(4, 48));
 
     let mut lines = Vec::new();
-    let mut rows: Vec<(u16, String)> = Vec::new();
+    let mut rows: Vec<(usize, String)> = Vec::new();
     // Copied out: the summary is owned so the session can stay borrowed.
     let compaction = app.compaction_text().map(str::to_owned);
     for (index, message) in app.session.messages.iter().enumerate() {
@@ -159,7 +159,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         if !reasoning.is_empty() {
             let start = lines.len();
             if think_count > 2 && !streaming {
-                rows.push((start as u16, reason_key));
+                rows.push((start, reason_key));
             }
             lines.extend(reasoning);
         }
@@ -280,25 +280,39 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         next_row += wrapped_line_count(&scratch, inner.width);
     }
     let total_lines = next_row;
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     let maximum = total_lines.saturating_sub(usize::from(inner.height));
-    if app.follow_tail {
-        app.scroll = maximum;
-    } else {
+    if !app.follow_tail {
         app.scroll = app.scroll.min(maximum);
         if app.scroll == maximum {
             app.follow_tail = true;
         }
     }
+    // ratatui's scroll offset is a u16, so a long session could not follow
+    // its own tail: the offset wrapped and the live output sat hidden above a
+    // stale view that looked frozen. Render only the visible window of lines
+    // and scroll inside it, with the tail anchored at the real bottom (see
+    // `transcript_window`), so the newest output is always on screen.
+    let (first, hidden, last) = transcript_window(
+        &starts,
+        total_lines,
+        app.scroll,
+        app.follow_tail,
+        usize::from(inner.height),
+    );
+    app.scroll = starts[first] + hidden;
+    lines.truncate(last);
+    lines.drain(..first);
     frame.render_widget(
-        paragraph.scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .scroll((hidden.min(u16::MAX as usize) as u16, 0)),
         inner,
     );
 
     // Map tool frames to screen rows so a click can hit one.
-    let scroll = app.scroll.min(u16::MAX as usize);
+    let scroll = app.scroll;
     for (line_index, call_id) in rows {
-        let Some(&screen_row) = starts.get(usize::from(line_index)) else {
+        let Some(&screen_row) = starts.get(line_index) else {
             continue;
         };
         if screen_row < scroll {
@@ -310,5 +324,96 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         app.output_rows
             .push((inner.y.saturating_add(offset), call_id));
+    }
+}
+
+/// The window of transcript lines to render, as `(first, hidden, last)`:
+/// render `lines[first..last]` with its first `hidden` rows scrolled off.
+/// Returns the effective top row too: `starts[first] + hidden`.
+///
+/// ratatui's scroll offset is a u16, so a long session could not follow its
+/// own tail: the offset wrapped and the newest output sat hidden above a
+/// stale view. Rendering only the visible lines removes that ceiling.
+///
+/// Following the tail anchors at the real bottom: the window always ends at
+/// the last line, so the live output stays on screen even when the wrapped
+/// row estimate drifts from what ratatui actually renders. Scrolled-up
+/// positions keep mapping through the estimate, as before.
+fn transcript_window(
+    starts: &[usize],
+    total_lines: usize,
+    scroll: usize,
+    follow_tail: bool,
+    height: usize,
+) -> (usize, usize, usize) {
+    if starts.is_empty() {
+        return (0, 0, 0);
+    }
+    let height = height.max(1);
+    if follow_tail {
+        // Walk back from the last line until a viewport's worth of rows is
+        // covered; the overflow hides above the first included line.
+        let mut accumulated = 0usize;
+        let mut first = starts.len();
+        while first > 0 && accumulated < height {
+            first -= 1;
+            accumulated += starts.get(first + 1).copied().unwrap_or(total_lines) - starts[first];
+        }
+        (first, accumulated.saturating_sub(height), starts.len())
+    } else {
+        let first = starts
+            .partition_point(|&row| row <= scroll)
+            .saturating_sub(1);
+        let last = starts.partition_point(|&row| row < scroll + height);
+        (first, scroll - starts[first], last)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transcript_window;
+
+    /// A fake `starts` table: every logical line wraps to two rows.
+    fn two_row_starts(count: usize) -> (Vec<usize>, usize) {
+        let starts = (0..count).map(|index| index * 2).collect();
+        (starts, count * 2)
+    }
+
+    #[test]
+    fn the_tail_window_always_ends_at_the_last_line() {
+        let (starts, total) = two_row_starts(40);
+        let (first, hidden, last) = transcript_window(&starts, total, 0, true, 10);
+        assert_eq!(last, 40, "the last line stays in the window");
+        assert_eq!(starts[first] + hidden + 10, total, "the bottom anchors");
+        assert!(hidden < 2, "only the first line is clipped: {hidden}");
+
+        // A scrolled-up position that lands past the tail still anchors at
+        // the bottom when following.
+        let (first, hidden, last) = transcript_window(&starts, total, 999, true, 10);
+        assert_eq!(last, 40);
+        assert_eq!(starts[first] + hidden + 10, total);
+    }
+
+    #[test]
+    fn a_scrolled_up_window_covers_the_viewport() {
+        let (starts, total) = two_row_starts(40);
+        let (first, hidden, last) = transcript_window(&starts, total, 13, false, 10);
+        assert_eq!(starts[first] + hidden, 13, "the scroll maps exactly");
+        assert!(starts[last].saturating_sub(starts[first]) >= 10, "covers");
+    }
+
+    #[test]
+    fn a_short_transcript_shows_everything_from_the_top() {
+        let (starts, total) = two_row_starts(3);
+        let (first, hidden, last) = transcript_window(&starts, total, 0, true, 30);
+        assert_eq!((first, hidden, last), (0, 0, 3));
+        let (first, hidden, last) = transcript_window(&starts, total, 0, false, 30);
+        assert_eq!((first, hidden, last), (0, 0, 3));
+    }
+
+    #[test]
+    fn an_empty_transcript_window_is_a_no_op() {
+        assert_eq!(transcript_window(&[], 0, 0, true, 10), (0, 0, 0));
+        assert_eq!(transcript_window(&[], 0, 5, false, 10), (0, 0, 0));
     }
 }

@@ -29,7 +29,7 @@ use clipboard::read_clipboard;
 use terminal::{TerminalGuard, ctrl_c_interrupt};
 
 use crate::{
-    app::{Action, App, ToolEvent},
+    app::{Action, App, Mode, ToolEvent},
     backend::{Backend, StreamEvent},
     catalog::FetchResult,
     config::{Cli, Command, Config, load_session},
@@ -410,6 +410,9 @@ fn dispatch(
         } => {
             let backend = app.backend.clone();
             let sender = channels.events.clone();
+            // The request runs in the tab that asked: its prompt shows that
+            // tab's own working directory.
+            let workspace = app.working_dir().to_path_buf();
             let task = tokio::spawn(async move {
                 // A panic in the request task must not leave the UI streaming a
                 // response that will never arrive.
@@ -418,6 +421,7 @@ fn dispatch(
                     messages,
                     tools_enabled,
                     mode_note,
+                    workspace,
                     sender.clone(),
                 ));
                 if futures_util::FutureExt::catch_unwind(stream).await.is_err() {
@@ -453,11 +457,14 @@ fn dispatch(
         Action::RunUserCommand { command } => {
             let sender = channels.user_commands.clone();
             let session_id = app.session.id;
+            let workspace = app.working_dir().to_path_buf();
             tokio::spawn(async move {
                 // A long build must not hold the event loop: the command runs
                 // on the blocking pool and the result lands in its session.
-                let joined =
-                    tokio::task::spawn_blocking(move || tools::run_user_command(&command)).await;
+                let joined = tokio::task::spawn_blocking(move || {
+                    tools::run_user_command(&command, &workspace)
+                })
+                .await;
                 let result = match joined {
                     Ok(Ok(output)) => Ok(output),
                     Ok(Err(error)) => Err(format!("{error:#}")),
@@ -521,12 +528,13 @@ fn dispatch(
             let backend = app.backend.clone();
             let sender = channels.titles.clone();
             let session_id = app.session.id;
+            let workspace = app.working_dir().to_path_buf();
             tokio::spawn(async move {
                 let brief = "You name coding sessions. Answer with only a short title, \
                              at most five words, capitalized, no quotes, no final \
                              punctuation. You have no tools.";
                 // Errors stay silent: the session simply keeps a plain title.
-                if let Ok(raw) = backend.complete_once(brief, &task).await {
+                if let Ok(raw) = backend.complete_once(brief, &task, workspace).await {
                     let _ = sender.send((session_id, raw));
                 }
             });
@@ -541,22 +549,28 @@ fn cancel_task(active_tasks: &mut HashMap<u64, JoinHandle<()>>, request_id: u64)
 }
 
 /// Spawn every tool call of one action. A delegate becomes a subagent run on
-/// the same provider: the response streams live through the delegate channel
-/// and the final answer lands as the tool result. Anything else runs on the
+/// the same provider: it works in its own conversation with the same tool
+/// surface as the main session, streams live through the delegate channel,
+/// and its final answer lands as the tool result. Anything else runs on the
 /// blocking pool as before.
 fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
     let backend = app.backend.clone();
     let delegates = channels.delegates.clone();
     let tools = channels.tools.clone();
     let web_key = app.tavily_key().map(str::to_owned);
+    let tools_mode = app.tools_mode;
+    let mode = app.mode;
+    let approved_tools = app.approved_tools.clone();
+    let workspace = app.working_dir().to_path_buf();
     for call in calls {
         if call.function.name != "delegate" {
             let sender = tools.clone();
             let web_key = web_key.clone();
+            let workspace = workspace.clone();
             tokio::spawn(async move {
                 let task_call = call.clone();
                 let joined = tokio::task::spawn_blocking(move || {
-                    tools::execute(&task_call, web_key.as_deref())
+                    tools::execute(&task_call, web_key.as_deref(), &workspace)
                 })
                 .await;
                 let result = match joined {
@@ -568,7 +582,8 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             });
             continue;
         }
-        // The subagent: one request, no tools, the task as the user message.
+        // The subagent: its own conversation on the same provider, with the
+        // same tools the main session has, working in the same workspace.
         let task = match tools::delegate_task_checked(&call) {
             Ok(task) => task,
             Err(message) => {
@@ -581,74 +596,204 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             }
         };
         let run = app.begin_subagent(task.clone());
+        // The model names the task: the sidebar and the /agents rows show
+        // that name instead of the raw task text. A failed naming request
+        // stays silent and the row keeps the task excerpt until then.
+        {
+            let backend = backend.clone();
+            let delegates = delegates.clone();
+            let task = task.clone();
+            let workspace = workspace.clone();
+            tokio::spawn(async move {
+                if let Ok(raw) = backend
+                    .complete_once(crate::app::SUBAGENT_NAME_BRIEF, &task, workspace)
+                    .await
+                {
+                    let _ = delegates.send(crate::app::DelegateUpdate::Named { run, name: raw });
+                }
+            });
+        }
         let sender = tools.clone();
         let delegate_sender = delegates.clone();
         let backend = backend.clone();
+        let web_key = web_key.clone();
+        let approved = approved_tools.clone();
+        let root = workspace.clone();
         tokio::spawn(async move {
-            let (events, mut receiver) = mpsc::unbounded_channel::<StreamEvent>();
-            let streamer = {
-                let events = events.clone();
-                let backend = backend.clone();
-                tokio::spawn(async move {
-                    backend
-                        .stream(
-                            u64::MAX,
-                            vec![Message::new(Role::User, task)],
-                            false,
-                            Some(crate::app::SUBAGENT_BRIEF),
-                            events,
-                        )
-                        .await;
-                })
-            };
+            let tools_enabled = mode != Mode::Chat && tools_mode.advertised();
+            let mut messages = vec![Message::new(Role::User, task)];
             let mut answer = String::new();
             let mut failed = false;
             let mut failure = String::new();
-            while let Some(event) = receiver.recv().await {
-                match event {
-                    StreamEvent::Delta { text, .. } => {
-                        answer.push_str(&text);
-                        let _ =
-                            delegate_sender.send(crate::app::DelegateUpdate::Delta { run, text });
-                    }
-                    StreamEvent::Reasoning { text, .. } => {
-                        let _ = delegate_sender
-                            .send(crate::app::DelegateUpdate::Reasoning { run, text });
-                    }
-                    StreamEvent::Usage {
-                        prompt_tokens,
-                        completion_tokens,
-                        ..
-                    } => {
-                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Usage {
-                            run,
+            let mut workspace = root;
+            let mut rounds = 0usize;
+            loop {
+                let (events, mut receiver) = mpsc::unbounded_channel::<StreamEvent>();
+                let streamer = {
+                    let events = events.clone();
+                    let backend = backend.clone();
+                    let messages = messages.clone();
+                    let workspace = workspace.clone();
+                    tokio::spawn(async move {
+                        backend
+                            .stream(
+                                u64::MAX,
+                                messages,
+                                tools_enabled,
+                                Some(crate::app::SUBAGENT_BRIEF),
+                                workspace,
+                                events,
+                            )
+                            .await;
+                    })
+                };
+                let mut round_text = String::new();
+                let mut requested: Vec<ToolCall> = Vec::new();
+                while let Some(event) = receiver.recv().await {
+                    match event {
+                        StreamEvent::Delta { text, .. } => {
+                            answer.push_str(&text);
+                            round_text.push_str(&text);
+                            let _ = delegate_sender
+                                .send(crate::app::DelegateUpdate::Delta { run, text });
+                        }
+                        StreamEvent::Reasoning { text, .. } => {
+                            let _ = delegate_sender
+                                .send(crate::app::DelegateUpdate::Reasoning { run, text });
+                        }
+                        StreamEvent::Usage {
                             prompt_tokens,
                             completion_tokens,
-                        });
+                            ..
+                        } => {
+                            let _ = delegate_sender.send(crate::app::DelegateUpdate::Usage {
+                                run,
+                                prompt_tokens,
+                                completion_tokens,
+                            });
+                        }
+                        StreamEvent::ToolCalls { calls, .. } => requested = calls,
+                        StreamEvent::Retrying {
+                            attempt,
+                            delay_secs,
+                            reason,
+                            ..
+                        } => {
+                            let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                                run,
+                                text: format!(
+                                    "attempt {attempt} failed: {reason} — retrying in {delay_secs}s"
+                                ),
+                            });
+                        }
+                        StreamEvent::Error { message, .. } => {
+                            failed = true;
+                            failure = message;
+                            break;
+                        }
+                        StreamEvent::Done { .. } => break,
+                        _ => {}
                     }
-                    StreamEvent::Retrying {
-                        attempt,
-                        delay_secs,
-                        reason,
-                        ..
-                    } => {
-                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
-                            run,
-                            text: format!(
-                                "attempt {attempt} failed: {reason} — retrying in {delay_secs}s"
-                            ),
-                        });
-                    }
-                    StreamEvent::Error { message, .. } => {
-                        failed = true;
-                        failure = message;
-                        break;
-                    }
-                    StreamEvent::Done { .. } => break,
-                    _ => {}
+                }
+                let _ = streamer.await;
+                if failed || requested.is_empty() {
+                    break;
+                }
+                rounds += 1;
+                if rounds > crate::app::MAX_SUBAGENT_TOOL_ROUNDS {
+                    // A runaway loop must not burn tokens in the background
+                    // forever: stop and take what streamed so far.
+                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                        run,
+                        text: format!(
+                            "stopped after {} tool rounds — answering with what it has",
+                            crate::app::MAX_SUBAGENT_TOOL_ROUNDS
+                        ),
+                    });
+                    break;
+                }
+                // The assistant turn that asked for the calls, then one tool
+                // result per call, keeps the next request valid for every
+                // provider.
+                let mut asked = Message::new(Role::Assistant, std::mem::take(&mut round_text));
+                asked.tool_calls = Some(requested.clone());
+                messages.push(asked);
+                for requested_call in requested {
+                    // The same policy the main session applies, scoped to the
+                    // tab's own workspace for the approval rules.
+                    let needs = tools::scoped_workspace(&workspace, || {
+                        tools_mode.needs_approval(&requested_call, &approved)
+                    });
+                    let blocked = if mode.denied(&requested_call.function.name) {
+                        Some(format!(
+                            "This tool call was blocked: {} mode only proposes work.",
+                            mode.label()
+                        ))
+                    } else if requested_call.function.name == "delegate" {
+                        // A subagent cannot spawn further subagents.
+                        Some(
+                            "A subagent cannot delegate; do the work yourself with the other \
+                             tools."
+                                .to_owned(),
+                        )
+                    } else if needs {
+                        Some(
+                            "This tool needs the user's approval and a subagent cannot ask for \
+                             it. Report that it must run in the main session instead."
+                                .to_owned(),
+                        )
+                    } else {
+                        None
+                    };
+                    let result = match blocked {
+                        Some(message) => {
+                            let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                                run,
+                                text: format!("⚠ {} — {}", requested_call.function.name, message),
+                            });
+                            Err(message)
+                        }
+                        None => {
+                            let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                                run,
+                                text: format!(
+                                    "→ {} {}",
+                                    requested_call.function.name,
+                                    tools::preview(&requested_call)
+                                ),
+                            });
+                            let task_call = requested_call.clone();
+                            let web_key = web_key.clone();
+                            let root = workspace.clone();
+                            let joined = tokio::task::spawn_blocking(move || {
+                                tools::execute(&task_call, web_key.as_deref(), &root)
+                            })
+                            .await;
+                            let result = match joined {
+                                Ok(Ok(output)) => Ok(output),
+                                Ok(Err(error)) => Err(format!("{error:#}")),
+                                Err(join) => Err(format!("tool task failed: {join}")),
+                            };
+                            // A successful move_to re-roots this subagent's
+                            // own work; the tab and other subagents keep
+                            // theirs.
+                            if result.is_ok() && requested_call.function.name == "move_to" {
+                                if let Some(target) =
+                                    tools::move_target(&requested_call, &workspace)
+                                {
+                                    workspace = target;
+                                }
+                            }
+                            result
+                        }
+                    };
+                    let content = match &result {
+                        Ok(output) => output.clone(),
+                        Err(error) => format!("Error: {error}"),
+                    };
+                    messages.push(Message::tool_result(requested_call.id.clone(), content));
                 }
             }
-            let _ = streamer.await;
             let _ = delegate_sender.send(crate::app::DelegateUpdate::Finished { run, failed });
             let result = if failed {
                 Err(if failure.is_empty() {

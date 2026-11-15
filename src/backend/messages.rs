@@ -1,6 +1,8 @@
 //! Request-body building: how conversation history, images, system prompts
 //! and skills are shaped into the messages array a provider expects.
 
+use std::path::Path;
+
 use anyhow::Result;
 
 use crate::session::{Message, Role};
@@ -12,6 +14,7 @@ pub(super) fn request_messages(
     image_style: ImageStyle,
     custom_prompt: Option<&str>,
     mode_note: Option<&'static str>,
+    workspace: &Path,
 ) -> Result<Vec<serde_json::Value>> {
     let mut request = Vec::with_capacity(messages.len() + 1);
     let valid_tool_call_ids: std::collections::HashSet<&str> = messages
@@ -23,7 +26,7 @@ pub(super) fn request_messages(
     // turn's last tool result: every tool_call id still gets its own tool
     // message first, and the image sits in the turn it was read in.
     let mut tool_images: Vec<&crate::session::ImageAttachment> = Vec::new();
-    let mut system = tools::system_prompt(tooling);
+    let mut system = tools::system_prompt(tooling, workspace);
     // The user's prompt may duplicate what a built-in line already says: send
     // it anyway, since a provider may also enforce its own system prompt.
     if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
@@ -37,7 +40,7 @@ pub(super) fn request_messages(
     // Skills auto-load through read_file, so only tool-capable sessions get
     // the listing; slash invocation injects the content by itself.
     if tooling {
-        if let Some(listing) = skills::section(&std::env::current_dir().unwrap_or_default()) {
+        if let Some(listing) = skills::section(workspace) {
             system.push_str("\n\n");
             system.push_str(&listing);
         }
@@ -225,8 +228,9 @@ pub(super) fn anthropic_request_payload(
     tooling: bool,
     custom_prompt: Option<&str>,
     mode_note: Option<&'static str>,
+    workspace: &Path,
 ) -> Result<(Option<String>, Vec<serde_json::Value>)> {
-    let mut system = tools::system_prompt(tooling);
+    let mut system = tools::system_prompt(tooling, workspace);
     if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
         system.push_str("\n\n");
         system.push_str(custom.trim());
@@ -236,7 +240,7 @@ pub(super) fn anthropic_request_payload(
         system.push_str(note);
     }
     if tooling {
-        if let Some(listing) = skills::section(&std::env::current_dir().unwrap_or_default()) {
+        if let Some(listing) = skills::section(workspace) {
             system.push_str("\n\n");
             system.push_str(&listing);
         }
@@ -425,8 +429,9 @@ pub(super) fn gemini_request_payload(
     tooling: bool,
     custom_prompt: Option<&str>,
     mode_note: Option<&'static str>,
+    workspace: &Path,
 ) -> Result<(Option<serde_json::Value>, Vec<serde_json::Value>)> {
-    let mut system = tools::system_prompt(tooling);
+    let mut system = tools::system_prompt(tooling, workspace);
     if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
         system.push_str("\n\n");
         system.push_str(custom.trim());
@@ -436,7 +441,7 @@ pub(super) fn gemini_request_payload(
         system.push_str(note);
     }
     if tooling {
-        if let Some(listing) = skills::section(&std::env::current_dir().unwrap_or_default()) {
+        if let Some(listing) = skills::section(workspace) {
             system.push_str("\n\n");
             system.push_str(&listing);
         }
@@ -616,6 +621,7 @@ mod tests {
     use super::request_messages;
     use crate::backend::ImageStyle;
     use crate::session::{Message, Role, ToolCall};
+    use std::path::Path;
 
     #[test]
     fn request_messages_keep_tool_history_only_when_tooling_is_enabled() {
@@ -631,12 +637,28 @@ mod tests {
             Message::tool_result("call_1", "contents"),
         ];
 
-        let tooling = request_messages(&messages, true, ImageStyle::None, None, None).unwrap();
+        let tooling = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert_eq!(tooling[0]["role"], "system");
         assert_eq!(tooling[2]["tool_calls"][0]["function"]["name"], "read_file");
         assert_eq!(tooling[3]["tool_call_id"], "call_1");
 
-        let plain = request_messages(&messages, false, ImageStyle::None, None, None).unwrap();
+        let plain = request_messages(
+            &messages,
+            false,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(
             plain
                 .iter()
@@ -652,13 +674,22 @@ mod tests {
     #[test]
     fn the_mode_instruction_lands_in_the_system_prompt() {
         let messages = vec![Message::new(Role::User, "hi")];
-        let plain = request_messages(&messages, true, ImageStyle::None, None, None).unwrap();
+        let plain = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         let plan = request_messages(
             &messages,
             true,
             ImageStyle::None,
             None,
             Some("PLAN MODE: propose only"),
+            Path::new("."),
         )
         .unwrap();
         assert!(
@@ -682,6 +713,7 @@ mod tests {
             ImageStyle::None,
             Some(" Always answer in rhyme. "),
             Some("PLAN MODE: propose only"),
+            Path::new("."),
         )
         .unwrap();
         let system = request[0]["content"].as_str().unwrap();
@@ -691,8 +723,24 @@ mod tests {
         assert!(system.find("Always answer").unwrap() < system.find("PLAN MODE").unwrap());
         // A blank prompt adds nothing.
         assert_eq!(
-            request_messages(&messages, true, ImageStyle::None, Some("  "), None).unwrap(),
-            request_messages(&messages, true, ImageStyle::None, None, None).unwrap()
+            request_messages(
+                &messages,
+                true,
+                ImageStyle::None,
+                Some("  "),
+                None,
+                Path::new(".")
+            )
+            .unwrap(),
+            request_messages(
+                &messages,
+                true,
+                ImageStyle::None,
+                None,
+                None,
+                Path::new(".")
+            )
+            .unwrap()
         );
     }
 
@@ -707,7 +755,15 @@ mod tests {
         });
         let messages = vec![message];
 
-        let parts = request_messages(&messages, true, ImageStyle::Parts, None, None).unwrap();
+        let parts = request_messages(
+            &messages,
+            true,
+            ImageStyle::Parts,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         let sent = parts
             .last()
             .unwrap()
@@ -723,12 +779,28 @@ mod tests {
         assert!(parts.last().unwrap().get("images").is_none());
 
         // Ollama wants a flat base64 array on the message itself.
-        let ollama = request_messages(&messages, true, ImageStyle::Ollama, None, None).unwrap();
+        let ollama = request_messages(
+            &messages,
+            true,
+            ImageStyle::Ollama,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         let last = ollama.last().unwrap();
         assert_eq!(last["content"], "what changed?");
         assert_eq!(last["images"][0], "aWNvbg==");
         // Plain requests keep the raw attachment field out.
-        let plain = request_messages(&messages, false, ImageStyle::None, None, None).unwrap();
+        let plain = request_messages(
+            &messages,
+            false,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert!(plain.last().unwrap().get("images").is_none());
         assert_eq!(plain.last().unwrap()["role"], "user");
     }
@@ -756,7 +828,15 @@ mod tests {
             Message::new(Role::User, "thanks, now list the files"),
         ];
 
-        let request = request_messages(&messages, true, ImageStyle::Parts, None, None).unwrap();
+        let request = request_messages(
+            &messages,
+            true,
+            ImageStyle::Parts,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         // system, user, assistant, tool, user(images), assistant, user
         assert_eq!(request.len(), 7);
         assert_eq!(request[3]["role"], "tool");
@@ -801,7 +881,15 @@ mod tests {
             Message::tool_result("call_2", "text of b"),
         ];
 
-        let request = request_messages(&messages, true, ImageStyle::Parts, None, None).unwrap();
+        let request = request_messages(
+            &messages,
+            true,
+            ImageStyle::Parts,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         // system, user, assistant, tool, tool, user(images): the images
         // message waits for the whole run so tool-call pairing stays valid.
         assert_eq!(request.len(), 6);
@@ -834,7 +922,8 @@ mod tests {
             Message::tool_result("call_42", "fn main() {}"),
         ];
 
-        let (system, payload) = anthropic_request_payload(&messages, true, None, None).unwrap();
+        let (system, payload) =
+            anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert!(system.is_some());
         assert_eq!(payload.len(), 3);
         assert_eq!(payload[0]["role"], "user");
@@ -862,7 +951,8 @@ mod tests {
             Message::tool_result("call_99", "file.txt"),
         ];
 
-        let (instruction, contents) = gemini_request_payload(&messages, true, None, None).unwrap();
+        let (instruction, contents) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert!(instruction.is_some());
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[0]["role"], "user");
@@ -884,17 +974,27 @@ mod tests {
             Message::tool_result("user-cmd-1", "hi"),
         ];
 
-        let openai = request_messages(&messages, true, ImageStyle::None, None, None).unwrap();
+        let openai = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert_eq!(openai.len(), 3);
         assert_eq!(openai[1]["role"], "user");
         assert_eq!(openai[2]["role"], "user");
         assert!(openai[2]["content"].as_str().unwrap().contains("hi"));
 
-        let (_, anthropic) = anthropic_request_payload(&messages, true, None, None).unwrap();
+        let (_, anthropic) =
+            anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert_eq!(anthropic.len(), 1);
         assert_eq!(anthropic[0]["role"], "user");
 
-        let (_, gemini) = gemini_request_payload(&messages, true, None, None).unwrap();
+        let (_, gemini) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
         assert_eq!(gemini.len(), 1);
         assert_eq!(gemini[0]["role"], "user");
     }

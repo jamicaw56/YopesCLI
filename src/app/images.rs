@@ -73,7 +73,8 @@ pub(super) fn tool_image_attachment(call: &ToolCall) -> Option<ImageAttachment> 
     let resolved = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir().ok()?.join(path)
+        // The tab's own working directory, scoped by the caller.
+        crate::tools::workspace().join(path)
     };
     let mut image = image::open(&resolved).ok()?;
     if image.width() > MAX_IMAGE_DIMENSION || image.height() > MAX_IMAGE_DIMENSION {

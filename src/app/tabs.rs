@@ -59,6 +59,7 @@ pub(crate) struct TabState {
     spent_completion_tokens: u64,
     pub(crate) prompt_started: Option<Instant>,
     markdown_cache: HashMap<usize, (u16, usize, Vec<Line<'static>>)>,
+    pub(crate) working_dir: PathBuf,
 }
 
 impl Default for TabState {
@@ -98,6 +99,7 @@ impl Default for TabState {
             spent_completion_tokens: 0,
             prompt_started: None,
             markdown_cache: HashMap::new(),
+            working_dir: PathBuf::from("."),
         }
     }
 }
@@ -140,6 +142,7 @@ impl TabState {
             spent_completion_tokens: std::mem::take(&mut app.spent_completion_tokens),
             prompt_started: app.prompt_started.take(),
             markdown_cache: std::mem::take(&mut app.markdown_cache),
+            working_dir: std::mem::take(&mut app.working_dir),
         }
     }
 
@@ -179,6 +182,7 @@ impl TabState {
         app.spent_completion_tokens = self.spent_completion_tokens;
         app.prompt_started = self.prompt_started;
         app.markdown_cache = self.markdown_cache;
+        app.working_dir = self.working_dir;
     }
 
     fn is_streaming(&self) -> bool {
@@ -250,9 +254,13 @@ impl App {
         }
         let auto_compact = self.auto_compact;
         let backend = self.backend.clone();
+        // The new tab works in this tab's directory: it inherits the root,
+        // then keeps its own copy, like the provider and model.
+        let working_dir = self.working_dir.clone();
         self.stash();
         let mut state = TabState {
             backend,
+            working_dir,
             ..TabState::default()
         };
         // The new tab starts from this tab's provider and model, then keeps

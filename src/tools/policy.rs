@@ -2,13 +2,15 @@
 //! that tells the model how to use the tools.
 
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
 use serde_json::Value;
 
 use crate::{session::ToolCall, temp};
+
+use super::workspace;
 
 /// Whether a tool call needs the user's approval.
 ///
@@ -61,7 +63,8 @@ fn is_external_modification(call: &ToolCall) -> bool {
 }
 
 fn is_within_allowed_roots(path: &Path) -> bool {
-    let ws = normalize_path(&env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // The scoped workspace: the tab's own directory, never the process one.
+    let ws = normalize_path(&workspace());
     let temp = normalize_path(&temp::platform_temp_root());
     let path = if path.is_absolute() {
         normalize_path(path)
@@ -106,9 +109,9 @@ pub fn command_risk(arguments: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn system_prompt(tools_enabled: bool) -> String {
-    let cwd = env::current_dir().map_or_else(|_| ".".to_owned(), |path| path.display().to_string());
-    let os = env::consts::OS;
+pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
+    let cwd = workspace.display().to_string();
+    let os = std::env::consts::OS;
     let temp = temp::platform_temp_root().display().to_string();
     let base = if tools_enabled {
         format!(
@@ -143,9 +146,10 @@ pub fn system_prompt(tools_enabled: bool) -> String {
              run_command or bash_background. Never merely explain the command in text when \
              execution is requested. \
              For an independent subtask use delegate: hand the subagent one self-contained \
-             task with all the context it needs — it has no tools and returns a final answer. \
-             Several delegate calls in one turn run in parallel and stream in the sidebar; the \
-             user reads every response with /agents. \
+             task with the context it needs — it runs with the same tools you have in the \
+             same workspace and returns a final answer. Several delegate calls in one turn \
+             run in parallel and stream in the sidebar; the user reads every response with \
+             /agents. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \
@@ -164,8 +168,7 @@ pub fn system_prompt(tools_enabled: bool) -> String {
              Keep responses short and concrete."
         )
     };
-    let project_instructions =
-        load_agents_instructions(&env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let project_instructions = load_agents_instructions(workspace);
     if project_instructions.is_empty() {
         base
     } else {
