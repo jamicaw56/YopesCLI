@@ -43,6 +43,30 @@ pub fn save_cached(config_path: &Path, catalog: &Catalog) -> Result<()> {
     fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
 }
 
+/// Re-apply the context windows saved for connected providers onto a catalog
+/// fetched fresh from models.dev, so a refresh keeps the presets a user set
+/// on models the API reports without limits (or with different ones).
+pub fn merge_saved_context_windows(config_path: &Path, catalog: &mut Catalog) {
+    for provider in crate::config::load_connected_providers(config_path) {
+        let Some(pid) = &provider.provider_id else {
+            continue;
+        };
+        let Some(catalog_provider) = catalog.providers.get_mut(pid) else {
+            continue;
+        };
+        for model in crate::config::load_endpoint_models(config_path, &provider.base_url) {
+            let Some(window) = model.context_window else {
+                continue;
+            };
+            if let Some(m) = catalog_provider.models.get_mut(&model.id) {
+                m.limit = Some(Limit {
+                    context: Some(window),
+                });
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Catalog {
     #[serde(flatten)]
@@ -421,5 +445,59 @@ mod tests {
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["a-model", "z-model"]);
+    }
+
+    #[test]
+    fn a_fresh_fetch_keeps_saved_context_presets() {
+        use crate::config::{
+            AuthKind, Connection, ProviderKind, SavedModel, save_connection,
+            update_model_context_window,
+        };
+        use std::{fs, process};
+
+        let path = std::env::temp_dir().join(format!("yopes-preset-test-{}.json", process::id()));
+        let _ = fs::remove_file(&path);
+        let connection = Connection {
+            provider: ProviderKind::OpenAi,
+            provider_name: "OpenRouter".to_owned(),
+            model: "a-model".to_owned(),
+            base_url: "https://openrouter.ai/api/v1".to_owned(),
+            api_key: Some("sk-test".to_owned()),
+            api_key_env: None,
+            auth: AuthKind::Bearer,
+            models: vec![SavedModel {
+                id: "a-model".to_owned(),
+                name: "Alpha".to_owned(),
+                context_window: None,
+                ..SavedModel::default()
+            }],
+            models_url: None,
+            custom_provider_id: None,
+            provider_id: Some("openrouter".to_owned()),
+            reuse_secret: false,
+        };
+        save_connection(&path, &connection, None).unwrap();
+        update_model_context_window(
+            &path,
+            "https://openrouter.ai/api/v1",
+            "a-model",
+            Some(128_000),
+        )
+        .unwrap();
+
+        // The user's preset wins over the fetched limit; models without one
+        // keep whatever the API reported.
+        let mut catalog: Catalog = serde_json::from_str(SAMPLE).unwrap();
+        super::merge_saved_context_windows(&path, &mut catalog);
+        let provider = &catalog.providers["openrouter"];
+        assert_eq!(
+            provider.models["a-model"].limit.as_ref().unwrap().context,
+            Some(128_000)
+        );
+        assert_eq!(
+            provider.models["z-model"].limit.as_ref().map(|l| l.context),
+            None
+        );
+        let _ = fs::remove_file(&path);
     }
 }

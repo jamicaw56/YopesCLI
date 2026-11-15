@@ -476,8 +476,11 @@ fn dispatch(
                     let _ = sender.send(Ok(cached));
                     return;
                 }
-                let result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
-                if let Ok(catalog) = &result {
+                let mut result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
+                if let Ok(catalog) = &mut result {
+                    // A fresh fetch must not stomp the context presets the
+                    // user applied to models.
+                    catalog::merge_saved_context_windows(&config_path, catalog);
                     let _ = catalog::save_cached(&config_path, catalog);
                 }
                 let _ = sender.send(result);
@@ -487,8 +490,10 @@ fn dispatch(
             let sender = catalog_events.clone();
             let config_path = app.config_path().to_path_buf();
             tokio::spawn(async move {
-                let result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
-                if let Ok(catalog) = &result {
+                let mut result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
+                if let Ok(catalog) = &mut result {
+                    // Same as above: presets survive a refresh.
+                    catalog::merge_saved_context_windows(&config_path, catalog);
                     let _ = catalog::save_cached(&config_path, catalog);
                 }
                 let _ = sender.send(result);
