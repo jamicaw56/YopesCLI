@@ -209,6 +209,41 @@ impl App {
             }
             return Action::None;
         }
+        if self.revert_picker.is_some() {
+            let count = self.revert_picker_count();
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(picker) = self.revert_picker.as_mut() {
+                        picker.selected = picker.selected.saturating_sub(1);
+                    }
+                    return Action::None;
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(picker) = self.revert_picker.as_mut() {
+                        picker.selected = (picker.selected + 1).min(count.saturating_sub(1));
+                    }
+                    return Action::None;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let selected = self
+                        .revert_picker
+                        .as_ref()
+                        .map(|p| p.selected)
+                        .unwrap_or_default();
+                    let matches = self.revert_matches();
+                    let picked = matches
+                        .get(selected.min(count.saturating_sub(1)))
+                        .map(|(index, _)| *index);
+                    self.revert_picker = None;
+                    if let Some(index) = picked {
+                        self.perform_revert(index);
+                    }
+                    return Action::None;
+                }
+                _ => {}
+            }
+            return Action::None;
+        }
         if self.palette_open() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -428,6 +463,9 @@ impl App {
         }
         if self.session_picker.is_some() {
             return self.handle_session_picker_key(key);
+        }
+        if self.revert_picker.is_some() {
+            return self.handle_revert_picker_key(key);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {

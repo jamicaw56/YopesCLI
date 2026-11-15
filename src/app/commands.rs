@@ -27,7 +27,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 17] = [
+pub const COMMANDS: [CommandSpec; 18] = [
     CommandSpec {
         name: "/help",
         description: "Show keys and commands",
@@ -92,6 +92,11 @@ pub const COMMANDS: [CommandSpec; 17] = [
         name: "/compact",
         description: "Compact history now; auto on|off",
         argument: Some("on|off|now"),
+    },
+    CommandSpec {
+        name: "/revert",
+        description: "Edit and re-run a previous prompt",
+        argument: None,
     },
     CommandSpec {
         name: "/effort",
@@ -174,6 +179,7 @@ mod tests {
                 "/theme",
                 "/system",
                 "/compact",
+                "/revert",
                 "/effort",
                 "/skills",
                 "/version",
@@ -182,7 +188,7 @@ mod tests {
         );
         assert_eq!(command_names("/c"), vec!["/connect", "/cd", "/compact"]);
         assert_eq!(command_names("/d"), vec!["/disconnect"]);
-        assert_eq!(command_names("/r"), vec!["/run"]);
+        assert_eq!(command_names("/r"), vec!["/run", "/revert"]);
         assert_eq!(command_names("/m"), vec!["/models"]);
         assert_eq!(command_names("/s"), vec!["/sessions", "/system", "/skills"]);
         assert_eq!(command_names("/t"), vec!["/tab", "/tools", "/theme"]);

@@ -270,6 +270,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let picker = app.model_picker.clone();
     let session_picker = app.session_picker.clone();
+    let revert_picker = app.revert_picker.clone();
     // The Progress panel steps aside once every task is done: a finished
     // checklist means finished work, not a panel parked over the composer.
     let tasks = app.session.tasks.iter().any(|task| !task.done);
@@ -278,6 +279,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         || app.approval.is_some()
         || picker.is_some()
         || session_picker.is_some()
+        || revert_picker.is_some()
     {
         Vec::new()
     } else {
@@ -299,7 +301,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    let popup_height = palette_height + picker_height + session_height;
+    let revert_height = if revert_picker.is_some() {
+        (app.revert_picker_count().clamp(1, 12) as u16).saturating_add(2)
+    } else {
+        0
+    };
+    let popup_height = palette_height + picker_height + session_height + revert_height;
     let composer_height = composer_height(app, area.width, area.height);
     let progress_height = if tasks {
         if app.progress_collapsed {
@@ -333,7 +340,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let mut index = 2;
     if popup_height > 0 {
-        if let Some(session_picker) = &session_picker {
+        if let Some(revert_picker) = &revert_picker {
+            draw_revert_picker(frame, app, revert_picker, chunks[index]);
+        } else if let Some(session_picker) = &session_picker {
             draw_session_picker(frame, app, session_picker, chunks[index]);
         } else if let Some(picker) = &picker {
             draw_model_picker(frame, app, picker, chunks[index]);

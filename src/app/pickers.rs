@@ -556,6 +556,142 @@ impl App {
         self.session.title = title.to_owned();
         self.save_session();
     }
+
+    /// `/revert` with no argument: a popup over every prompt sent this
+    /// session. Picking one truncates the session back to it and refills the
+    /// composer for editing.
+    pub(crate) fn open_revert_picker(&mut self) {
+        if !self
+            .session
+            .messages
+            .iter()
+            .any(|message| message.role == Role::User && !message.content.trim().is_empty())
+        {
+            self.info("Nothing to revert — no prompts sent yet.");
+            return;
+        }
+        self.revert_picker = Some(ListPicker::default());
+    }
+
+    /// `/revert` rows, newest first: (message index, first-line excerpt).
+    pub(crate) fn revert_matches(&self) -> Vec<(usize, String)> {
+        let filter = self
+            .revert_picker
+            .as_ref()
+            .map_or("", |picker| picker.filter.as_str());
+        let filter = filter.to_ascii_lowercase();
+        let mut matches: Vec<(usize, String)> = self
+            .session
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.role == Role::User && !message.content.trim().is_empty())
+            .map(|(index, message)| {
+                (
+                    index,
+                    message
+                        .content
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned(),
+                )
+            })
+            .filter(|(_, excerpt)| {
+                filter.is_empty() || excerpt.to_ascii_lowercase().contains(&filter)
+            })
+            .collect();
+        matches.reverse();
+        matches
+    }
+
+    /// Rows shown in the `/revert` popup for its current filter.
+    pub(crate) fn revert_picker_count(&self) -> usize {
+        self.revert_matches().len()
+    }
+
+    pub(crate) fn handle_revert_picker_key(&mut self, key: KeyEvent) -> Action {
+        if key.code == KeyCode::Esc {
+            self.revert_picker = None;
+            return Action::None;
+        }
+        let Some(mut picker) = self.revert_picker.clone() else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Down => {
+                let count = self.revert_matches().len();
+                picker.selected = (picker.selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Backspace => {
+                picker.filter.pop();
+                picker.selected = 0;
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                picker.filter.push(character);
+                picker.selected = 0;
+            }
+            KeyCode::Enter => {
+                let matches = self.revert_matches();
+                let target = matches
+                    .get(picker.selected.min(matches.len().saturating_sub(1)))
+                    .map(|(index, _)| *index);
+                self.revert_picker = None;
+                if let Some(index) = target {
+                    self.perform_revert(index);
+                }
+                return Action::None;
+            }
+            _ => return Action::None,
+        }
+        self.revert_picker = Some(picker);
+        Action::None
+    }
+
+    /// Cut the session back to the prompt at `index`: the prompt and every
+    /// reply after it leave the history, its text (and any pasted images)
+    /// return to the composer, and the next send re-runs from there.
+    pub(crate) fn perform_revert(&mut self, index: usize) {
+        if index >= self.session.messages.len() || self.session.messages[index].role != Role::User {
+            return;
+        }
+        let total = self.session.messages.len();
+        let message = self.session.messages[index].clone();
+        if index == 0 {
+            self.session.summary = None;
+        }
+        self.session.messages.truncate(index);
+        self.reset_session_view();
+        self.input.set(message.content);
+        for image in &message.images {
+            let attachment = format!("paste-{}.png", self.next_image);
+            self.next_image += 1;
+            let placeholder = format!("[Image {}]", self.attachments.len() + 1);
+            self.attachments.push(ImageAttachment {
+                name: attachment.clone(),
+                data: image.data.clone(),
+            });
+            self.image_paths.insert(
+                placeholder.clone(),
+                PastedImage {
+                    path: None,
+                    attachment,
+                },
+            );
+            self.input.insert_str(&placeholder);
+        }
+        self.save_session();
+        self.info(format!(
+            "Editing message {} of {total} — edit and send to re-run from here.",
+            index + 1
+        ));
+    }
 }
 
 /// Filter state of the `/model` popup.
