@@ -66,7 +66,8 @@ pub(super) fn subagent_message(arguments: &str) -> Result<String> {
     if message.is_empty() {
         bail!("message cannot be empty");
     }
-    let Some(run) = runs().get_mut(&args.run) else {
+    let mut runs = runs();
+    let Some(run) = runs.get_mut(&args.run) else {
         bail!(
             "no running subagent with id {}; it finished or was stopped, so delegate again \
              with the correction in the task",
@@ -91,7 +92,8 @@ struct SubagentStopArgs {
 /// being killed mid-work.
 pub(super) fn subagent_stop(arguments: &str) -> Result<String> {
     let args: SubagentStopArgs = parse(arguments)?;
-    let Some(run) = runs().get_mut(&args.run) else {
+    let mut runs = runs();
+    let Some(run) = runs.get_mut(&args.run) else {
         bail!("no running subagent with id {}", args.run);
     };
     run.stop.store(true, Ordering::Relaxed);

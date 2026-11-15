@@ -215,7 +215,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         if !message.content.is_empty() {
             if !streaming {
                 let content_key = content_hash(&message.content);
-                if let Some((cached_width, cached_hash, cached_lines, cached_counts)) =
+                if let Some((cached_width, cached_hash, cached_lines, _cached_counts)) =
                     app.markdown_cache.get(&index)
                 {
                     if *cached_width == inner.width && *cached_hash == content_key {
