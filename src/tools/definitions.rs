@@ -315,6 +315,44 @@ pub fn definitions() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "message_subagent",
+                "description": "Send a correction to one running subagent: the message lands in its conversation as a user message and it continues, answering within its run. Pass the run id from a delegate call's result. Use it to fix course mid-run instead of waiting for a wrong answer.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run": {
+                            "type": "integer",
+                            "description": "The subagent run id, shown in its tool result as [subagent run N]."
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "The correction or extra instruction."
+                        }
+                    },
+                    "required": ["run", "message"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "stop_subagent",
+                "description": "Ask one running subagent to stop: it answers with what it has instead of being killed mid-work. Pass the run id from a delegate call's result.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run": {
+                            "type": "integer",
+                            "description": "The subagent run id, shown in its tool result as [subagent run N]."
+                        }
+                    },
+                    "required": ["run"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "bash_kill",
                 "description": "Stop a background bash job by its id. A finished or unknown job answers so, no need to kill twice.",
                 "parameters": {

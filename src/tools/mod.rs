@@ -33,6 +33,9 @@ pub(crate) use shell::kill_spawned_commands;
 pub(crate) use shell::poll_bash_jobs;
 pub(crate) use shell::BashNotice;
 
+mod subagents;
+pub(crate) use subagents::{register_subagent_run, unregister_subagent_run};
+
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
@@ -148,6 +151,10 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         "web_search" => web::web_search(&call.function.arguments, web_key),
         "web_fetch" => web::web_fetch(&call.function.arguments),
         "todo_write" => todo::todo_write(&call.function.arguments),
+        // Control tools for running subagents: corrections steer a run
+        // mid-flight, stop flags end it cooperatively.
+        "message_subagent" => subagents::subagent_message(&call.function.arguments),
+        "stop_subagent" => subagents::subagent_stop(&call.function.arguments),
         // Handled by the session loop: the subagent needs the backend.
         "delegate" => bail!("delegate cannot run outside the session loop"),
         other => bail!("unknown tool `{other}`"),

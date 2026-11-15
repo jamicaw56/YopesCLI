@@ -153,6 +153,13 @@ async fn run() -> Result<()> {
     let mut redraw_now = true;
     let mut redraw_streamed = false;
     let mut last_draw = Instant::now();
+    // Frame-time trace: YOPES_TRACE=1 prints the draw count, the average and
+    // the worst frame to stderr on exit, so the perf work is measured, not
+    // guessed.
+    let trace = std::env::var("YOPES_TRACE").is_ok_and(|v| v == "1" || v == "true");
+    let mut frames = 0u64;
+    let mut total_draw_ms = 0u64;
+    let mut worst_draw_ms = 0u64;
 
     loop {
         if app.should_quit {
@@ -163,10 +170,17 @@ async fn run() -> Result<()> {
         if redraw_now
             || (redraw_streamed && last_draw.elapsed().as_millis() >= STREAM_REDRAW_MILLIS)
         {
+            let draw_started = trace.then(Instant::now);
             terminal
                 .terminal
                 .draw(|frame| ui::draw(frame, &mut app))
                 .context("drawing terminal UI")?;
+            if let Some(started) = draw_started {
+                let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                frames += 1;
+                total_draw_ms += ms;
+                worst_draw_ms = worst_draw_ms.max(ms);
+            }
             redraw_now = false;
             redraw_streamed = false;
             last_draw = Instant::now();
@@ -174,64 +188,31 @@ async fn run() -> Result<()> {
 
         tokio::select! {
             event = terminal_events.next() => {
-                match event {
-                    Some(Ok(Event::Key(key))) => {
-                        let action = app.handle_key(key);
-                        dispatch(
-                            action,
-                            &mut app,
-                            &channels,
-                            &mut active_tasks,
-                        );
-                        redraw_now = true;
-                    }
-                    Some(Ok(Event::Paste(value))) => {
-                        // An empty paste usually means the clipboard holds an
-                        // image: the terminal's own paste sends nothing for a
-                        // screenshot, so the empty event is the only signal.
-                        if value.trim().is_empty()
-                            && app.approval.is_none()
-                            && !app.connect_open()
-                            && !app.show_help
-                        {
-                            dispatch(
-                                Action::PasteImage,
+                let dirty =
+                    handle_terminal_event(&mut app, event, &channels, &mut active_tasks, &mut ticker)?;
+                redraw_now = dirty;
+                // Coalesce: every event already queued in the terminal is
+                // handled now, so one burst of typing costs one frame instead
+                // of one full frame per keystroke. A zero timeout polls the
+                // stream once without waiting.
+                loop {
+                    match tokio::time::timeout(Duration::ZERO, terminal_events.next()).await {
+                        Ok(Some(next)) => {
+                            if handle_terminal_event(
                                 &mut app,
+                                Some(next),
                                 &channels,
                                 &mut active_tasks,
-                            );
-                        } else {
-                            app.handle_paste(&value);
+                                &mut ticker,
+                            )? {
+                                redraw_now = true;
+                            }
                         }
-                        redraw_now = true;
-                    }
-                    Some(Ok(Event::Mouse(mouse))) => {
-                        // A mouse move changes nothing on screen, so it must
-                        // not cost a full transcript rebuild.
-                        if mouse.kind != MouseEventKind::Moved {
-                            let action = app.handle_mouse(mouse);
-                            dispatch(
-                                action,
-                                &mut app,
-                                &channels,
-                                &mut active_tasks,
-                            );
-                            redraw_now = true;
+                        Ok(None) => {
+                            return Err(anyhow::anyhow!("terminal event stream closed"))
                         }
+                        Err(_) => break,
                     }
-                    Some(Ok(Event::FocusGained)) => {
-                        ticker.reset();
-                        app.set_focused(true);
-                        redraw_now = true;
-                    }
-                    Some(Ok(Event::FocusLost)) => {
-                        // While the terminal is in the background nothing is
-                        // visible, so the ticker stops and no frame is drawn.
-                        app.set_focused(false);
-                    }
-                    Some(Ok(Event::Resize(_, _))) => redraw_now = true,
-                    Some(Err(error)) => return Err(error).context("reading terminal event"),
-                    None => return Err(anyhow::anyhow!("terminal event stream closed")),
                 }
             }
             event = receiver.recv() => {
@@ -421,8 +402,81 @@ async fn run() -> Result<()> {
     // Any foreground command still running dies with the process: no tool
     // leaves an orphan behind.
     tools::kill_spawned_commands();
+    if trace {
+        eprintln!(
+            "yopes: {frames} frames, avg {} ms, worst {worst_draw_ms} ms",
+            if frames > 0 {
+                total_draw_ms / frames
+            } else {
+                0
+            }
+        );
+    }
     drop(terminal);
     app.persist_all()
+}
+
+/// One terminal event through the app: returns whether the frame is dirty.
+/// Extracted so the event loop can coalesce a queue of already-arrived
+/// events into a single frame. Generic over the stream's error type, which
+/// crossterm has changed across versions.
+fn handle_terminal_event<E>(
+    app: &mut App,
+    event: Option<Result<Event, E>>,
+    channels: &Channels,
+    active_tasks: &mut HashMap<u64, JoinHandle<()>>,
+    ticker: &mut tokio::time::Interval,
+) -> Result<bool>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match event {
+        Some(Ok(Event::Key(key))) => {
+            let action = app.handle_key(key);
+            dispatch(action, app, channels, active_tasks);
+            Ok(true)
+        }
+        Some(Ok(Event::Paste(value))) => {
+            // An empty paste usually means the clipboard holds an image: the
+            // terminal's own paste sends nothing for a screenshot, so the
+            // empty event is the only signal.
+            if value.trim().is_empty()
+                && app.approval.is_none()
+                && !app.connect_open()
+                && !app.show_help
+            {
+                dispatch(Action::PasteImage, app, channels, active_tasks);
+            } else {
+                app.handle_paste(&value);
+            }
+            Ok(true)
+        }
+        Some(Ok(Event::Mouse(mouse))) => {
+            // A mouse move changes nothing on screen, so it must not cost a
+            // full transcript rebuild.
+            if mouse.kind != MouseEventKind::Moved {
+                let action = app.handle_mouse(mouse);
+                dispatch(action, app, channels, active_tasks);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        Some(Ok(Event::FocusGained)) => {
+            ticker.reset();
+            app.set_focused(true);
+            Ok(true)
+        }
+        Some(Ok(Event::FocusLost)) => {
+            // While the terminal is in the background nothing is visible, so
+            // the ticker stops and no frame is drawn.
+            app.set_focused(false);
+            Ok(false)
+        }
+        Some(Ok(Event::Resize(_, _))) => Ok(true),
+        Some(Err(error)) => Err(error).context("reading terminal event"),
+        None => Err(anyhow::anyhow!("terminal event stream closed")),
+    }
 }
 
 fn dispatch(
@@ -430,8 +484,7 @@ fn dispatch(
     app: &mut App,
     channels: &Channels,
     active_tasks: &mut HashMap<u64, JoinHandle<()>>,
-) {
-    match action {
+) {    match action {
         Action::None | Action::Quit => {}
         Action::Start {
             request_id,
@@ -590,6 +643,14 @@ fn cancel_task(active_tasks: &mut HashMap<u64, JoinHandle<()>>, request_id: u64)
     }
 }
 
+/// How many times one subagent round retries a stream-level failure before
+/// the run gives up: one provider hiccup must not kill hours of work.
+const MAX_ROUND_ATTEMPTS: u32 = 3;
+
+/// How long a finished subagent waits for a correction before it finishes:
+/// the main agent can re-open a just-finished conversation to steer it.
+const CORRECTION_GRACE_SECS: u64 = 5;
+
 /// Spawn every tool call of one action. A delegate becomes a subagent run on
 /// the same provider: it works in its own conversation with the same tool
 /// surface as the main session, streams live through the delegate channel,
@@ -669,11 +730,20 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
         let approved = approved_tools.clone();
         let root = workspace.clone();
         tokio::spawn(async move {
+            // Corrections from the main agent join this conversation; the
+            // stop flag ends the run cooperatively.
+            let (correction_sender, mut correction_receiver) =
+                mpsc::unbounded_channel::<String>();
+            let stop = crate::tools::register_subagent_run(run, correction_sender);
             let tools_enabled = mode != Mode::Chat && tools_mode.advertised();
             let mut messages = vec![Message::new(Role::User, task)];
             let mut answer = String::new();
             let mut failed = false;
             let mut failure = String::new();
+            // Consecutive stream-level failures of one round: the run gives
+            // up only after MAX_ROUND_ATTEMPTS, instead of dying on the
+            // first provider hiccup.
+            let mut round_attempts = 0u32;
             let mut workspace = root;
             let mut rounds = 0usize;
             loop {
@@ -745,7 +815,63 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     }
                 }
                 let _ = streamer.await;
-                if failed || requested.is_empty() {
+                if failed {
+                    // Auto-continue: a stream-level failure retries the round
+                    // a few times before the run gives up, the same way the
+                    // main session retries. The round's messages are
+                    // unchanged - it failed before any tool call ran.
+                    round_attempts += 1;
+                    if round_attempts < MAX_ROUND_ATTEMPTS {
+                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                            run,
+                            text: format!(
+                                "attempt {round_attempts} failed: {failure} — retrying"
+                            ),
+                        });
+                        tokio::time::sleep(Duration::from_millis(
+                            1000 * u64::from(round_attempts),
+                        ))
+                        .await;
+                        failed = false;
+                        failure = String::new();
+                        continue;
+                    }
+                    break;
+                }
+                round_attempts = 0;
+                if requested.is_empty() {
+                    // Done: a correction re-opens the conversation; otherwise
+                    // the run finishes after a short grace window.
+                    let correction = match tokio::time::timeout(
+                        Duration::from_secs(CORRECTION_GRACE_SECS),
+                        correction_receiver.recv(),
+                    )
+                    .await
+                    {
+                        Ok(Some(correction)) => Some(correction),
+                        _ => None,
+                    };
+                    if let Some(correction) = correction {
+                        messages.push(Message::new(Role::User, correction));
+                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                            run,
+                            text: "the main agent sent a correction — continuing".to_owned(),
+                        });
+                        continue;
+                    }
+                    break;
+                }
+                // Corrections sent mid-round join the conversation before the
+                // next request, so the model sees them with the tool results.
+                while let Ok(correction) = correction_receiver.try_recv() {
+                    messages.push(Message::new(Role::User, correction));
+                }
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                        run,
+                        text: "stopped by the main agent — answering with what it has"
+                            .to_owned(),
+                    });
                     break;
                 }
                 rounds += 1;
@@ -849,6 +975,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 }
             }
             let _ = delegate_sender.send(crate::app::DelegateUpdate::Finished { run, failed });
+            crate::tools::unregister_subagent_run(run);
             let result = if failed {
                 Err(if failure.is_empty() {
                     "the subagent returned no content".to_owned()
@@ -858,7 +985,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             } else if answer.trim().is_empty() {
                 Err("the subagent returned no content".to_owned())
             } else {
-                Ok(answer.trim().to_owned())
+                // The run id rides with the answer, so the main agent can
+                // address corrections and stops at this run.
+                Ok(format!("[subagent run {run}] {}", answer.trim()))
             };
             let _ = sender.send(ToolEvent { call, result });
         });
