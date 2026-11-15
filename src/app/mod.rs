@@ -256,6 +256,10 @@ pub struct App {
     /// while the queue keeps advancing. Tracked per session like
     /// `running_tool`, so results land in the tab that asked.
     pub running_delegates: Vec<RunningTool>,
+    /// Finished subagent runs waiting to report: a busy tab parks the
+    /// answers, and they deliver at the next idle point so a report never
+    /// lands mid-stream and the model is alerted with a fresh turn.
+    pub pending_reports: VecDeque<(u64, String)>,
     /// Diffs for write and edit calls, shown under their results.
     pub changes: HashMap<String, ChangeReport>,
     /// Tool results the user expanded to see the full output.
@@ -385,6 +389,7 @@ impl App {
             running_tool: None,
             user_command_running: false,
             running_delegates: Vec::new(),
+            pending_reports: VecDeque::new(),
             changes: HashMap::new(),
             expanded: HashSet::new(),
             output_rows: Vec::new(),
@@ -571,6 +576,10 @@ impl App {
                     || (!saved.name.is_empty() && saved.name.eq_ignore_ascii_case(model_id))
             })
             .and_then(|saved| saved.context_window)
+    }
+
+    pub fn custom_providers(&self) -> &[config::CustomProvider] {
+        &self.custom_providers
     }
 
     pub fn tick(&mut self) {

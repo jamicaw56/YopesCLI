@@ -4,7 +4,12 @@
 //! same provider and model, streamed live into `App::subagents` so the user
 //! can watch the response while it runs. `/agents` lists the runs and opens
 //! one for reading; the list and the viewer are app-global, so a run stays
-//! viewable from every tab while its tool result lands in the owning tab.
+//! viewable from every tab while its report lands in the owning tab.
+//!
+//! Delegation is fast and never blocks the conversation: the tool call
+//! answers as soon as the run starts, the model keeps working, and when a
+//! run finishes its final answer is delivered to the owning conversation as
+//! a report that alerts the model with a new turn.
 
 use std::time::Instant;
 
@@ -47,6 +52,9 @@ pub(crate) enum SubagentStatus {
 /// One subagent run: the task, the streamed answer, and what it cost.
 pub(crate) struct Subagent {
     pub(crate) id: u64,
+    /// The `delegate` tool call that spawned this run: the transcript maps a
+    /// tool-call row back to its run's name and live status through it.
+    pub(crate) call_id: String,
     pub(crate) task: String,
     /// The name the model gave this task, shown instead of the task text.
     pub(crate) name: Option<String>,
@@ -125,11 +133,14 @@ pub(crate) enum DelegateUpdate {
         run: u64,
         name: String,
     },
-    /// The request ended: `failed` picks the final status. The answer text
-    /// itself already streamed in through the deltas.
+    /// The request ended: `failed` picks the final status. `report` is the
+    /// run's final answer (or its failure text), delivered to the owning
+    /// conversation as a report that alerts the model.
     Finished {
         run: u64,
         failed: bool,
+        report: String,
+        session_id: u64,
     },
 }
 
@@ -149,11 +160,12 @@ fn push_capped(target: &mut String, text: &str) {
 impl App {
     /// Register a new subagent run and return its id. Runs are app-global:
     /// the tool result routes to the owning tab, the record stays viewable.
-    pub(crate) fn begin_subagent(&mut self, task: String) -> u64 {
+    pub(crate) fn begin_subagent(&mut self, call_id: &str, task: String) -> u64 {
         self.next_subagent_id = self.next_subagent_id.wrapping_add(1);
         let id = self.next_subagent_id;
         self.subagents.push(Subagent {
             id,
+            call_id: call_id.to_owned(),
             task,
             name: None,
             answer: String::new(),
@@ -168,6 +180,57 @@ impl App {
             self.subagents.remove(0);
         }
         id
+    }
+
+    /// A subagent run finished: its final answer arrives as a report that
+    /// alerts the model with a new turn. A busy tab parks the report —
+    /// pushing a message mid-stream would swallow the streamed deltas — and
+    /// the parked ones deliver at the next idle point (turn finished, tools
+    /// done) or with the next message the user sends.
+    pub(crate) fn on_subagent_report(&mut self, run: u64, report: String) -> Action {
+        if self.is_busy() {
+            self.pending_reports.push_back((run, report));
+            return Action::None;
+        }
+        self.deliver_subagent_report(run, report)
+    }
+
+    /// Push one finished run's answer into the conversation and start a turn,
+    /// so the model reacts to it right away. The unmatched tool-call id makes
+    /// the serializer send it as a `Tool result:` user message, the same way
+    /// a background bash job reports.
+    fn deliver_subagent_report(&mut self, run: u64, report: String) -> Action {
+        let mut message = Message::new(Role::Tool, report);
+        message.tool_call_id = Some(format!("subagent-run-{run}"));
+        self.session.messages.push(message);
+        self.follow_tail = true;
+        self.save_session();
+        self.begin_turn()
+    }
+
+    /// Append every parked report to the conversation. Callers only use it
+    /// at an idle point (nothing streaming, no tool pending), so reports
+    /// never land between an assistant tool call and its result. True when
+    /// at least one report joined.
+    pub(crate) fn flush_parked_reports(&mut self) -> bool {
+        if self.pending_reports.is_empty() {
+            return false;
+        }
+        for (run, report) in std::mem::take(&mut self.pending_reports) {
+            let mut message = Message::new(Role::Tool, report);
+            message.tool_call_id = Some(format!("subagent-run-{run}"));
+            self.session.messages.push(message);
+        }
+        self.follow_tail = true;
+        self.save_session();
+        true
+    }
+
+    /// The subagent a delegate tool call spawned: the transcript row shows
+    /// its model-given name and live status. None when the call was rejected
+    /// or predates the run tracking.
+    pub(crate) fn subagent_for_call(&self, call_id: &str) -> Option<&Subagent> {
+        self.subagents.iter().find(|agent| agent.call_id == call_id)
     }
 
     /// A subagent update arrived: fold it into the run record. Deltas redraw
@@ -344,7 +407,7 @@ mod tests {
 
     fn app_with_run() -> (App, u64) {
         let mut app = crate::app::turn::tests::test_app();
-        let run = app.begin_subagent("Write the tests for the parser".to_owned());
+        let run = app.begin_subagent("call-1", "Write the tests for the parser".to_owned());
         (app, run)
     }
 
@@ -365,7 +428,12 @@ mod tests {
         assert_eq!(agent.answer, "partial");
         assert_eq!(agent.usage, Some((100, 20)));
 
-        app.on_delegate_update(DelegateUpdate::Finished { run, failed: false });
+        app.on_delegate_update(DelegateUpdate::Finished {
+            run,
+            failed: false,
+            report: String::new(),
+            session_id: 0,
+        });
         let agent = &app.subagents[0];
         assert_eq!(agent.status, SubagentStatus::Done);
         assert!(agent.elapsed_ms < 60_000);
@@ -378,7 +446,12 @@ mod tests {
             run,
             text: "attempt 1 failed: timeout".to_owned(),
         });
-        app.on_delegate_update(DelegateUpdate::Finished { run, failed: true });
+        app.on_delegate_update(DelegateUpdate::Finished {
+            run,
+            failed: true,
+            report: String::new(),
+            session_id: 0,
+        });
         let agent = &app.subagents[0];
         assert_eq!(agent.status, SubagentStatus::Failed);
         assert_eq!(agent.note.as_deref(), Some("attempt 1 failed: timeout"));
@@ -432,7 +505,7 @@ mod tests {
     #[test]
     fn the_picker_lists_newest_first_and_filters() {
         let (mut app, first) = app_with_run();
-        let second = app.begin_subagent("Review the diff".to_owned());
+        let second = app.begin_subagent("call-2", "Review the diff".to_owned());
         assert_ne!(first, second);
         app.open_agents_picker();
         assert_eq!(app.agents_matches(), vec![1, 0]);

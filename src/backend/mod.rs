@@ -183,6 +183,23 @@ impl Backend {
         self.model = model;
     }
 
+    /// A failover backend: the same connection pointed at another model — and
+    /// at another provider's endpoint when the failover crosses providers.
+    pub fn failover(
+        &self,
+        model: &str,
+        base_url: &str,
+        api_key: Option<&str>,
+        auth: AuthKind,
+    ) -> Self {
+        let mut clone = self.clone();
+        clone.model = model.to_owned();
+        clone.base_url = base_url.trim_end_matches('/').to_owned();
+        clone.api_key = api_key.map(str::to_owned);
+        clone.auth = auth;
+        clone
+    }
+
     pub fn update_model_context_window(&mut self, model_id: &str, context_window: Option<u64>) {
         for model in &mut self.models {
             if model.id.eq_ignore_ascii_case(model_id) {

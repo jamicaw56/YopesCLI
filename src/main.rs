@@ -32,7 +32,7 @@ use crate::{
     app::{Action, App, Mode, ToolEvent},
     backend::{Backend, StreamEvent},
     catalog::FetchResult,
-    config::{Cli, Command, Config, load_session},
+    config::{AuthKind, Cli, Command, Config, load_session},
     session::{Message, Role, ToolCall},
 };
 
@@ -331,9 +331,29 @@ async fn run() -> Result<()> {
                 let Some(update) = update else { break; };
                 // Subagent deltas stream at the fixed cadence; a finished or
                 // failed run needs an immediate frame.
-                let finished = matches!(update, crate::app::DelegateUpdate::Finished { .. });
+                let finished = match &update {
+                    crate::app::DelegateUpdate::Finished { run, report, session_id, .. } => {
+                        Some((*run, report.clone(), *session_id))
+                    }
+                    _ => None,
+                };
                 app.on_delegate_update(update);
-                if finished {
+                if let Some((run_id, report, session_id)) = finished {
+                    // The finished run reports to the conversation that
+                    // delegated it: the answer joins that session and the
+                    // model is alerted with a fresh turn (parked while the
+                    // tab is busy).
+                    let owner = app.tab_for_session(session_id);
+                    match owner {
+                        Some(owner) => app.with_tab(owner, |app| {
+                            let action = app.on_subagent_report(run_id, report);
+                            dispatch(action, app, &channels, &mut active_tasks);
+                        }),
+                        None => {
+                            let action = app.on_subagent_report(run_id, report);
+                            dispatch(action, &mut app, &channels, &mut active_tasks);
+                        }
+                    }
                     redraw_now = true;
                 } else {
                     redraw_streamed = true;
@@ -346,9 +366,13 @@ async fn run() -> Result<()> {
                 let owner = app.tab_for_session(session_id);
                 match owner {
                     Some(owner) => app.with_tab(owner, |app| {
-                        app.on_user_command_result(result);
+                        let action = app.on_user_command_result(result);
+                        dispatch(action, app, &channels, &mut active_tasks);
                     }),
-                    None => app.on_user_command_result(result),
+                    None => {
+                        let action = app.on_user_command_result(result);
+                        dispatch(action, &mut app, &channels, &mut active_tasks);
+                    }
                 }
                 redraw_now = true;
             }
@@ -644,10 +668,6 @@ fn cancel_task(active_tasks: &mut HashMap<u64, JoinHandle<()>>, request_id: u64)
 /// the run gives up: one provider hiccup must not kill hours of work.
 const MAX_ROUND_ATTEMPTS: u32 = 3;
 
-/// How long a finished subagent waits for a correction before it finishes:
-/// the main agent can re-open a just-finished conversation to steer it.
-const CORRECTION_GRACE_SECS: u64 = 5;
-
 /// Spawn every tool call of one action. A delegate becomes a subagent run on
 /// the same provider: it works in its own conversation with the same tool
 /// surface as the main session, streams live through the delegate channel,
@@ -702,7 +722,21 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 continue;
             }
         };
-        let run = app.begin_subagent(task.clone());
+        let run = app.begin_subagent(&call.id, task.clone());
+        // The delegate answers immediately: the model regains control and
+        // keeps working while the run streams in the sidebar. The run's
+        // final answer is delivered as a report that alerts the model when
+        // it finishes.
+        let _ = tools.send(ToolEvent {
+            call,
+            result: Ok(format!(
+                "Subagent run {run} started. It works in the background with the same \
+                 tools, streams in the sidebar (/agents), and its final answer is \
+                 delivered to this conversation automatically when it finishes — keep \
+                 working, do not wait for it. Address corrections or stops to it by \
+                 its run id."
+            )),
+        });
         // The model names the task: the sidebar and the /agents rows show
         // that name instead of the raw task text. A failed naming request
         // stays silent and the row keeps the task excerpt until then.
@@ -720,12 +754,63 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 }
             });
         }
-        let sender = tools.clone();
         let delegate_sender = delegates.clone();
         let backend = backend.clone();
         let web_key = web_key.clone();
         let approved = approved_tools.clone();
         let root = workspace.clone();
+        // The failover ladder: the same provider's other models first, then
+        // other configured providers whose key the run can use without a
+        // password. A subagent that keeps failing switches down this list
+        // instead of dying with hours of work behind it.
+        let mut failover: Vec<(String, String, Option<String>, AuthKind)> = Vec::new();
+        for saved in backend.saved_models() {
+            if saved.id.eq_ignore_ascii_case(backend.model())
+                || failover
+                    .iter()
+                    .any(|(model, ..)| model.eq_ignore_ascii_case(&saved.id))
+            {
+                continue;
+            }
+            failover.push((
+                saved.id.clone(),
+                backend.base_url().to_owned(),
+                backend.api_key().map(str::to_owned),
+                backend.auth(),
+            ));
+        }
+        for provider in app.custom_providers() {
+            if provider.base_url.trim_end_matches('/') == backend.base_url().trim_end_matches('/') {
+                continue;
+            }
+            let key = provider
+                .token
+                .clone()
+                .filter(|token| !token.trim().is_empty())
+                .or_else(|| {
+                    provider
+                        .secret
+                        .plaintext()
+                        .map(str::to_owned)
+                        .filter(|key| !key.trim().is_empty())
+                });
+            let Some(key) = key else { continue };
+            let Some(first) = provider.models.first() else {
+                continue;
+            };
+            if failover
+                .iter()
+                .any(|(model, ..)| model.eq_ignore_ascii_case(&first.id))
+            {
+                continue;
+            }
+            failover.push((
+                first.id.clone(),
+                provider.base_url.clone(),
+                Some(key),
+                provider.auth,
+            ));
+        }
         tokio::spawn(async move {
             // Corrections from the main agent join this conversation; the
             // stop flag ends the run cooperatively.
@@ -734,19 +819,29 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             let tools_enabled = mode != Mode::Chat && tools_mode.advertised();
             let mut messages = vec![Message::new(Role::User, task)];
             let mut answer = String::new();
+            let mut reasoning = String::new();
             let mut failed = false;
             let mut failure = String::new();
             // Consecutive stream-level failures of one round: the run gives
             // up only after MAX_ROUND_ATTEMPTS, instead of dying on the
             // first provider hiccup.
             let mut round_attempts = 0u32;
+            // The model this round streams from: swapped down the failover
+            // ladder when the current model or endpoint keeps failing.
+            let mut run_backend = backend.clone();
+            let mut failover = failover.into_iter();
+            // One nudge each: the budget nudge asks for a final answer with
+            // no tools; the empty nudge asks again when a round streams
+            // nothing, so a run that worked never ends with no report.
+            let mut budget_nudged = false;
+            let mut empty_nudges = 0u32;
             let mut workspace = root;
             let mut rounds = 0usize;
             loop {
                 let (events, mut receiver) = mpsc::unbounded_channel::<StreamEvent>();
                 let streamer = {
                     let events = events.clone();
-                    let backend = backend.clone();
+                    let backend = run_backend.clone();
                     let messages = messages.clone();
                     let workspace = workspace.clone();
                     tokio::spawn(async move {
@@ -773,6 +868,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                 .send(crate::app::DelegateUpdate::Delta { run, text });
                         }
                         StreamEvent::Reasoning { text, .. } => {
+                            reasoning.push_str(&text);
                             let _ = delegate_sender
                                 .send(crate::app::DelegateUpdate::Reasoning { run, text });
                         }
@@ -828,26 +924,49 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         failure = String::new();
                         continue;
                     }
+                    // The model or endpoint keeps failing: switch to the next
+                    // one on the failover ladder instead of giving up.
+                    if let Some((model, base_url, key, auth)) = failover.next() {
+                        run_backend = backend.failover(&model, &base_url, key.as_deref(), auth);
+                        round_attempts = 0;
+                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                            run,
+                            text: format!("repeated failures — switching to {model} and retrying"),
+                        });
+                        failed = false;
+                        failure = String::new();
+                        continue;
+                    }
                     break;
                 }
                 round_attempts = 0;
                 if requested.is_empty() {
-                    // Done: a correction re-opens the conversation; otherwise
-                    // the run finishes after a short grace window.
-                    let correction = match tokio::time::timeout(
-                        Duration::from_secs(CORRECTION_GRACE_SECS),
-                        correction_receiver.recv(),
-                    )
-                    .await
-                    {
-                        Ok(Some(correction)) => Some(correction),
-                        _ => None,
-                    };
-                    if let Some(correction) = correction {
+                    // Done: a correction already queued re-opens the
+                    // conversation; otherwise the run finishes and reports at
+                    // once, with no grace window delaying the model.
+                    if let Ok(correction) = correction_receiver.try_recv() {
                         messages.push(Message::new(Role::User, correction));
                         let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                             run,
                             text: "the main agent sent a correction — continuing".to_owned(),
+                        });
+                        continue;
+                    }
+                    // The model streamed nothing this round: nudge it to
+                    // answer with what it has instead of ending the run with
+                    // no report.
+                    if round_text.trim().is_empty() && answer.trim().is_empty() && empty_nudges < 2
+                    {
+                        empty_nudges += 1;
+                        messages.push(Message::new(
+                            Role::User,
+                            "Your last reply was empty. Reply now with your final answer to "
+                                .to_owned()
+                                + "the task, based on the work done so far.",
+                        ));
+                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                            run,
+                            text: "the model streamed nothing — asking it to answer".to_owned(),
                         });
                         continue;
                     }
@@ -867,8 +986,28 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 }
                 rounds += 1;
                 if rounds > crate::app::MAX_SUBAGENT_TOOL_ROUNDS {
-                    // A runaway loop must not burn tokens in the background
-                    // forever: stop and take what streamed so far.
+                    if !budget_nudged {
+                        // The budget is up: ask for the final answer with no
+                        // tools, so a run that did hours of work still reports.
+                        budget_nudged = true;
+                        messages.push(Message::new(
+                            Role::User,
+                            "You have used your full tool budget for this run. Do not call any "
+                                .to_owned()
+                                + "more tools; reply now with your final answer to the task, "
+                                + "based on the work done so far.",
+                        ));
+                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                            run,
+                            text: format!(
+                                "tool budget of {} rounds used — asking for the final answer",
+                                crate::app::MAX_SUBAGENT_TOOL_ROUNDS
+                            ),
+                        });
+                        continue;
+                    }
+                    // Still calling tools after the nudge: stop and take what
+                    // streamed so far.
                     let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                         run,
                         text: format!(
@@ -965,22 +1104,59 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     messages.push(Message::tool_result(requested_call.id.clone(), content));
                 }
             }
-            let _ = delegate_sender.send(crate::app::DelegateUpdate::Finished { run, failed });
             crate::tools::unregister_subagent_run(run);
-            let result = if failed {
-                Err(if failure.is_empty() {
-                    "the subagent returned no content".to_owned()
-                } else {
-                    failure
+            // The report: the run's final answer, or the best account of what
+            // it did. A model that worked but never wrote a final answer (tool
+            // rounds only, or everything in reasoning) still reports something
+            // useful instead of "no content".
+            let fallback_text = messages
+                .iter()
+                .rev()
+                .find(|message| {
+                    message.role == Role::Assistant && !message.content.trim().is_empty()
                 })
-            } else if answer.trim().is_empty() {
-                Err("the subagent returned no content".to_owned())
-            } else {
+                .map(|message| message.content.trim().to_owned())
+                .filter(|text| !text.is_empty())
+                .or_else(|| {
+                    let reasoning = reasoning.trim();
+                    (!reasoning.is_empty()).then(|| {
+                        let chars: Vec<char> = reasoning.chars().collect();
+                        let start = chars.len().saturating_sub(1500);
+                        let tail: String = chars[start..].iter().collect();
+                        if start > 0 {
+                            format!("…{tail}")
+                        } else {
+                            tail
+                        }
+                    })
+                });
+            // A failure reads as an error so the model can retry or report.
+            let report = if failed {
+                format!(
+                    "Error: {}",
+                    if failure.is_empty() {
+                        "the subagent returned no content".to_owned()
+                    } else {
+                        failure
+                    }
+                )
+            } else if !answer.trim().is_empty() {
                 // The run id rides with the answer, so the main agent can
                 // address corrections and stops at this run.
-                Ok(format!("[subagent run {run}] {}", answer.trim()))
+                format!("[subagent run {run}] {}", answer.trim())
+            } else if let Some(text) = fallback_text {
+                format!(
+                    "[subagent run {run}] worked but never wrote a final answer; what it did:\n\n{text}"
+                )
+            } else {
+                "Error: the subagent returned no content".to_owned()
             };
-            let _ = sender.send(ToolEvent { call, result });
+            let _ = delegate_sender.send(crate::app::DelegateUpdate::Finished {
+                run,
+                failed,
+                report,
+                session_id,
+            });
         });
     }
 }

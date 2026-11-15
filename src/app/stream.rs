@@ -167,6 +167,11 @@ impl App {
                         );
                     }
                     self.save_session();
+                    // Subagents that finished mid-turn report now, alerting
+                    // the model with a fresh turn.
+                    if !self.is_busy() && self.flush_parked_reports() {
+                        return self.begin_turn();
+                    }
                     return self.maybe_name_session();
                 }
                 self.save_session();

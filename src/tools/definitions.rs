@@ -440,7 +440,7 @@ pub fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "delegate",
-                "description": "Hand one self-contained subtask to a subagent running on the same provider and model, and receive its final answer. The subagent runs with the same tools you have (files, shell, web) in the same workspace, but it starts with an empty conversation, so the task must still carry every fact and instruction it needs. Several delegate calls in one turn run in parallel and stream live in the sidebar; the user can read every response with /agents. Use it for focused drafts, second opinions, or research recaps, and split large work into several delegate calls.",
+                "description": "Hand one self-contained subtask to a subagent running on the same provider and model. The call returns at once with a run id and the subagent works in the background: keep working, do not wait. Its final answer is delivered to this conversation automatically when it finishes. The subagent runs with the same tools you have (files, shell, web) in the same workspace, but it starts with an empty conversation, so the task must still carry every fact and instruction it needs. Several delegate calls in one turn run in parallel and stream live in the sidebar; the user can read every response with /agents. Use it for focused drafts, second opinions, or research recaps, and split large work into several delegate calls.",
                 "parameters": {
                     "type": "object",
                     "properties": {

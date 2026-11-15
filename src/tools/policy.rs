@@ -148,9 +148,11 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              execution is requested. \
              For an independent subtask use delegate: hand the subagent one self-contained \
              task with the context it needs — it runs with the same tools you have in the \
-             same workspace and returns a final answer. Several delegate calls in one turn \
-             run in parallel and stream in the sidebar; the user reads every response with \
-             /agents. \
+             same workspace. A delegate call returns at once and the subagent works in the \
+             background: keep working on other things and never wait for it; its final \
+             answer is delivered to this conversation automatically when it finishes. \
+             Several delegate calls in one turn run in parallel and stream in the sidebar; \
+             the user reads every response with /agents. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \
