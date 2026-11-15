@@ -258,20 +258,31 @@ mod tests {
     #[test]
     fn motion_and_backspace_stay_whole_graphemes() {
         let mut input = Input::default();
-        // 👩‍💻 is 5 chars (ZWJ sequence) and 🇺🇸 is 2 (flag); both are one
-        // grapheme each.
+        // 👩‍💻 is one grapheme (ZWJ sequence) and 🇺🇸 is one (flag pair); both
+        // move and delete as a unit.
         input.insert_str("a👩‍💻b🇺🇸");
-        input.left(false);
+        // A backspace at the end takes the whole flag, not one regional
+        // indicator.
+        input.backspace();
+        assert_eq!(input.value, "a👩‍💻b", "backspace removes the whole flag");
+        // Left walks whole graphemes: before 'b', then before the ZWJ emoji
+        // — each stop is a boundary, never inside an emoji.
         input.left(false);
         input.left(false);
         assert_eq!(input.selected_text(), None);
-        assert_eq!(input.value, "a👩‍💻b🇺🇸", "left over an emoji never splits it");
+        assert_eq!(input.value, "a👩‍💻b", "left over an emoji never splits it");
+        assert_eq!(input.cursor, 1, "lefts land on grapheme boundaries");
+        input.right(false);
+        input.right(false);
+        assert_eq!(
+            input.cursor,
+            input.value.len(),
+            "right clears the whole ZWJ emoji"
+        );
         input.backspace();
-        assert_eq!(input.value, "a👩‍💻b", "backspace removes the whole flag");
+        assert_eq!(input.value, "a👩‍💻", "backspace removes 'b'");
         input.backspace();
-        assert_eq!(input.value, "a👩‍💻", "backspace removes the whole ZWJ emoji");
-        input.backspace();
-        assert_eq!(input.value, "a");
+        assert_eq!(input.value, "a", "backspace removes the whole ZWJ emoji");
         input.right(false);
         assert_eq!(
             input.cursor,

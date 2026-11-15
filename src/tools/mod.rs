@@ -57,7 +57,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 18] = [
+pub const TOOL_NAMES: [&str; 20] = [
     "list_dir",
     "read_file",
     "multi_read",
@@ -71,6 +71,8 @@ pub const TOOL_NAMES: [&str; 18] = [
     "run_command",
     "bash_background",
     "bash_output",
+    "message_subagent",
+    "stop_subagent",
     "bash_kill",
     "web_search",
     "web_fetch",

@@ -405,11 +405,7 @@ async fn run() -> Result<()> {
     if trace {
         eprintln!(
             "yopes: {frames} frames, avg {} ms, worst {worst_draw_ms} ms",
-            if frames > 0 {
-                total_draw_ms / frames
-            } else {
-                0
-            }
+            total_draw_ms.checked_div(frames).unwrap_or(0)
         );
     }
     drop(terminal);
