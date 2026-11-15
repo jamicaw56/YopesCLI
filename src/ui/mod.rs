@@ -494,6 +494,23 @@ fn usage_line(usage: Usage) -> Line<'static> {
 /// summary so long reasoning does not re-wrap the whole transcript per frame.
 const STREAMING_REASONING_LINES: usize = 24;
 
+/// Reply characters parsed for markdown while the message streams. The
+/// viewport follows the tail while a reply streams, so the earlier text sits
+/// above the fold anyway; re-parsing it on every frame is the lag.
+const STREAMING_MARKDOWN_CHARS: usize = 8000;
+
+/// The tail of a streaming reply, cut forward to a character boundary.
+fn streaming_tail(content: &str) -> &str {
+    if content.len() <= STREAMING_MARKDOWN_CHARS {
+        return content;
+    }
+    let mut cut = content.len() - STREAMING_MARKDOWN_CHARS;
+    while !content.is_char_boundary(cut) {
+        cut += 1;
+    }
+    &content[cut..]
+}
+
 fn reasoning_lines(message: &Message, streaming: bool, expanded: bool) -> Vec<Line<'static>> {
     let lines: Vec<&str> = message
         .reasoning

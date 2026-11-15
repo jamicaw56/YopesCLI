@@ -196,6 +196,10 @@ impl App {
         self.send_pulse = Some(self.spinner);
         self.session.update_title(&prompt);
         self.prompt_started = Some(Instant::now());
+        // A message the user sent is the one thing that snaps the transcript
+        // back to the tail: streaming events, tool calls and results no longer
+        // yank a scrolled-up view (see `follow_tail`).
+        self.follow_tail = true;
         // Swap `[Image N]` placeholders back to their real paths: the model
         // and the transcript see the path, the composer never did.
         value = self.resolve_image_placeholders(value);
@@ -226,7 +230,6 @@ impl App {
         // Chat during a tool run queues the message: the post-tool
         // continuation sends it together with the tool result.
         if tool_busy {
-            self.follow_tail = true;
             self.save_session();
             return Action::None;
         }
@@ -236,13 +239,21 @@ impl App {
     /// Start the next turn: the context load decides whether older turns are
     /// summarized first, then the real request is sent.
     pub(crate) fn begin_turn(&mut self) -> Action {
+        self.begin_turn_after_compaction(0)
+    }
+
+    /// The turn, with `attempts` compaction rounds already behind it. A
+    /// compaction retry rolls again here, and the cap keeps a provider that
+    /// answers empty (or a summary that never shrinks the load) from looping
+    /// the turn forever.
+    pub(crate) fn begin_turn_after_compaction(&mut self, attempts: u32) -> Action {
         let total = Session::estimate_tokens(&self.session.messages);
         let window = self.model_context_window().unwrap_or(128_000);
         let keep = window / COMPACTION_KEEP_FRAC;
-        if self.auto_compact {
+        if self.auto_compact && attempts < MAX_COMPACTION_ATTEMPTS {
             if let Some(split) = self.session.compaction_split(keep) {
                 if split > 0 && compaction_due(total, window) {
-                    return self.begin_compaction(split);
+                    return self.begin_compaction(split, attempts);
                 }
             }
         }
@@ -251,19 +262,26 @@ impl App {
     }
 
     /// Summarize everything before `split`, then continue with the turn.
-    pub(crate) fn begin_compaction(&mut self, split: usize) -> Action {
+    pub(crate) fn begin_compaction(&mut self, split: usize, attempts: u32) -> Action {
         let mut messages = self.session.messages[..split].to_vec();
         messages.push(Message::new(
             Role::User,
             "Summarize the conversation above for an assistant taking over: what the user wants, decisions made, files changed, and anything still unfinished. Reply with the summary only.",
         ));
-        self.begin_request(messages, Some(split))
+        self.begin_request(
+            messages,
+            Some(Compaction {
+                split,
+                text: String::new(),
+                attempts,
+            }),
+        )
     }
 
     pub(crate) fn begin_request(
         &mut self,
         messages: Vec<Message>,
-        compacting: Option<usize>,
+        compacting: Option<Compaction>,
     ) -> Action {
         // A compaction request streams into its own buffer, not the transcript,
         // so no reply placeholder is pushed.
@@ -305,12 +323,8 @@ impl App {
             prompt_tokens: prompt_chars as u64 / 4,
             usage: None,
             tool_progress: None,
-            compacting: compacting.map(|split| Compaction {
-                split,
-                text: String::new(),
-            }),
+            compacting,
         });
-        self.follow_tail = true;
         self.save_session();
         Action::Start {
             request_id,
@@ -467,7 +481,7 @@ impl App {
                         )
                         .filter(|split| *split > 0)
                     {
-                        return self.begin_compaction(split);
+                        return self.begin_compaction(split, 0);
                     } else {
                         self.info(format!(
                             "Nothing to compact · auto compact {} · /compact on|off|now",

@@ -68,7 +68,8 @@ impl App {
                     }
                 }
                 self.pending_tools.extend(calls);
-                self.follow_tail = true;
+                // No follow_tail snap: tool calls arriving must not yank a
+                // user who scrolled up to read earlier replies.
                 self.save_session();
                 Action::None
             }
@@ -101,17 +102,28 @@ impl App {
                     .active
                     .as_ref()
                     .and_then(|active| active.compacting.as_ref())
-                    .map(|compaction| (compaction.split, compaction.text.clone()));
-                if let Some((split, summary)) = compacted {
+                    .map(|compaction| {
+                        (
+                            compaction.split,
+                            compaction.text.clone(),
+                            compaction.attempts,
+                        )
+                    });
+                if let Some((split, summary, attempts)) = compacted {
                     self.active = None;
                     self.markdown_cache.clear();
                     if summary.trim().is_empty() {
+                        // An empty summary must not retry compaction: a
+                        // provider that answers empty every time would loop
+                        // the turn forever, and the turn never starts.
                         self.info("Compaction returned nothing; sending the full history.");
-                    } else {
-                        self.session.compact(split, summary);
+                        self.save_session();
+                        let messages = self.session.messages.clone();
+                        return self.begin_request(messages, None);
                     }
+                    self.session.compact(split, summary);
                     self.save_session();
-                    return self.begin_turn();
+                    return self.begin_turn_after_compaction(attempts + 1);
                 }
                 // Record what the reply cost and how long it took, so the
                 // transcript can show it under the finished message.
@@ -207,7 +219,8 @@ impl App {
                 Err(error) => format!("Error: {error}"),
             };
             self.record_tool_result(event.call.id, content);
-            self.follow_tail = true;
+            // No follow_tail snap: a result landing while the user reads an
+            // earlier reply must not shoot the view back down.
             self.save_session();
             return self.advance_tools();
         }
@@ -237,7 +250,6 @@ impl App {
                             )
                         };
                         self.record_tool_result(event.call.id, message);
-                        self.follow_tail = true;
                         self.save_session();
                         return self.advance_tools();
                     }

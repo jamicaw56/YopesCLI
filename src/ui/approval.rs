@@ -94,12 +94,25 @@ pub(super) fn tool_result_lines(
     let inner_width = outer.saturating_sub(4);
     let failed = message.content.starts_with("Error: ");
     let border = if failed { error() } else { muted() };
-    let rendered: Vec<String> = message.content.split('\n').map(normalize_line).collect();
+    let call_id = message.tool_call_id.clone().unwrap_or_default();
+    let expanded = app.expanded.contains(&call_id);
+    // Only the lines the frame shows are normalized: a folded 5,000-line
+    // result was split, truncated, and dropped again on every frame, which
+    // is one of the things that made typing lag on a slow host.
+    let total_lines = message.content.split('\n').count();
+    let rendered_head = |lines: usize| -> Vec<String> {
+        message
+            .content
+            .split('\n')
+            .take(lines)
+            .map(normalize_line)
+            .collect()
+    };
+    let rendered_all = || message.content.split('\n').map(normalize_line).collect();
     // On a very narrow terminal a frame would not fit; draw the raw lines.
     if inner_width < 6 {
-        return rendered
+        return rendered_head(TOOL_OUTPUT_PREVIEW_LINES)
             .iter()
-            .take(TOOL_OUTPUT_PREVIEW_LINES)
             .map(|line| {
                 Line::styled(
                     truncate(line, outer),
@@ -110,7 +123,6 @@ pub(super) fn tool_result_lines(
     }
 
     let color = if failed { error() } else { text() };
-    let call_id = message.tool_call_id.clone().unwrap_or_default();
     let report = message
         .tool_call_id
         .as_deref()
@@ -133,42 +145,49 @@ pub(super) fn tool_result_lines(
         }
     }
     if !quiet {
-        for content_line in &rendered {
+        let preview = if expanded {
+            rendered_all()
+        } else {
+            rendered_head(TOOL_OUTPUT_PREVIEW_LINES)
+        };
+        for content_line in &preview {
             body.push(Line::styled(
                 truncate(content_line, inner_width),
                 Style::default().fg(color),
             ));
         }
     }
+    let mut cut = false;
     if let Some(report) = report {
-        body.extend(change_lines(report, inner_width));
+        let diff_lines = change_lines(report, inner_width);
+        if expanded {
+            body.extend(diff_lines);
+        } else {
+            let remaining = TOOL_OUTPUT_PREVIEW_LINES.saturating_sub(body.len());
+            cut = diff_lines.len() > remaining;
+            body.extend(diff_lines.into_iter().take(remaining));
+        }
     }
     if body.is_empty() {
         body.push(Line::styled(" ", Style::default().fg(muted())));
     }
     // Long output, diff included, is folded; a click on the frame reveals the rest.
-    let expanded = app.expanded.contains(&call_id);
-    let clickable = if quiet {
-        true
-    } else {
-        body.len() > TOOL_OUTPUT_PREVIEW_LINES
-    };
+    let clickable = quiet || cut || total_lines > TOOL_OUTPUT_PREVIEW_LINES;
     if !expanded {
         if quiet {
             body.push(Line::styled(
                 truncate(
                     &format!(
                         "… {} more line{} · click to expand",
-                        rendered.len(),
-                        if rendered.len() == 1 { "" } else { "s" }
+                        total_lines,
+                        if total_lines == 1 { "" } else { "s" }
                     ),
                     inner_width,
                 ),
                 Style::default().fg(muted()),
             ));
-        } else if body.len() > TOOL_OUTPUT_PREVIEW_LINES {
-            let total = body.len();
-            let hidden = total - TOOL_OUTPUT_PREVIEW_LINES;
+        } else if total_lines > TOOL_OUTPUT_PREVIEW_LINES {
+            let hidden = total_lines - TOOL_OUTPUT_PREVIEW_LINES;
             let hint = if inner_width >= 30 {
                 format!(
                     "… {hidden} more line{} · click to expand",
@@ -177,15 +196,18 @@ pub(super) fn tool_result_lines(
             } else {
                 format!("… {hidden} more")
             };
-            let mut shown: Vec<Line<'static>> = body.drain(..TOOL_OUTPUT_PREVIEW_LINES).collect();
-            shown.push(Line::styled(
+            body.push(Line::styled(
                 truncate(&hint, inner_width),
                 Style::default().fg(muted()),
             ));
-            body = shown;
+        } else if cut {
+            body.push(Line::styled(
+                truncate("… more · click to expand", inner_width),
+                Style::default().fg(muted()),
+            ));
         }
     } else if quiet {
-        for content_line in &rendered {
+        for content_line in &rendered_all() {
             body.push(Line::styled(
                 truncate(content_line, inner_width),
                 Style::default().fg(text()),
