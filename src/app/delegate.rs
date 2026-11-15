@@ -208,22 +208,29 @@ impl App {
         self.begin_turn()
     }
 
-    /// Append every parked report to the conversation. Callers only use it
-    /// at an idle point (nothing streaming, no tool pending), so reports
-    /// never land between an assistant tool call and its result. True when
-    /// at least one report joined.
-    pub(crate) fn flush_parked_reports(&mut self) -> bool {
-        if self.pending_reports.is_empty() {
-            return false;
-        }
+    /// Append every parked report and talk message to the conversation.
+    /// Callers only use it at an idle point (nothing streaming, no tool
+    /// pending), so nothing lands between an assistant tool call and its
+    /// result. True when at least one message joined.
+    pub(crate) fn flush_parked_messages(&mut self) -> bool {
+        let mut delivered = false;
         for (run, report) in std::mem::take(&mut self.pending_reports) {
             let mut message = Message::new(Role::Tool, report);
             message.tool_call_id = Some(format!("subagent-run-{run}"));
             self.session.messages.push(message);
+            delivered = true;
         }
-        self.follow_tail = true;
-        self.save_session();
-        true
+        for text in std::mem::take(&mut self.pending_talks) {
+            let mut message = Message::new(Role::Tool, text);
+            message.tool_call_id = Some(format!("talk-{}", self.session.messages.len()));
+            self.session.messages.push(message);
+            delivered = true;
+        }
+        if delivered {
+            self.follow_tail = true;
+            self.save_session();
+        }
+        delivered
     }
 
     /// The subagent a delegate tool call spawned: the transcript row shows

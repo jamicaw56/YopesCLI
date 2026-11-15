@@ -82,6 +82,9 @@ pub(crate) struct TabState {
     /// Finished subagent runs waiting to report in this session: parked
     /// while the tab is busy, delivered at the next idle point.
     pub(crate) pending_reports: VecDeque<(u64, String)>,
+    /// Talk messages from other tabs waiting to land: parked while the tab
+    /// is busy, delivered at the next idle point.
+    pub(crate) pending_talks: VecDeque<String>,
 }
 
 impl Default for TabState {
@@ -128,6 +131,7 @@ impl Default for TabState {
             queued_message: None,
             queued_images: Vec::new(),
             pending_reports: VecDeque::new(),
+            pending_talks: VecDeque::new(),
         }
     }
 }
@@ -177,6 +181,7 @@ impl TabState {
             queued_message: app.queued_message.take(),
             queued_images: std::mem::take(&mut app.queued_images),
             pending_reports: std::mem::take(&mut app.pending_reports),
+            pending_talks: std::mem::take(&mut app.pending_talks),
         }
     }
 
@@ -223,6 +228,7 @@ impl TabState {
         app.queued_message = self.queued_message;
         app.queued_images = self.queued_images;
         app.pending_reports = self.pending_reports;
+        app.pending_talks = self.pending_talks;
     }
 
     fn is_streaming(&self) -> bool {

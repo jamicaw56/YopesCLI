@@ -477,7 +477,8 @@ impl App {
 
     /// State that belongs to the view of one session, reset on /new or switch.
     /// Parked subagent reports go with the session they belong to, so a
-    /// report from the old conversation never lands in the new one.
+    /// report from the old conversation never lands in the new one. Parked
+    /// talk messages go with it for the same reason.
     pub(crate) fn reset_session_view(&mut self) {
         self.scroll = 0;
         self.follow_tail = true;
@@ -488,6 +489,7 @@ impl App {
         self.markdown_cache.clear();
         self.prompt_started = None;
         self.pending_reports.clear();
+        self.pending_talks.clear();
     }
 
     /// After the first completed reply, ask the model for a short title;

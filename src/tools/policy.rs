@@ -22,6 +22,12 @@ pub fn requires_approval(call: &ToolCall) -> bool {
         // A subagent request spends extra tokens on the user's account.
         return true;
     }
+    if call.function.name == "talk_to" {
+        // A message to another tab can wake that tab's model into a whole
+        // new turn, so it spends tokens on the user's account like a
+        // delegate call does.
+        return true;
+    }
     if matches!(
         call.function.name.as_str(),
         "run_command" | "bash_background"
@@ -153,6 +159,13 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              answer is delivered to this conversation automatically when it finishes. \
              Several delegate calls in one turn run in parallel and stream in the sidebar; \
              the user reads every response with /agents. \
+             Sessions can talk between themselves: `check_session` lists the open tabs with \
+             their tab numbers, and `talk_to` delivers a message into another tab's \
+             conversation — an idle tab wakes its model at once, a busy tab receives the \
+             message when its turn ends. Use them when the user asks to coordinate across \
+             tabs or hand findings over, and never in a loop that answers itself. When a \
+             talk message arrives in this conversation, reply with talk_to addressed to \
+             the sender's tab number. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \

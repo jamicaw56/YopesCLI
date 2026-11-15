@@ -14,6 +14,7 @@ mod policy;
 mod preview;
 mod search;
 mod shell;
+mod talk;
 mod todo;
 mod web;
 
@@ -36,6 +37,8 @@ pub(crate) use shell::poll_bash_jobs;
 mod subagents;
 pub(crate) use subagents::{register_subagent_run, unregister_subagent_run};
 
+pub(crate) use talk::{TalkRequest, install as install_talk};
+
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
@@ -57,7 +60,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 20] = [
+pub const TOOL_NAMES: [&str; 22] = [
     "list_dir",
     "read_file",
     "multi_read",
@@ -78,6 +81,8 @@ pub const TOOL_NAMES: [&str; 20] = [
     "web_fetch",
     "todo_write",
     "delegate",
+    "check_session",
+    "talk_to",
 ];
 
 #[derive(Debug)]
@@ -157,6 +162,10 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         // mid-flight, stop flags end it cooperatively.
         "message_subagent" => subagents::subagent_message(&call.function.arguments),
         "stop_subagent" => subagents::subagent_stop(&call.function.arguments),
+        // Talking between sessions: the app loop owns every tab, so both
+        // calls send a request there and answer with what happened.
+        "check_session" => talk::check_session(),
+        "talk_to" => talk::talk_to(&call.function.arguments),
         // Handled by the session loop: the subagent needs the backend.
         "delegate" => bail!("delegate cannot run outside the session loop"),
         other => bail!("unknown tool `{other}`"),

@@ -452,6 +452,38 @@ pub fn definitions() -> Value {
                     "required": ["task"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_session",
+                "description": "List the other open sessions (tabs) this conversation can talk to. Returns every tab's number, title, and whether it is mid-turn; the row marked `this session` is you. Address a tab by its number in talk_to. Read-only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "talk_to",
+                "description": "Send a message to another open session (tab). The message is delivered into that conversation: when the tab is idle its model wakes and reads it at once; when it is busy the message waits and lands when its current turn ends. The tool result says which happened. Tab numbers come from check_session (1-based).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tab": {
+                            "type": "integer",
+                            "description": "Tab number from check_session, 1-based."
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "The message text delivered into that session's conversation."
+                        }
+                    },
+                    "required": ["tab", "message"]
+                }
+            }
         }
     ])
 }

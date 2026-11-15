@@ -247,7 +247,7 @@ impl App {
         }
         // Reports parked while the tab was busy come before the new message.
         if !steering && !tool_busy {
-            self.flush_parked_reports();
+            self.flush_parked_messages();
         }
         let mut message = Message::new(Role::User, value);
         message.images = std::mem::take(&mut self.attachments);
@@ -658,7 +658,7 @@ impl App {
         self.follow_tail = true;
         self.save_session();
         // A subagent that finished while the command ran reports now.
-        if !self.is_busy() && self.flush_parked_reports() {
+        if !self.is_busy() && self.flush_parked_messages() {
             return self.begin_turn();
         }
         Action::None
@@ -895,7 +895,7 @@ impl App {
         self.info("Response stopped. Partial output was kept.");
         self.save_session();
         // A subagent that finished while the turn streamed reports now.
-        if !self.is_busy() && self.flush_parked_reports() {
+        if !self.is_busy() && self.flush_parked_messages() {
             return self.begin_turn();
         }
         Action::Cancel(active.id)

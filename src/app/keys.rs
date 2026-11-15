@@ -896,7 +896,7 @@ impl App {
                 let queued = self.flush_queued_message();
                 // Finished subagents report after the tool results, so the
                 // model sees what happened in the same continuation.
-                let reported = self.flush_parked_reports();
+                let reported = self.flush_parked_messages();
                 if queued || reported {
                     return self.begin_turn();
                 }

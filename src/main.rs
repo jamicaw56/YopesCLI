@@ -100,6 +100,11 @@ async fn run() -> Result<()> {
         mpsc::unbounded_channel::<Result<(String, String), String>>();
     let (title_sender, mut title_receiver) = mpsc::unbounded_channel::<(u64, String)>();
     let (bash_sender, mut bash_receiver) = mpsc::unbounded_channel::<tools::BashNotice>();
+    // The talk tools (check_session, talk_to) send their requests through
+    // this channel: the app loop owns every tab, so only it can resolve a
+    // tab number and deliver a message into another session.
+    let (talk_sender, mut talk_receiver) = mpsc::unbounded_channel::<tools::TalkRequest>();
+    tools::install_talk(talk_sender);
     let channels = Channels {
         events: sender,
         tools: tool_sender,
@@ -397,6 +402,19 @@ async fn run() -> Result<()> {
                 match owner {
                     Some(owner) => app.with_tab(owner, |app| app.on_bash_notice(notice)),
                     None => app.on_bash_notice(notice),
+                }
+                redraw_now = true;
+            }
+            request = talk_receiver.recv() => {
+                let Some(request) = request else { break; };
+                // A talk request is answered from the live tab directory; a
+                // message that woke an idle tab returns that tab and the
+                // action to run, dispatched with the tab swapped in so the
+                // wake uses its own provider and working directory.
+                if let Some((owner, action)) = app.on_talk_request(request) {
+                    app.with_tab(owner, |app| {
+                        dispatch(action, app, &channels, &mut active_tasks);
+                    });
                 }
                 redraw_now = true;
             }

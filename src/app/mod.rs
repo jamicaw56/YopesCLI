@@ -38,6 +38,7 @@ mod palette;
 mod pickers;
 mod stream;
 mod tabs;
+mod talk;
 mod turn;
 
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
@@ -260,6 +261,9 @@ pub struct App {
     /// answers, and they deliver at the next idle point so a report never
     /// lands mid-stream and the model is alerted with a fresh turn.
     pub pending_reports: VecDeque<(u64, String)>,
+    /// Talk messages from other tabs waiting to land: parked while this tab
+    /// is busy, delivered at the next idle point like the subagent reports.
+    pub pending_talks: VecDeque<String>,
     /// Diffs for write and edit calls, shown under their results.
     pub changes: HashMap<String, ChangeReport>,
     /// Tool results the user expanded to see the full output.
@@ -390,6 +394,7 @@ impl App {
             user_command_running: false,
             running_delegates: Vec::new(),
             pending_reports: VecDeque::new(),
+            pending_talks: VecDeque::new(),
             changes: HashMap::new(),
             expanded: HashSet::new(),
             output_rows: Vec::new(),
