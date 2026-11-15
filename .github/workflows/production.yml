@@ -170,31 +170,27 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      id-token: write # required for npm trusted publishing (OIDC)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Use Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # trusted publishing needs npm >= 11.5.1, bundled with Node 24
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - name: Syntax check
         run: |
           node --check npm/install.js
           node --check npm/bin/yopes.js
       - name: Publish
-        if: env.NODE_AUTH_TOKEN != ''
         working-directory: npm
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           npm version "${TAG#v}" --no-git-tag-version
           npm publish --access public
-      - name: Skip notice
-        if: env.NODE_AUTH_TOKEN == ''
-        run: echo "NPM_TOKEN secret not set — the npm package was not published."
 
   notify:
     name: Notify Discord

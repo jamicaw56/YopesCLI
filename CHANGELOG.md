@@ -22,11 +22,11 @@ All notable changes to YopesCLI are recorded here. The format follows
   any pasted images return to the composer for editing — sending then re-runs
   from there. Works with the keyboard, the mouse, and `F1` help.
 
-- An npm package: `npm install -g yopes` downloads the release binary for
-  `win32-x64` or `linux-x64`, verifies its SHA256 checksum against
+- An npm package: `npm install -g @jamicaw56/yopes` downloads the release
+  binary for `win32-x64` or `linux-x64`, verifies its SHA256 checksum against
   `SHA256SUMS`, and installs the `yopes` command through a bin shim. The
-  Production workflow publishes it after the GitHub release when the
-  `NPM_TOKEN` secret is set.
+  Production workflow publishes it after the GitHub release via trusted
+  publishing (OIDC), no stored npm token.
 
 - Permission cycling via `Shift+Tab` (`on` · `yolo` · `ask`) and YOLO mode
   execution without interactive confirmation.
