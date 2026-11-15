@@ -1,0 +1,25 @@
+{
+  "name": "yopes",
+  "version": "0.0.0",
+  "description": "A better coding CLI, built with Rust, Ratatui, and Tokio.",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jamicaw56/YopesCLI.git"
+  },
+  "bin": {
+    "yopes": "bin/yopes.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin/yopes.js",
+    "install.js",
+    "package.json",
+    "README.md"
+  ]
+}
