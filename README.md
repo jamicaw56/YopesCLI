@@ -45,6 +45,14 @@ The [wiki](https://github.com/Jamicaw56/YopesCLI/wiki) holds the detail:
 
 In the checkout: [Architecture](docs/ARCHITECTURE.md), [Adding a tool](docs/ADDING-A-TOOL.md), [Changelog](CHANGELOG.md), [Security policy](SECURITY.md).
 
+## Known limitations
+
+- **Clipboard image pasting does not work and is recorded as unsolved.** On
+  Windows the clipboard is read through PowerShell, which on many setups sees
+  neither a bitmap nor PNG data, so `Ctrl+V` reports "the clipboard holds
+  neither text nor an image". Workaround: paste or type an image **file path**
+  as plain text — path pasting and `read_image` both work.
+
 ## Tests
 
 Run `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` before a pull request; CI runs the same checks on Linux and Windows. See [CONTRIBUTING.md](CONTRIBUTING.md#tests).

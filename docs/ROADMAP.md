@@ -1,5 +1,50 @@
 YopesCLI Major Update list
 
+## Decided — next stack
+
+Each item ships as its own reviewable PR, in this order. Small ones first so
+the stack stays reviewable; MCP last because it is the biggest.
+
+1. `/revert` — pick a previous prompt from the transcript, edit it in the
+   composer, and re-run from there: the session truncates back to that turn
+   and a fresh response streams. UI-only, no protocol changes.
+   **Shipped — PR #49.**
+2. Custom slash commands — a `.yopes/commands/name.md` file becomes `/name`;
+   its body is the prompt, `$ARGUMENTS` swaps in the rest of the line.
+3. Custom tools — a `.yopes/tools/name.json` file (name, description, JSON
+   Schema for the arguments, a command template with `{{arg}}` substitution)
+   becomes a tool call the model can invoke. The command runs through the
+   existing approval and `run_command` path, and its output returns as the
+   tool result.
+4. Headless mode — `yopes -p "prompt"` runs one turn non-interactively: the
+   answer prints, the exit code is 0 on success and 1 on error, tools keep
+   their normal permission mode (`--yolo` to skip approval). For scripts and
+   CI.
+5. `/copy [n]` — copy the last (or nth) assistant reply to the clipboard.
+   The `CopyClipboard` action and `write_clipboard` already exist, so this is
+   one command plus a transcript lookup.
+6. `/export [file]` — write the transcript to a Markdown file, default
+   `yopes-<session-id>.md` in the workspace; headers per turn, tool calls
+   folded to one line.
+7. Session search — `/sessions <query>` filters saved sessions by message
+   content, not only the title: scan the JSON files newest first, show the
+   matching excerpt in the picker row.
+8. `.yopesignore` — gitignore-style rules honored by `glob`, `grep`, and
+   directory listings, so `node_modules` and build output stop eating the
+   context. Same crate as `.gitignore` parsing if a tiny one exists.
+9. `/init` — scan the workspace (languages, build files, existing
+   instructions) and draft an `AGENTS.md`, shown in the composer for editing
+   before `write_file` asks for approval.
+10. Skills registry — `/skill add <git-url>` clones or downloads a skill
+    pack into `~/.yopes/skills`; `/skill remove <name>` drops it. Reuses the
+    existing skill discovery, no new format.
+11. MCP client — stdio servers configured in `.yopes/config.toml`; their tools
+    merge into the catalog and get per-tool approval like built-ins.
+
+Parked: hooks — the custom tools format may cover the same need; revisit
+after item 3 settles.
+
+--------------------------------------------
 
 
 
