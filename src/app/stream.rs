@@ -242,8 +242,17 @@ impl App {
                         return self.advance_tools();
                     }
                 }
-                let diffs =
-                    tools::applied_change_all(&event.call, before, existed, &running.targets);
+                // A successful move_to re-roots this tab: the tool only
+                // validated the target, the tab applies it to its own
+                // working directory. Other tabs keep theirs.
+                if event.call.function.name == "move_to" {
+                    if let Some(target) = tools::move_target(&event.call, &self.working_dir) {
+                        self.working_dir = target;
+                    }
+                }
+                let diffs = tools::scoped_workspace(&self.working_dir, || {
+                    tools::applied_change_all(&event.call, before, existed, &running.targets)
+                });
                 if !diffs.is_empty() {
                     self.changes.insert(
                         event.call.id.clone(),
@@ -258,9 +267,11 @@ impl App {
             Err(error) => format!("Error: {error}"),
         };
         let images = if event.call.function.name == "read_image" {
-            images::tool_image_attachment(&event.call)
-                .into_iter()
-                .collect()
+            tools::scoped_workspace(&self.working_dir, || {
+                images::tool_image_attachment(&event.call)
+            })
+            .into_iter()
+            .collect()
         } else {
             Vec::new()
         };

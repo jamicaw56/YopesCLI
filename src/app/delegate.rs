@@ -12,8 +12,15 @@ use super::*;
 
 /// The subagent brief: appended to the system prompt for every run.
 pub(crate) const SUBAGENT_BRIEF: &str = "You are a subagent inside yopes, a terminal coding \
-    assistant. Answer the task given below with only the useful result, no preamble, no offers \
-    to help further. You have no tools; rely only on the context in the task.";
+    assistant. You have the same tools as the main session — use them when the task needs \
+    files, commands, or the web, exactly as the main session would. Answer the task given \
+    below with only the useful final result, no preamble, no offers to help further.";
+
+/// The brief for the model that names a subagent task: the sidebar and the
+/// `/agents` rows show that name instead of the raw task text.
+pub(crate) const SUBAGENT_NAME_BRIEF: &str = "You name subagent tasks for a sidebar. Answer with \
+    only a short name, at most five words, capitalized, no quotes, no final punctuation. You \
+    have no tools.";
 
 /// How many runs stay in memory: `/agents` shows the most recent ones.
 const MAX_SUBAGENTS: usize = 50;
@@ -22,6 +29,12 @@ const MAX_SUBAGENTS: usize = 50;
 const MAX_STORED_CHARS: usize = 200_000;
 /// Characters of the task shown on a picker row.
 const TASK_EXCERPT: usize = 46;
+/// Longest row label shown on a picker row: the model's name is already
+/// short, but a long name is clipped the same as a long task line was.
+const LABEL_CHARS: usize = 46;
+/// How many tool rounds one subagent may run before it is stopped: a guard
+/// against a runaway loop burning tokens in the background forever.
+pub(crate) const MAX_SUBAGENT_TOOL_ROUNDS: usize = 20;
 
 /// The status of one subagent run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +48,8 @@ pub(crate) enum SubagentStatus {
 pub(crate) struct Subagent {
     pub(crate) id: u64,
     pub(crate) task: String,
+    /// The name the model gave this task, shown instead of the task text.
+    pub(crate) name: Option<String>,
     /// The response, streamed live while the run is in flight.
     pub(crate) answer: String,
     /// Reasoning streamed before the answer, when the provider sends it.
@@ -67,6 +82,21 @@ impl Subagent {
         }
         excerpt
     }
+
+    /// The row summary: the name the model gave the task once it arrived,
+    /// falling back to the task's first line only until naming lands.
+    pub(crate) fn row_label(&self) -> String {
+        match &self.name {
+            Some(name) => {
+                let mut label: String = name.chars().take(LABEL_CHARS).collect();
+                if name.chars().count() > LABEL_CHARS {
+                    label.push('…');
+                }
+                label
+            }
+            None => self.task_excerpt(),
+        }
+    }
 }
 
 /// An update from a running subagent, sent through the delegate channel.
@@ -88,6 +118,12 @@ pub(crate) enum DelegateUpdate {
     Note {
         run: u64,
         text: String,
+    },
+    /// The name the model gave this task: the sidebar and `/agents` rows
+    /// show it instead of the raw task text.
+    Named {
+        run: u64,
+        name: String,
     },
     /// The request ended: `failed` picks the final status. The answer text
     /// itself already streamed in through the deltas.
@@ -119,6 +155,7 @@ impl App {
         self.subagents.push(Subagent {
             id,
             task,
+            name: None,
             answer: String::new(),
             reasoning: String::new(),
             note: None,
@@ -141,6 +178,7 @@ impl App {
             | DelegateUpdate::Reasoning { run, .. }
             | DelegateUpdate::Usage { run, .. }
             | DelegateUpdate::Note { run, .. }
+            | DelegateUpdate::Named { run, .. }
             | DelegateUpdate::Finished { run, .. } => *run,
         };
         let Some(agent) = self.subagents.iter_mut().find(|agent| agent.id == run) else {
@@ -159,6 +197,25 @@ impl App {
                 usage.1 = usage.1.max(completion_tokens);
             }
             DelegateUpdate::Note { text, .. } => agent.note = Some(text),
+            DelegateUpdate::Named { name, .. } => {
+                // The same cleanup the session title gets: one non-empty
+                // line, quotes stripped, bounded to the row width.
+                let named: String = name
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or_default()
+                    .trim_matches(|character: char| {
+                        matches!(character, '"' | '\'' | '`' | '*' | '#')
+                    })
+                    .chars()
+                    .take(48)
+                    .collect();
+                let named = named.trim();
+                if !named.is_empty() {
+                    agent.name = Some(named.to_owned());
+                }
+            }
             DelegateUpdate::Finished { failed, .. } => {
                 agent.status = if failed {
                     SubagentStatus::Failed
@@ -188,7 +245,8 @@ impl App {
     }
 
     /// `/agents` rows: the filtered runs, newest first, as indices into
-    /// `subagents`.
+    /// `subagents`. Both the model-given name and the task text match, so a
+    /// run is findable by either.
     pub(crate) fn agents_matches(&self) -> Vec<usize> {
         let filter = self
             .agents_picker
@@ -197,7 +255,13 @@ impl App {
         (0..self.subagents.len())
             .rev()
             .filter(|&index| {
-                filter.is_empty() || self.subagents[index].task.to_lowercase().contains(&filter)
+                let agent = &self.subagents[index];
+                filter.is_empty()
+                    || agent.task.to_lowercase().contains(&filter)
+                    || agent
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| name.to_lowercase().contains(&filter))
             })
             .collect()
     }
@@ -318,6 +382,38 @@ mod tests {
         let agent = &app.subagents[0];
         assert_eq!(agent.status, SubagentStatus::Failed);
         assert_eq!(agent.note.as_deref(), Some("attempt 1 failed: timeout"));
+    }
+
+    #[test]
+    fn the_model_names_a_task_and_the_row_shows_it() {
+        let (mut app, run) = app_with_run();
+        // Until the name arrives the row falls back to the task excerpt.
+        assert_eq!(app.subagents[0].row_label(), "Write the tests for the parser");
+
+        app.on_delegate_update(DelegateUpdate::Named {
+            run,
+            name: "\"Parser unit tests\"\n".to_owned(),
+        });
+        assert_eq!(app.subagents[0].row_label(), "Parser unit tests");
+
+        // An empty naming answer changes nothing.
+        app.on_delegate_update(DelegateUpdate::Named {
+            run,
+            name: "  \n \n".to_owned(),
+        });
+        assert_eq!(app.subagents[0].row_label(), "Parser unit tests");
+    }
+
+    #[test]
+    fn the_picker_filters_by_the_model_name_too() {
+        let (mut app, run) = app_with_run();
+        app.on_delegate_update(DelegateUpdate::Named {
+            run,
+            name: "Parser unit tests".to_owned(),
+        });
+        app.open_agents_picker();
+        app.agents_picker.as_mut().unwrap().filter = "unit".to_owned();
+        assert_eq!(app.agents_matches(), vec![0]);
     }
 
     #[test]

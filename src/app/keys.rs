@@ -808,6 +808,13 @@ impl App {
     /// Start `call`, then keep draining auto-approved delegate calls so
     /// several subagents stack up instead of waiting on each other.
     fn start_and_advance(&mut self, call: ToolCall) -> Action {
+        // Change previews and the before-state resolve against this tab's
+        // own working directory.
+        let root = self.working_dir.clone();
+        tools::scoped_workspace(&root, || self.start_and_advance_in_tab(call))
+    }
+
+    fn start_and_advance_in_tab(&mut self, call: ToolCall) -> Action {
         let is_delegate = call.function.name == "delegate";
         if is_delegate {
             self.begin_delegate(call.clone());
@@ -865,6 +872,13 @@ impl App {
     }
 
     pub(crate) fn advance_tools(&mut self) -> Action {
+        // Approval rules and change previews resolve against this tab's own
+        // working directory.
+        let root = self.working_dir.clone();
+        tools::scoped_workspace(&root, || self.advance_tools_in_tab())
+    }
+
+    fn advance_tools_in_tab(&mut self) -> Action {
         if self.is_streaming() || self.approval.is_some() || self.running_tool.is_some() {
             return Action::None;
         }

@@ -8,6 +8,7 @@ mod messages;
 mod retry;
 mod sse;
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -226,15 +227,21 @@ impl Backend {
         self.models = models;
     }
 
-    /// One helper request for the `delegate` tool: empty conversation, no
-    /// tools, and the answer text as the result. Uses `mode_note` as the
-    /// subagent brief appended to the system prompt.
-    pub async fn complete_once(self, brief: &'static str, task: &str) -> Result<String> {
+    /// One helper request: empty conversation, no tools, and the answer text
+    /// as the result. Used for the `delegate` tool and the naming requests.
+    /// `mode_note` is appended to the system prompt; `workspace` is the root
+    /// the prompt's working-directory line shows.
+    pub async fn complete_once(
+        self,
+        brief: &'static str,
+        task: &str,
+        workspace: PathBuf,
+    ) -> Result<String> {
         // The request id never reaches the app: this channel is task-local.
         let request_id = u64::MAX;
         let (events, mut receiver) = mpsc::unbounded_channel();
         let messages = vec![Message::new(Role::User, task)];
-        self.stream(request_id, messages, false, Some(brief), events)
+        self.stream(request_id, messages, false, Some(brief), workspace, events)
             .await;
         let mut text = String::new();
         while let Some(event) = receiver.recv().await {
@@ -257,6 +264,7 @@ impl Backend {
         messages: Vec<Message>,
         tools_enabled: bool,
         mode_note: Option<&'static str>,
+        workspace: PathBuf,
         events: mpsc::UnboundedSender<StreamEvent>,
     ) {
         let tooling = tools_enabled
@@ -281,19 +289,19 @@ impl Backend {
                 Err(anyhow!("no API key configured; run /connect"))
             }
             ProviderKind::OpenAi | ProviderKind::Custom => {
-                self.stream_openai(request_id, &messages, tooling, mode_note, &events)
+                self.stream_openai(request_id, &messages, tooling, mode_note, &workspace, &events)
                     .await
             }
             ProviderKind::Ollama => {
-                self.stream_ollama(request_id, &messages, mode_note, &events)
+                self.stream_ollama(request_id, &messages, mode_note, &workspace, &events)
                     .await
             }
             ProviderKind::Anthropic => {
-                self.stream_anthropic(request_id, &messages, tooling, mode_note, &events)
+                self.stream_anthropic(request_id, &messages, tooling, mode_note, &workspace, &events)
                     .await
             }
             ProviderKind::Gemini => {
-                self.stream_gemini(request_id, &messages, tooling, mode_note, &events)
+                self.stream_gemini(request_id, &messages, tooling, mode_note, &workspace, &events)
                     .await
             }
         };
@@ -316,6 +324,7 @@ impl Backend {
         messages: &[Message],
         tooling: bool,
         mode_note: Option<&'static str>,
+        workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         let mut request = serde_json::json!({
@@ -333,6 +342,7 @@ impl Backend {
                 },
                 self.custom_prompt.as_deref(),
                 mode_note,
+                workspace,
             )?,
             "stream": true,
             "stream_options": { "include_usage": true },
@@ -380,6 +390,7 @@ impl Backend {
         request_id: u64,
         messages: &[Message],
         mode_note: Option<&'static str>,
+        workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         let request = serde_json::json!({
@@ -390,6 +401,7 @@ impl Backend {
                 ImageStyle::Ollama,
                 self.custom_prompt.as_deref(),
                 mode_note,
+                workspace,
             )?,
             "stream": true,
         });
@@ -412,10 +424,16 @@ impl Backend {
         messages: &[Message],
         tooling: bool,
         mode_note: Option<&'static str>,
+        workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
-        let (system, payload_messages) =
-            anthropic_request_payload(messages, tooling, self.custom_prompt.as_deref(), mode_note)?;
+        let (system, payload_messages) = anthropic_request_payload(
+            messages,
+            tooling,
+            self.custom_prompt.as_deref(),
+            mode_note,
+            workspace,
+        )?;
         let mut request = serde_json::json!({
             "model": self.model,
             "max_tokens": 8192,
@@ -479,10 +497,16 @@ impl Backend {
         messages: &[Message],
         tooling: bool,
         mode_note: Option<&'static str>,
+        workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
-        let (system_instruction, contents) =
-            gemini_request_payload(messages, tooling, self.custom_prompt.as_deref(), mode_note)?;
+        let (system_instruction, contents) = gemini_request_payload(
+            messages,
+            tooling,
+            self.custom_prompt.as_deref(),
+            mode_note,
+            workspace,
+        )?;
         let mut request = serde_json::json!({
             "contents": contents,
         });

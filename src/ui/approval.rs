@@ -86,7 +86,7 @@ pub(super) fn tool_result_lines(
     app: &App,
     message: &Message,
     width: u16,
-    rows: &mut Vec<(u16, String)>,
+    rows: &mut Vec<(usize, String)>,
     start_row: usize,
     call_name: Option<&str>,
 ) -> Vec<Line<'static>> {
@@ -216,7 +216,7 @@ pub(super) fn tool_result_lines(
         // Rows are traced so a click anywhere on the frame toggles it. The
         // leading blank line is row 0 of `framed`, so skip it.
         for offset in 1..framed.len() {
-            rows.push((start_row.saturating_add(offset) as u16, call_id.clone()));
+            rows.push((start_row.saturating_add(offset), call_id.clone()));
         }
     }
     framed

@@ -18,13 +18,14 @@ mod todo;
 mod web;
 
 use std::{
+    cell::RefCell,
     env, fs,
     io::Read,
     path::{Path, PathBuf},
 };
 
 pub use definitions::definitions;
-pub(crate) use files::{change_preview, edit_targets};
+pub(crate) use files::{change_preview, edit_targets, move_target};
 pub use policy::{requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
 pub(crate) use shell::kill_spawned_commands;
@@ -78,8 +79,33 @@ pub struct ChangePreview {
     pub note: Option<String>,
 }
 
-pub fn execute(call: &ToolCall, web_key: Option<&str>) -> Result<String> {
-    match call.function.name.as_str() {
+thread_local! {
+    /// The workspace root the current tool task resolves relative paths
+    /// against. Every tab carries its own directory, so `execute` scopes it
+    /// per task; without a scope the process working directory applies.
+    static WORKSPACE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Run `body` with relative paths resolving against `root`. The previous
+/// root is restored afterwards, so nested scopes and tests stay honest.
+pub fn scoped_workspace<T>(root: &Path, body: impl FnOnce() -> T) -> T {
+    WORKSPACE.with(|cell| {
+        let previous = cell.borrow_mut().replace(root.to_path_buf());
+        let result = body();
+        *cell.borrow_mut() = previous;
+        result
+    })
+}
+
+/// Where relative tool paths resolve against right now: the scoped root when
+/// one is set, the process working directory otherwise.
+pub fn workspace() -> PathBuf {
+    WORKSPACE.with(|cell| cell.borrow().clone())
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Result<String> {
+    scoped_workspace(workspace, || match call.function.name.as_str() {
         "list_dir" => files::list_dir(&call.function.arguments),
         "read_file" => files::read_file(&call.function.arguments),
         "multi_read" => files::multi_read(&call.function.arguments),
@@ -100,7 +126,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>) -> Result<String> {
         // Handled by the session loop: the subagent needs the backend.
         "delegate" => bail!("delegate cannot run outside the session loop"),
         other => bail!("unknown tool `{other}`"),
-    }
+    })
 }
 
 /// The `task` argument of a `delegate` call, when it is a non-empty string.
@@ -136,17 +162,13 @@ pub fn delegate_task_checked(call: &ToolCall) -> Result<String, String> {
     Ok(task)
 }
 
-/// Execute a command directly for a user.
-pub fn run_user_command(command: &str) -> Result<String> {
+/// Execute a command directly for a user, in the tab's workspace.
+pub fn run_user_command(command: &str, workspace: &Path) -> Result<String> {
     let args = serde_json::json!({
         "command": command,
     })
     .to_string();
-    shell::run_command(&args)
-}
-
-fn workspace() -> PathBuf {
-    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    scoped_workspace(workspace, || shell::run_command(&args))
 }
 
 fn resolve(path: &str) -> PathBuf {
@@ -212,6 +234,7 @@ mod tests {
     use super::{TOOL_NAMES, definitions, requires_approval};
     use crate::session::ToolCall;
     use serde_json::json;
+    use std::path::Path;
 
     #[test]
     fn definitions_cover_every_tool() {
@@ -303,6 +326,7 @@ mod tests {
         let output = execute(
             &ToolCall::new("call_20", "multi_edit", batch.to_string()),
             None,
+            Path::new("."),
         )
         .unwrap();
         assert!(
@@ -322,6 +346,7 @@ mod tests {
         let error = execute(
             &ToolCall::new("call_21", "multi_edit", broken.to_string()),
             None,
+            Path::new("."),
         )
         .unwrap_err()
         .to_string();
@@ -357,6 +382,7 @@ mod tests {
         let output = execute(
             &ToolCall::new("call_23", "edit_file", single.to_string()),
             None,
+            Path::new("."),
         )
         .unwrap();
         assert!(output.contains("Replaced 1 occurrence"), "{output}");
@@ -375,6 +401,7 @@ mod tests {
         execute(
             &ToolCall::new("call_24", "edit_file", all.to_string()),
             None,
+            Path::new("."),
         )
         .unwrap();
         assert_eq!(
@@ -390,6 +417,7 @@ mod tests {
         execute(
             &ToolCall::new("call_25", "edit_file", leading_lf.to_string()),
             None,
+            Path::new("."),
         )
         .unwrap();
         let content = fs::read_to_string(&path).unwrap();
@@ -420,7 +448,7 @@ mod tests {
         // Only the preview ran; the files are still as they were.
         assert_eq!(fs::read_to_string(dir.join("n.txt")).unwrap(), "aa\nbb\n");
         assert_eq!(fs::read_to_string(dir.join("m.txt")).unwrap(), "cc\n");
-        assert!(execute(&call, None).is_ok());
+        assert!(execute(&call, None, Path::new(".")).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -434,6 +462,7 @@ mod tests {
             let error = execute(
                 &ToolCall::new("call_40", "bash_background", r#"{"command":"echo hi"}"#),
                 None,
+                Path::new("."),
             )
             .unwrap_err()
             .to_string();
@@ -455,13 +484,14 @@ mod tests {
                 r#"{"command":"printf step-one","timeout_seconds":30}"#,
             ),
             None,
+            Path::new("."),
         )
         .unwrap();
         let id = job_id(&started);
         let arguments = format!(r#"{{"job_id":{id}}}"#);
         let mut output = String::new();
         for _ in 0..50 {
-            output = execute(&ToolCall::new("call_42", "bash_output", &arguments), None).unwrap();
+            output = execute(&ToolCall::new("call_42", "bash_output", &arguments), None, Path::new(".")).unwrap();
             if output.contains("Exit code") {
                 break;
             }
@@ -474,6 +504,7 @@ mod tests {
         let error = execute(
             &ToolCall::new("call_43", "bash_output", r#"{"job_id":999999}"#),
             None,
+            Path::new("."),
         )
         .unwrap_err()
         .to_string();
@@ -487,14 +518,15 @@ mod tests {
                 r#"{"command":"sleep 60","timeout_seconds":60}"#,
             ),
             None,
+            Path::new("."),
         )
         .unwrap();
         let id = job_id(&sleeper);
         let arguments = format!(r#"{{"job_id":{id}}}"#);
-        let killed = execute(&ToolCall::new("call_45", "bash_kill", &arguments), None).unwrap();
+        let killed = execute(&ToolCall::new("call_45", "bash_kill", &arguments), None, Path::new(".")).unwrap();
         assert!(killed.contains("Killed"), "{killed}");
         thread::sleep(Duration::from_millis(50));
-        let after = execute(&ToolCall::new("call_46", "bash_output", &arguments), None).unwrap();
+        let after = execute(&ToolCall::new("call_46", "bash_output", &arguments), None, Path::new(".")).unwrap();
         assert!(after.contains("Exit code"), "{after}");
     }
 
@@ -504,10 +536,12 @@ mod tests {
         let search = ToolCall::new("call_3", "web_search", r#"{"query":"rust 2026 release"}"#);
         assert_eq!(preview(&search), "rust 2026 release");
 
-        let error = execute(&search, None).unwrap_err().to_string();
+        let error = execute(&search, None, Path::new(".")).unwrap_err().to_string();
         assert!(error.contains("TAVILY_API_KEY"));
         let empty = ToolCall::new("call_4", "web_search", r#"{"query":"  "}"#);
-        let error = execute(&empty, Some("tvly-test")).unwrap_err().to_string();
+        let error = execute(&empty, Some("tvly-test"), Path::new("."))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("query"));
     }
 
@@ -516,20 +550,20 @@ mod tests {
         use super::execute;
         use super::web::strip_html;
         let empty = ToolCall::new("call_30", "web_fetch", r#"{"url":"  "}"#);
-        let error = execute(&empty, None).unwrap_err().to_string();
+        let error = execute(&empty, None, Path::new(".")).unwrap_err().to_string();
         assert!(error.contains("url"), "{error}");
         let scheme = ToolCall::new("call_31", "web_fetch", r#"{"url":"ftp://example.test"}"#);
-        let error = execute(&scheme, None).unwrap_err().to_string();
+        let error = execute(&scheme, None, Path::new(".")).unwrap_err().to_string();
         assert!(error.contains("http"), "{error}");
         let local = ToolCall::new("call_32", "web_fetch", r#"{"url":"http://127.0.0.1:8080"}"#);
-        let error = execute(&local, None).unwrap_err().to_string();
+        let error = execute(&local, None, Path::new(".")).unwrap_err().to_string();
         assert!(error.contains("blocked"), "{error}");
         let meta = ToolCall::new(
             "call_33",
             "web_fetch",
             r#"{"url":"http://169.254.169.254"}"#,
         );
-        let error = execute(&meta, None).unwrap_err().to_string();
+        let error = execute(&meta, None, Path::new(".")).unwrap_err().to_string();
         assert!(error.contains("blocked"), "{error}");
 
         assert_eq!(
@@ -604,19 +638,19 @@ mod tests {
             )
         };
         let all = ToolCall::new("call_10", "glob", args("**/*.md"));
-        let output = execute(&all, None).unwrap();
+        let output = execute(&all, None, Path::new(".")).unwrap();
         assert!(output.contains("README.md"), "{output}");
         assert!(output.contains("sub/note.md"), "{output}");
         assert!(output.contains("sub/deep/last.md"), "{output}");
         assert!(!output.contains("target"), "{output}");
 
         let shallow = ToolCall::new("call_11", "glob", args("*.md"));
-        let output = execute(&shallow, None).unwrap();
+        let output = execute(&shallow, None, Path::new(".")).unwrap();
         assert!(output.contains("README.md"));
         assert!(!output.contains("note.md"), "{output}");
 
         let missing = ToolCall::new("call_12", "glob", args("*.toml"));
-        let output = execute(&missing, None).unwrap();
+        let output = execute(&missing, None, Path::new(".")).unwrap();
         assert!(output.contains("(no matches)"), "{output}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -639,7 +673,7 @@ mod tests {
                 dir.display().to_string()
             )
         };
-        let every = execute(&ToolCall::new("call_13", "grep", args("")), None).unwrap();
+        let every = execute(&ToolCall::new("call_13", "grep", args("")), None, Path::new(".")).unwrap();
         assert!(every.contains("top.txt:1:"), "{every}");
         assert!(every.contains("top.txt:3:"), "{every}");
         assert!(every.contains("code.rs:1:"), "{every}");
@@ -648,6 +682,7 @@ mod tests {
         let only_rust = execute(
             &ToolCall::new("call_14", "grep", args(r#","include":"*.rs""#)),
             None,
+            Path::new("."),
         )
         .unwrap();
         assert!(only_rust.contains("code.rs:1:"));
@@ -656,6 +691,7 @@ mod tests {
         let insensitive = execute(
             &ToolCall::new("call_15", "grep", args(r#","ignore_case":true"#)),
             None,
+            Path::new("."),
         )
         .unwrap();
         assert!(insensitive.contains("top.txt:1:"), "{insensitive}");
@@ -664,7 +700,7 @@ mod tests {
             r#"{{"pattern":"absent-nowhere","path":{:?}}}"#,
             dir.display().to_string()
         );
-        let absent = execute(&ToolCall::new("call_16", "grep", absent_args), None).unwrap();
+        let absent = execute(&ToolCall::new("call_16", "grep", absent_args), None, Path::new(".")).unwrap();
         assert!(absent.contains("(no matches)"), "{absent}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -682,14 +718,14 @@ mod tests {
             "read_file",
             format!(r#"{{"path":{:?}}}"#, dir.display().to_string()),
         );
-        let output = execute(&call, None).unwrap();
+        let output = execute(&call, None, Path::new(".")).unwrap();
         assert!(output.contains("note.txt"), "{output}");
         assert!(output.contains("nested/"), "{output}");
         // Dot also works, and line ranges stay file-only.
         let listing = ToolCall::new("call_8", "read_file", r#"{"path":"."}"#);
-        assert!(execute(&listing, None).is_ok());
+        assert!(execute(&listing, None, Path::new(".")).is_ok());
         let ranged = ToolCall::new("call_9", "read_file", r#"{"path":".","start_line":2}"#);
-        let error = execute(&ranged, None).unwrap_err().to_string();
+        let error = execute(&ranged, None, Path::new(".")).unwrap_err().to_string();
         assert!(error.contains("directory"), "{error}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -715,7 +751,7 @@ mod tests {
                 dir.join("b.txt").display().to_string()
             ),
         );
-        let output = execute(&both, None).unwrap();
+        let output = execute(&both, None, Path::new(".")).unwrap();
         assert!(output.contains("alpha"), "{output}");
         assert!(output.contains("beta"), "{output}");
 
@@ -727,13 +763,13 @@ mod tests {
                 dir.display().to_string()
             ),
         );
-        let all = execute(&folder, None).unwrap();
+        let all = execute(&folder, None, Path::new(".")).unwrap();
         assert!(all.contains("alpha"), "{all}");
         assert!(all.contains("beta"), "{all}");
         assert!(all.contains("skip.bin"), "{all}");
 
         let empty = ToolCall::new("call_23", "multi_read", r#"{"paths":[]}"#);
-        assert!(execute(&empty, None).is_err());
+        assert!(execute(&empty, None, Path::new(".")).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -757,7 +793,7 @@ mod tests {
                 dir.display().to_string()
             ),
         );
-        let all = execute(&folder, None).unwrap();
+        let all = execute(&folder, None, Path::new(".")).unwrap();
         assert!(all.contains("output truncated"), "{all}");
         assert!(!all.contains("small-marker"), "{all}");
         assert!(all.chars().count() <= 16_000 + 20, "{all}");
@@ -768,7 +804,7 @@ mod tests {
     fn todo_write_allows_an_empty_list_to_clear_and_previews_the_count() {
         use super::execute;
         let empty = ToolCall::new("call_5", "todo_write", r#"{"items":[]}"#);
-        assert_eq!(execute(&empty, None).unwrap(), "[]");
+        assert_eq!(execute(&empty, None, Path::new(".")).unwrap(), "[]");
 
         let call = ToolCall::new(
             "call_6",
@@ -792,52 +828,55 @@ mod tests {
         assert_eq!(preview(&command), "cargo fmt --all");
     }
 
-    /// Restores the process working directory when the test ends, however it
-    /// ends: `cargo test` runs tests in parallel and they share the cwd.
-    struct RestoreCwd(std::path::PathBuf);
-    impl Drop for RestoreCwd {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
-        }
-    }
-
     #[test]
-    fn move_to_changes_directory_and_normalizes_dots() {
+    fn move_to_reports_a_normalized_target_without_touching_the_process_cwd() {
         use super::execute;
+        use super::move_target;
         use std::fs;
-        let previous = std::env::current_dir().unwrap();
-        let _guard = RestoreCwd(previous.clone());
+        let before = std::env::current_dir().unwrap();
         let dir = std::env::temp_dir().join(format!("yopes-moveto-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("inner/deeper")).unwrap();
         fs::write(dir.join("f.txt"), "x").unwrap();
+        let workspace = dir.display().to_string();
 
-        let into = |path: &str| {
-            execute(
-                &ToolCall::new("call_30", "move_to", json!({ "path": path }).to_string()),
-                None,
-            )
-        };
-        let absolute = dir.join("inner").display().to_string();
-        let output = into(&absolute).unwrap();
-        assert!(output.contains("Working directory moved"), "{output}");
-        assert_eq!(std::env::current_dir().unwrap(), dir.join("inner"));
+        // A relative target resolves against the passed workspace, and `.`
+        // and `..` collapse instead of leaving literal components behind.
+        let normalized = ToolCall::new(
+            "call_30",
+            "move_to",
+            json!({ "path": "inner/../inner/deeper" }).to_string(),
+        );
+        let output = execute(&normalized, None, Path::new(&workspace)).unwrap();
+        assert!(output.contains("Working directory"), "{output}");
+        assert_eq!(
+            move_target(&normalized, Path::new(&workspace)),
+            Some(dir.join("inner/deeper"))
+        );
 
-        // A relative target with `.` resolves against the new cwd, and `..`
-        // collapses instead of leaving the literal component in the path.
-        into(r#"./deeper"#).unwrap();
-        assert_eq!(std::env::current_dir().unwrap(), dir.join("inner/deeper"));
-
-        // A file target fails and the cwd stays put.
+        // A file target fails.
         let file = dir.join("f.txt").display().to_string();
-        let error = into(&file).unwrap_err().to_string();
+        let error = execute(
+            &ToolCall::new("call_31", "move_to", json!({ "path": file }).to_string()),
+            None,
+            Path::new(&workspace),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("is not a directory"), "{error}");
-        assert_eq!(std::env::current_dir().unwrap(), dir.join("inner/deeper"));
 
         // A missing target fails the same way.
-        let missing = dir.join("absent").display().to_string();
-        let error = into(&missing).unwrap_err().to_string();
+        let error = execute(
+            &ToolCall::new("call_32", "move_to", json!({ "path": "absent" }).to_string()),
+            None,
+            Path::new(&workspace),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("is not a directory"), "{error}");
+
+        // The process working directory never moved: tabs stay isolated.
+        assert_eq!(std::env::current_dir().unwrap(), before);
         let _ = fs::remove_dir_all(&dir);
     }
 

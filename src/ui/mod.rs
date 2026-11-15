@@ -346,9 +346,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_header(frame, app, chunks[0]);
-    // The sidebar of subagent runs takes the transcript's right edge when
-    // there is room for it and anything to show.
-    let show_sidebar = !app.subagents.is_empty() && area.width >= SIDEBAR_MIN_WIDTH + 60;
+    // The sidebar of subagent runs takes the transcript's right edge while
+    // anything still streams, and steps aside once every run has finished —
+    // a finished run means finished work, not a panel parked over the
+    // transcript. `/agents` or the viewer still reach every run afterwards.
+    let show_sidebar = app.any_subagent_running() && area.width >= SIDEBAR_MIN_WIDTH + 60;
     let transcript_area = if show_sidebar {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
