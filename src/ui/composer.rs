@@ -57,6 +57,9 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     // Session tabs: `◐` while a tab streams, `!` when it wants a decision.
     // Click or Alt+1..9 to switch; the active one is accent + bold.
     app.tab_hits.clear();
+    app.tab_close_hits.clear();
+    app.tab_new_hit = None;
+    let tab_row = area.y;
     let active = app.tab_index();
     let mut x = inner.x
         + title_spans
@@ -77,8 +80,9 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         let label = format!("{} {}", index + 1, app.tab_title(index));
         let sep_w: u16 = if index > 0 { 3 } else { 0 };
         let marker_w: u16 = if marker.is_empty() { 0 } else { 2 };
+        let close_w: u16 = 2; // " ×"
         let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
-        if x.saturating_add(sep_w + marker_w + label_w) > end_x {
+        if x.saturating_add(sep_w + marker_w + label_w + close_w) > end_x {
             break;
         }
         if index > 0 {
@@ -103,6 +107,21 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         x = x.saturating_add(label_w);
         let start = x.saturating_sub(label_w + marker_w);
         app.tab_hits.push((start, x, index));
+        // `×` after each label: mouse users close that tab without switching.
+        title_spans.push(Span::styled(" ×", Style::default().fg(muted())));
+        x = x.saturating_add(close_w);
+        let close_start = x.saturating_sub(close_w);
+        app.tab_close_hits.push((close_start, x, tab_row, index));
+    }
+    // `+` after the last tab: opens one. A click past the limit is told so.
+    let plus_w: u16 = 3; // " +"
+    if x.saturating_add(plus_w) <= end_x {
+        title_spans.push(Span::styled(
+            " +",
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+        ));
+        x = x.saturating_add(plus_w);
+        app.tab_new_hit = Some((x.saturating_sub(plus_w - 1), x, tab_row));
     }
     let title = Line::from(title_spans);
     frame.render_widget(Paragraph::new(title), columns[0]);
@@ -311,7 +330,10 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("Progress {done}/{total}"),
                 Style::default().fg(accent()).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" · todo_write · click to fold", Style::default().fg(muted())),
+            Span::styled(
+                " · todo_write · click to fold",
+                Style::default().fg(muted()),
+            ),
         ]),
     );
     frame.render_widget(Paragraph::new(lines), inner);

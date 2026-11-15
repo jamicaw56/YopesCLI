@@ -8,12 +8,23 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
-- Permission cycling via `Shift+Tab` (`on` · `yolo` · `ask`), YOLO mode execution without interactive confirmation, and `/yolo` shortcut command.
+- Permission cycling via `Shift+Tab` (`on` · `yolo` · `ask`) and YOLO mode
+  execution without interactive confirmation.
 
 
 - Release builds are self-contained on Ubuntu runners: the Windows binary is
   cross-compiled with MinGW instead of running on the Windows hosted pool, so
   release creation no longer depends on Windows runner availability.
+
+### Fixed
+
+- Pasting an image path or a clipboard image now shows an `[Image N]`
+  placeholder in the composer instead of nothing. The real path stays hidden
+  in an internal map and is swapped back on submit (non-vision models get the
+  path as text, vision models also get the image block); backspace deletes a
+  whole placeholder with its map entry, and the numbering restarts with every
+  sent prompt. `file://` URIs with percent escapes and shell-escaped spaces
+  are understood.
 
 ### Added
 

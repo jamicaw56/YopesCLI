@@ -268,7 +268,10 @@ fn quote(line: &str) -> Option<(usize, &str)> {
 }
 
 fn quote_line(depth: usize, text: &str) -> Line<'static> {
-    let mut spans = vec![Span::styled("│ ".repeat(depth), Style::default().fg(muted()))];
+    let mut spans = vec![Span::styled(
+        "│ ".repeat(depth),
+        Style::default().fg(muted()),
+    )];
     spans.extend(inline_spans(
         text,
         Style::default().fg(muted()).add_modifier(Modifier::ITALIC),
