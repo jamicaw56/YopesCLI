@@ -1,5 +1,30 @@
 YopesCLI Major Update list
 
+## Decided — next stack
+
+Each item ships as its own reviewable PR, in this order.
+
+1. `/revert` — pick a previous prompt from the transcript, edit it in the
+   composer, and re-run from there: the session truncates back to that turn
+   and a fresh response streams. UI-only, no protocol changes.
+2. Custom slash commands — a `.yopes/commands/name.md` file becomes `/name`;
+   its body is the prompt, `$ARGUMENTS` swaps in the rest of the line.
+3. Custom tools — a `.yopes/tools/name.json` file (name, description, JSON
+   Schema for the arguments, a command template with `{{arg}}` substitution)
+   becomes a tool call the model can invoke. The command runs through the
+   existing approval and `run_command` path, and its output returns as the
+   tool result.
+4. Headless mode — `yopes -p "prompt"` runs one turn non-interactively: the
+   answer prints, the exit code is 0 on success and 1 on error, tools keep
+   their normal permission mode (`--yolo` to skip approval). For scripts and
+   CI.
+5. MCP client — stdio servers configured in `.yopes/config.toml`; their tools
+   merge into the catalog and get per-tool approval like built-ins.
+
+Parked: hooks — the custom tools format may cover the same need; revisit
+after item 3 settles.
+
+--------------------------------------------
 
 
 
