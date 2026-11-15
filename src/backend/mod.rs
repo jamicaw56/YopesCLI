@@ -87,6 +87,25 @@ pub struct Backend {
     client: Client,
 }
 
+impl Default for Backend {
+    /// An unconfigured placeholder for parked tab snapshots; `open_tab`
+    /// swaps in a clone of the current backend right after.
+    fn default() -> Self {
+        Self {
+            provider: ProviderKind::Unconfigured,
+            provider_label: "unconfigured".to_owned(),
+            model: String::new(),
+            base_url: String::new(),
+            api_key: None,
+            auth: AuthKind::None,
+            models: Vec::new(),
+            custom_prompt: None,
+            reasoning_effort: None,
+            client: Client::new(),
+        }
+    }
+}
+
 impl Backend {
     pub fn new(config: &Config) -> Result<Self> {
         let client = Client::builder()
