@@ -273,7 +273,11 @@ mod tests {
         input.backspace();
         assert_eq!(input.value, "a");
         input.right(false);
-        assert_eq!(input.cursor, input.value.len(), "right at the end stays put");
+        assert_eq!(
+            input.cursor,
+            input.value.len(),
+            "right at the end stays put"
+        );
         input.delete();
         assert_eq!(input.value, "a", "delete past the end is a no-op");
     }

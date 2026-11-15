@@ -28,10 +28,10 @@ pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets, move_target};
 pub use policy::{requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
+pub(crate) use shell::BashNotice;
 pub(crate) use shell::kill_commands_for;
 pub(crate) use shell::kill_spawned_commands;
 pub(crate) use shell::poll_bash_jobs;
-pub(crate) use shell::BashNotice;
 
 mod subagents;
 pub(crate) use subagents::{register_subagent_run, unregister_subagent_run};

@@ -283,8 +283,14 @@ pub struct App {
     pub logos: Logos,
     /// The logos that still have to be fetched.
     pending_logos: Vec<String>,
-    /// Cache of rendered markdown lines for completed messages: (width, msg_len, lines).
-    pub(crate) markdown_cache: HashMap<usize, (u16, usize, Vec<ratatui::text::Line<'static>>)>,
+    /// Cache of rendered markdown lines for completed messages, with their
+    /// wrap row counts: (width, content hash, lines, counts).
+    pub(crate) markdown_cache:
+        HashMap<usize, (u16, u64, Vec<ratatui::text::Line<'static>>, Vec<usize>)>,
+    /// A message typed while subagents still stream, queued for the
+    /// post-delegate continuation (see `TabState::queued_message`).
+    pub queued_message: Option<String>,
+    pub queued_images: Vec<ImageAttachment>,
     /// Tavily key for the web_search tool.
     tavily_api_key: Option<String>,
     /// Subagent runs from delegate calls, streamed live and viewable with
@@ -398,6 +404,8 @@ impl App {
             logos: Logos::new(crate::logos::cache_dir(&config_path)),
             pending_logos: Vec::new(),
             markdown_cache: HashMap::new(),
+            queued_message: None,
+            queued_images: Vec::new(),
             tavily_api_key,
             subagents: Vec::new(),
             next_subagent_id: 0,

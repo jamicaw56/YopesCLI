@@ -228,10 +228,8 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         let parsed = markdown_lines(&message.content, inner.width);
                         let counts = line_counts(&parsed, inner.width);
-                        app.markdown_cache.insert(
-                            index,
-                            (inner.width, content_key, parsed.clone(), counts),
-                        );
+                        app.markdown_cache
+                            .insert(index, (inner.width, content_key, parsed.clone(), counts));
                         let start = lines.len();
                         lines.extend(parsed);
                         cached_counts_range.push((start, lines.len(), index));
@@ -359,12 +357,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         let count = match active {
-            Some((start, end, key)) if line_index >= start && line_index < end => {
-                app.markdown_cache
-                    .get(&key)
-                    .and_then(|(_, _, _, counts)| counts.get(line_index - start).copied())
-                    .unwrap_or_else(|| measure_line(line, &mut scratch, inner.width))
-            }
+            Some((start, end, key)) if line_index >= start && line_index < end => app
+                .markdown_cache
+                .get(&key)
+                .and_then(|(_, _, _, counts)| counts.get(line_index - start).copied())
+                .unwrap_or_else(|| measure_line(line, &mut scratch, inner.width)),
             _ => measure_line(line, &mut scratch, inner.width),
         };
         next_row += count;

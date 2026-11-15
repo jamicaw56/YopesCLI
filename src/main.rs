@@ -484,7 +484,8 @@ fn dispatch(
     app: &mut App,
     channels: &Channels,
     active_tasks: &mut HashMap<u64, JoinHandle<()>>,
-) {    match action {
+) {
+    match action {
         Action::None | Action::Quit => {}
         Action::Start {
             request_id,
@@ -732,8 +733,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
         tokio::spawn(async move {
             // Corrections from the main agent join this conversation; the
             // stop flag ends the run cooperatively.
-            let (correction_sender, mut correction_receiver) =
-                mpsc::unbounded_channel::<String>();
+            let (correction_sender, mut correction_receiver) = mpsc::unbounded_channel::<String>();
             let stop = crate::tools::register_subagent_run(run, correction_sender);
             let tools_enabled = mode != Mode::Chat && tools_mode.advertised();
             let mut messages = vec![Message::new(Role::User, task)];
@@ -824,14 +824,10 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     if round_attempts < MAX_ROUND_ATTEMPTS {
                         let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                             run,
-                            text: format!(
-                                "attempt {round_attempts} failed: {failure} — retrying"
-                            ),
+                            text: format!("attempt {round_attempts} failed: {failure} — retrying"),
                         });
-                        tokio::time::sleep(Duration::from_millis(
-                            1000 * u64::from(round_attempts),
-                        ))
-                        .await;
+                        tokio::time::sleep(Duration::from_millis(1000 * u64::from(round_attempts)))
+                            .await;
                         failed = false;
                         failure = String::new();
                         continue;
@@ -869,8 +865,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                         run,
-                        text: "stopped by the main agent — answering with what it has"
-                            .to_owned(),
+                        text: "stopped by the main agent — answering with what it has".to_owned(),
                     });
                     break;
                 }

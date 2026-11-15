@@ -32,7 +32,7 @@ fn runs() -> MutexGuard<'static, HashMap<u64, SubagentRun>> {
 }
 
 /// Register one running subagent: returns the stop flag its task watches.
-pub(super) fn register_subagent_run(
+pub(crate) fn register_subagent_run(
     id: u64,
     corrections: mpsc::UnboundedSender<String>,
 ) -> Arc<AtomicBool> {
@@ -48,7 +48,7 @@ pub(super) fn register_subagent_run(
 }
 
 /// Forget one finished subagent: corrections and stops answer so from here.
-pub(super) fn unregister_subagent_run(id: u64) {
+pub(crate) fn unregister_subagent_run(id: u64) {
     runs().remove(&id);
 }
 
@@ -73,9 +73,9 @@ pub(super) fn subagent_message(arguments: &str) -> Result<String> {
             args.run
         );
     };
-    run.corrections
-        .send(message.to_owned())
-        .map_err(|_| anyhow::anyhow!("subagent {args} stopped before the correction landed"))?;
+    run.corrections.send(message.to_owned()).map_err(|_| {
+        anyhow::anyhow!("subagent {} stopped before the correction landed", args.run)
+    })?;
     Ok(format!(
         "Correction delivered to subagent {}; it continues and answers within its run.",
         args.run
