@@ -27,7 +27,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 16] = [
+pub const COMMANDS: [CommandSpec; 17] = [
     CommandSpec {
         name: "/help",
         description: "Show keys and commands",
@@ -79,6 +79,11 @@ pub const COMMANDS: [CommandSpec; 16] = [
         argument: Some("mode"),
     },
     CommandSpec {
+        name: "/theme",
+        description: "Show or switch the color theme",
+        argument: Some("name"),
+    },
+    CommandSpec {
         name: "/system",
         description: "Show or set the custom system prompt",
         argument: Some("text"),
@@ -124,12 +129,31 @@ pub(crate) fn matching_commands(value: &str) -> Vec<&'static CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::{COMMANDS, matching_commands};
+    use crate::app::turn::tests::test_app;
 
     fn command_names(value: &str) -> Vec<&'static str> {
         matching_commands(value)
             .iter()
             .map(|command| command.name)
             .collect()
+    }
+
+    #[test]
+    fn theme_command_shows_the_active_theme_and_switches() {
+        let mut app = test_app();
+        app.command("/theme");
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.starts_with("Theme:"))
+        );
+        app.command("/theme dark");
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("Theme: dark"))
+        );
+        assert_eq!(command_names("/theme"), vec!["/theme"]);
     }
 
     #[test]
@@ -147,6 +171,7 @@ mod tests {
                 "/sessions",
                 "/tab",
                 "/tools",
+                "/theme",
                 "/system",
                 "/compact",
                 "/effort",
@@ -160,7 +185,7 @@ mod tests {
         assert_eq!(command_names("/r"), vec!["/run"]);
         assert_eq!(command_names("/m"), vec!["/models"]);
         assert_eq!(command_names("/s"), vec!["/sessions", "/system", "/skills"]);
-        assert_eq!(command_names("/t"), vec!["/tab", "/tools"]);
+        assert_eq!(command_names("/t"), vec!["/tab", "/tools", "/theme"]);
         assert_eq!(command_names("/e"), vec!["/effort"]);
         assert_eq!(command_names("/v"), vec!["/version"]);
         assert_eq!(command_names("/MO"), vec!["/models"]);

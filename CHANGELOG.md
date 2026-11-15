@@ -25,6 +25,8 @@ All notable changes to YopesCLI are recorded here. The format follows
   whole placeholder with its map entry, and the numbering restarts with every
   sent prompt. `file://` URIs with percent escapes and shell-escaped spaces
   are understood.
+- `/theme` is registered as a built-in command: the palette now shows it, `/t`
+  completion offers it, and it runs while a response streams.
 
 ### Added
 
