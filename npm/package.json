@@ -1,6 +1,6 @@
 {
-  "name": "yopes",
-  "version": "0.0.0",
+  "name": "@jamicaw56/yopes",
+  "version": "0.1.54",
   "description": "A better coding CLI, built with Rust, Ratatui, and Tokio.",
   "license": "GPL-3.0-only",
   "repository": {

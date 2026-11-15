@@ -1,6 +1,6 @@
 # yopes (npm)
 
-`npm install -g yopes` installs the yopes coding CLI.
+`npm install -g @jamicaw56/yopes` installs the yopes coding CLI.
 
 The package is a thin wrapper: `postinstall` downloads the release binary for
 your platform from [GitHub Releases](https://github.com/Jamicaw56/YopesCLI/releases),
