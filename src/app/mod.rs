@@ -233,6 +233,8 @@ pub struct App {
     pub fetching_models: bool,
     /// Popup picker opened by `/sessions`.
     pub session_picker: Option<ListPicker>,
+    /// Popup picker opened by `/revert`, listing the prompts already sent.
+    pub revert_picker: Option<ListPicker>,
     pub running_tool: Option<RunningTool>,
     /// Diffs for write and edit calls, shown under their results.
     pub changes: HashMap<String, ChangeReport>,
@@ -329,6 +331,7 @@ impl App {
             model_choices: Vec::new(),
             fetching_models: false,
             session_picker: None,
+            revert_picker: None,
             running_tool: None,
             changes: HashMap::new(),
             expanded: HashSet::new(),

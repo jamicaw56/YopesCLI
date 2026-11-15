@@ -343,6 +343,7 @@ impl App {
                 self.info(format!("yopes {}", crate::update::current_version()));
             }
             "/sessions" => self.open_session_picker(),
+            "/revert" => self.open_revert_picker(),
             "/tab" => {
                 let value = parts.next().unwrap_or_default().to_ascii_lowercase();
                 match value.as_str() {
@@ -1116,5 +1117,79 @@ pub(crate) mod tests {
         let last = app.session.messages.last().unwrap();
         let usage = last.usage.expect("usage on final message");
         assert!(usage.elapsed_ms >= 1000);
+    }
+
+    #[test]
+    fn revert_lists_prompts_newest_first_and_truncates_to_the_pick() {
+        let mut app = test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "first prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "first reply"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "second prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "second reply"));
+
+        app.command("/revert");
+        assert!(app.revert_picker.is_some());
+        let matches = app.revert_matches();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (2, "second prompt".to_owned()));
+        assert_eq!(matches[1], (0, "first prompt".to_owned()));
+
+        // Enter on the newest prompt: the session truncates back to it, the
+        // composer refills with its text, and the reply after it is gone.
+        app.handle_revert_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.revert_picker.is_none());
+        assert_eq!(app.session.messages.len(), 2);
+        assert_eq!(app.session.messages[0].content, "first prompt");
+        assert_eq!(app.input.value, "second prompt");
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("Editing message 3 of 4"))
+        );
+    }
+
+    #[test]
+    fn revert_filters_and_requeues_pasted_images() {
+        let mut app = test_app();
+        let mut first = Message::new(Role::User, "first prompt");
+        first.images = vec![crate::session::ImageAttachment {
+            name: "shot.png".to_owned(),
+            data: "not-base64".to_owned(),
+        }];
+        app.session.messages.push(first);
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "reply"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "second prompt"));
+
+        app.command("/revert");
+        app.handle_revert_picker_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        assert_eq!(app.revert_matches().len(), 1, "filter keeps first only");
+        app.handle_revert_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // The picked prompt is the oldest: everything after it leaves, and
+        // its pasted image returns to the composer as a placeholder.
+        assert!(app.session.messages.is_empty());
+        assert_eq!(app.attachments.len(), 1);
+        assert_eq!(app.attachments[0].name, "paste-0.png");
+        assert_eq!(app.input.value, "first prompt[Image 1]");
+    }
+
+    #[test]
+    fn revert_with_no_prompts_shows_an_info_notice() {
+        let mut app = test_app();
+        app.command("/revert");
+        assert!(app.revert_picker.is_none());
+        assert!(app.notice.is_some());
     }
 }

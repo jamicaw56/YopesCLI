@@ -8,6 +8,12 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `/revert` opens a picker over the prompts already sent this session, newest
+  first, filterable as you type: picking one cuts the session back to that
+  prompt (its reply and every later turn leave the history), and its text and
+  any pasted images return to the composer for editing — sending then re-runs
+  from there. Works with the keyboard, the mouse, and `F1` help.
+
 - Permission cycling via `Shift+Tab` (`on` · `yolo` · `ask`) and YOLO mode
   execution without interactive confirmation.
 
