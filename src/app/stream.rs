@@ -168,6 +168,17 @@ impl App {
                         self.info(
                             "The model returned no content for this turn; try sending again.",
                         );
+                    } else if self.session.messages.last().is_some_and(|last| {
+                        last.role == Role::Assistant
+                            && last.content.is_empty()
+                            && last.tool_calls.is_none()
+                            && last.error.is_none()
+                    }) {
+                        // Reasoning is kept, but a turn that thought and then
+                        // ended with no answer must not look finished.
+                        self.info(
+                            "The model stopped after thinking, with no answer; send \"continue\".",
+                        );
                     }
                     self.save_session();
                     // Subagents that finished mid-turn report now, alerting
@@ -180,9 +191,10 @@ impl App {
                 self.save_session();
                 self.advance_tools()
             }
-            StreamEvent::Stalled { request_id, message }
-                if self.active_request_id() == Some(request_id) =>
-            {
+            StreamEvent::Stalled {
+                request_id,
+                message,
+            } if self.active_request_id() == Some(request_id) => {
                 let compacting = self
                     .active
                     .as_ref()
@@ -228,9 +240,7 @@ impl App {
                 // starting over; a stall before any output drops the empty
                 // placeholder and restarts the request.
                 let partial = self.session.messages.last().is_some_and(|last| {
-                    last.role == Role::Assistant
-                        && last.error.is_none()
-                        && !last.content.is_empty()
+                    last.role == Role::Assistant && last.error.is_none() && !last.content.is_empty()
                 });
                 if !partial {
                     self.remove_empty_response();
@@ -240,7 +250,7 @@ impl App {
                      (attempt {} of {MAX_STREAM_RESUMES}).",
                     self.resume_attempts
                 ));
-                return self.begin_request(self.session.messages.clone(), None);
+                self.begin_request(self.session.messages.clone(), None)
             }
             StreamEvent::Error {
                 request_id,

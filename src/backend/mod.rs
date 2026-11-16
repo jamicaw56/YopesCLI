@@ -416,7 +416,13 @@ impl Backend {
         let mut state = OpenAiState::default();
         consume_lines(response, |line| {
             let (parsed, done) = parse_openai_line(line, &mut state)?;
-            send_parsed(request_id, parsed, done, events)
+            let more = send_parsed(request_id, parsed, done, events)?;
+            // Text of the final chunk is already sent; a capped reply is
+            // reported instead of passing as a finished one.
+            if done && state.truncated {
+                bail!(OUTPUT_LIMIT);
+            }
+            Ok(more)
         })
         .await?;
         let calls = state.finish(request_id);
@@ -583,6 +589,11 @@ impl Backend {
         Ok(())
     }
 }
+
+/// Shown when a provider ends a reply with `finish_reason: "length"`.
+const OUTPUT_LIMIT: &str = "the provider stopped the reply at its output token limit \
+(finish_reason: length). Reasoning tokens count toward it, so long thinking can use the whole \
+budget before any answer. Lower /effort, or send \"continue\".";
 
 fn anthropic_url(base_url: &str) -> String {
     let base_url = base_url.trim_end_matches('/');

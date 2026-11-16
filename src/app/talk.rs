@@ -96,7 +96,11 @@ impl App {
         // (a tool that ran unscoped) still delivers, as "another session".
         let sender = match self.tab_for_session(from) {
             Some(sender_index) => {
-                format!("tab {} — {}", sender_index + 1, self.session_title_of(sender_index))
+                format!(
+                    "tab {} — {}",
+                    sender_index + 1,
+                    self.session_title_of(sender_index)
+                )
             }
             None => "another session".to_owned(),
         };
@@ -173,12 +177,18 @@ mod tests {
     fn the_directory_lists_every_tab_with_its_number() {
         let mut app = test_app();
         let from = app.session.id;
-        assert!(app.talk_directory(from).contains("Only this session is open"));
+        assert!(
+            app.talk_directory(from)
+                .contains("Only this session is open")
+        );
         app.open_tab();
         // open_tab leaves the new tab on screen; name the original one.
         app.with_tab(0, |tab| tab.session.title = "Plan the parser".to_owned());
         let directory = app.talk_directory(from);
-        assert!(directory.contains("1: Plan the parser (idle) — this session"), "{directory}");
+        assert!(
+            directory.contains("1: Plan the parser (idle — this session)"),
+            "{directory}"
+        );
         assert!(directory.contains("2: New session (idle)"), "{directory}");
 
         // A busy background tab reads as busy.
@@ -211,7 +221,9 @@ mod tests {
         // it, so the check walks the messages instead of the tail.
         app.with_tab(1, |tab| {
             assert!(tab.session.messages.iter().any(|message| {
-                message.content.contains("[talk from tab 1 — New session] hello from tab 1")
+                message
+                    .content
+                    .contains("[talk from tab 1 — New session] hello from tab 1")
             }));
         });
     }
@@ -242,7 +254,9 @@ mod tests {
             assert!(tab.flush_parked_messages());
             assert!(tab.pending_talks.is_empty());
             assert!(tab.session.messages.iter().any(|message| {
-                message.content.contains("[talk from tab 1 — New session] ping")
+                message
+                    .content
+                    .contains("[talk from tab 1 — New session] ping")
             }));
         });
     }

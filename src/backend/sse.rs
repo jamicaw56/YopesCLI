@@ -47,15 +47,15 @@ where
     loop {
         let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
             Ok(Some(chunk)) => chunk?,
-            // The stream ended without the parser reporting a completion:
-            // the reply was cut short, not finished.
-            Ok(None) => return Err(Stalled(STREAM_CUT_SHORT.to_owned()).into()),
+            // The stream ended: flush a last line that had no trailing
+            // newline, then report the cut-short reply below.
+            Ok(None) => break,
             Err(_) => {
                 return Err(Stalled(format!(
                     "the provider stopped sending for {}s; the connection may have dropped",
                     STREAM_IDLE_TIMEOUT.as_secs()
                 ))
-                .into())
+                .into());
             }
         };
         buffer.extend_from_slice(&chunk);
@@ -67,10 +67,8 @@ where
             }
         }
     }
-    if !buffer.is_empty() {
-        if !on_line(std::str::from_utf8(&buffer)?)? {
-            return Ok(());
-        }
+    if !buffer.is_empty() && !on_line(std::str::from_utf8(&buffer)?)? {
+        return Ok(());
     }
     Err(Stalled(STREAM_CUT_SHORT.to_owned()).into())
 }
@@ -134,6 +132,9 @@ pub(super) fn send_parsed(
 #[derive(Default)]
 pub(super) struct OpenAiState {
     calls: BTreeMap<usize, ToolCallBuilder>,
+    /// The provider ended the reply with `finish_reason: "length"`: it hit the
+    /// output token cap, so the reply (and any tool call) is incomplete.
+    pub(super) truncated: bool,
 }
 
 impl OpenAiState {
@@ -387,8 +388,11 @@ pub(super) fn parse_openai_line(
         if let Some(calls) = choice.delta.tool_calls {
             events.extend(state.record(calls));
         }
-        if choice.finish_reason.is_some() {
+        if let Some(reason) = choice.finish_reason {
             done = true;
+            if reason == "length" {
+                state.truncated = true;
+            }
         }
     }
     Ok((events, done))
@@ -737,6 +741,26 @@ mod tests {
         assert_eq!(calls[0].function.arguments, r#"{"path":"test.html"}"#);
         assert_eq!(calls[1].id, "call_b");
         assert_eq!(calls[1].function.name, "read_file");
+    }
+
+    #[test]
+    fn length_finish_reason_marks_the_reply_truncated() {
+        let mut state = OpenAiState::default();
+        let (events, done) = parse_openai_line(
+            r#"data: {"choices":[{"delta":{"content":"tail"},"finish_reason":"length"}]}"#,
+            &mut state,
+        )
+        .unwrap();
+        assert!(done);
+        assert!(state.truncated);
+        assert_eq!(events, vec![ParsedEvent::Delta("tail".to_owned())]);
+        let mut state = OpenAiState::default();
+        parse_openai_line(
+            r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            &mut state,
+        )
+        .unwrap();
+        assert!(!state.truncated);
     }
 
     #[test]
