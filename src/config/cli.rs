@@ -13,31 +13,31 @@ pub struct Cli {
     pub command: Option<Command>,
 
     /// Model backend: openai or ollama.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, global = true)]
     pub(super) provider: Option<ProviderKind>,
 
     /// Model name sent to the provider.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub(super) model: Option<String>,
 
     /// Provider base URL, without /chat/completions or /api/chat.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub(super) base_url: Option<String>,
 
     /// Session JSON path. Defaults to the platform data directory.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub(super) session: Option<PathBuf>,
 
     /// Resume the most recent session.
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub(super) resume: bool,
 
     /// Do not load or save the session.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub(super) no_save: bool,
 
     /// Custom system prompt text, appended to the built-in one.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub(super) system_prompt: Option<String>,
 }
 
@@ -45,6 +45,12 @@ pub struct Cli {
 pub enum Command {
     /// Check for updates, install the latest release, and restart.
     Update,
+    /// Run one task without the interface, then exit when the agent is idle.
+    /// Exit code 0 on success, non-zero when the provider fails.
+    Run {
+        /// The task text, sent as one user message.
+        task: String,
+    },
 }
 
 #[cfg(test)]
@@ -88,5 +94,33 @@ mod tests {
     fn the_update_subcommand_parses() {
         let cli = Cli::try_parse_from(["yopes", "update"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Update)));
+    }
+
+    #[test]
+    fn the_run_subcommand_takes_one_task() {
+        let cli = Cli::try_parse_from(["yopes", "run", "fix the failing tests"]).unwrap();
+        assert!(
+            matches!(cli.command, Some(Command::Run { ref task }) if task == "fix the failing tests")
+        );
+        // The task is required: `run` alone is a usage error.
+        assert!(Cli::try_parse_from(["yopes", "run"]).is_err());
+    }
+
+    #[test]
+    fn flags_parse_after_the_run_subcommand() {
+        let cli = Cli::try_parse_from([
+            "yopes",
+            "run",
+            "fix the failing tests",
+            "--no-save",
+            "--system-prompt",
+            "extra",
+            "--model",
+            "gpt-5",
+        ])
+        .unwrap();
+        assert!(cli.no_save);
+        assert_eq!(cli.system_prompt.as_deref(), Some("extra"));
+        assert_eq!(cli.model.as_deref(), Some("gpt-5"));
     }
 }
