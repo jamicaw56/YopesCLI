@@ -854,13 +854,10 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             // ladder when the current model or endpoint keeps failing.
             let mut run_backend = backend.clone();
             let mut failover = failover.into_iter();
-            // One nudge each: the budget nudge asks for a final answer with
-            // no tools; the empty nudge asks again when a round streams
-            // nothing, so a run that worked never ends with no report.
-            let mut budget_nudged = false;
+            // The empty nudge asks again when a round streams nothing, so a
+            // run that worked never ends with no report.
             let mut empty_nudges = 0u32;
             let mut workspace = root;
-            let mut rounds = 0usize;
             loop {
                 let (events, mut receiver) = mpsc::unbounded_channel::<StreamEvent>();
                 let streamer = {
@@ -1010,39 +1007,6 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                         run,
                         text: "stopped by the main agent — answering with what it has".to_owned(),
-                    });
-                    break;
-                }
-                rounds += 1;
-                if rounds > crate::app::MAX_SUBAGENT_TOOL_ROUNDS {
-                    if !budget_nudged {
-                        // The budget is up: ask for the final answer with no
-                        // tools, so a run that did hours of work still reports.
-                        budget_nudged = true;
-                        messages.push(Message::new(
-                            Role::User,
-                            "You have used your full tool budget for this run. Do not call any "
-                                .to_owned()
-                                + "more tools; reply now with your final answer to the task, "
-                                + "based on the work done so far.",
-                        ));
-                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
-                            run,
-                            text: format!(
-                                "tool budget of {} rounds used — asking for the final answer",
-                                crate::app::MAX_SUBAGENT_TOOL_ROUNDS
-                            ),
-                        });
-                        continue;
-                    }
-                    // Still calling tools after the nudge: stop and take what
-                    // streamed so far.
-                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
-                        run,
-                        text: format!(
-                            "stopped after {} tool rounds — answering with what it has",
-                            crate::app::MAX_SUBAGENT_TOOL_ROUNDS
-                        ),
                     });
                     break;
                 }

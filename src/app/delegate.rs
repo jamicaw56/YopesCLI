@@ -37,9 +37,6 @@ const TASK_EXCERPT: usize = 46;
 /// Longest row label shown on a picker row: the model's name is already
 /// short, but a long name is clipped the same as a long task line was.
 const LABEL_CHARS: usize = 46;
-/// How many tool rounds one subagent may run before it is stopped: a guard
-/// against a runaway loop burning tokens in the background forever.
-pub(crate) const MAX_SUBAGENT_TOOL_ROUNDS: usize = 20;
 
 /// The status of one subagent run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
