@@ -854,13 +854,16 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             // ladder when the current model or endpoint keeps failing.
             let mut run_backend = backend.clone();
             let mut failover = failover.into_iter();
-            // One nudge each: the budget nudge asks for a final answer with
-            // no tools; the empty nudge asks again when a round streams
-            // nothing, so a run that worked never ends with no report.
-            let mut budget_nudged = false;
+            // One nudge each: the write watchdog asks a run that has spent
+            // many tool rounds without changing any file to land an artifact;
+            // the empty nudge asks again when a round streams nothing, so a
+            // run that worked never ends with no report.
+            let mut write_nudged = false;
             let mut empty_nudges = 0u32;
+            // Tool rounds since the last round that changed a file: the
+            // watchdog fires once this passes ZERO_WRITE_NUDGE_ROUNDS.
+            let mut quiet_rounds = 0usize;
             let mut workspace = root;
-            let mut rounds = 0usize;
             loop {
                 let (events, mut receiver) = mpsc::unbounded_channel::<StreamEvent>();
                 let streamer = {
@@ -1013,39 +1016,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     });
                     break;
                 }
-                rounds += 1;
-                if rounds > crate::app::MAX_SUBAGENT_TOOL_ROUNDS {
-                    if !budget_nudged {
-                        // The budget is up: ask for the final answer with no
-                        // tools, so a run that did hours of work still reports.
-                        budget_nudged = true;
-                        messages.push(Message::new(
-                            Role::User,
-                            "You have used your full tool budget for this run. Do not call any "
-                                .to_owned()
-                                + "more tools; reply now with your final answer to the task, "
-                                + "based on the work done so far.",
-                        ));
-                        let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
-                            run,
-                            text: format!(
-                                "tool budget of {} rounds used — asking for the final answer",
-                                crate::app::MAX_SUBAGENT_TOOL_ROUNDS
-                            ),
-                        });
-                        continue;
-                    }
-                    // Still calling tools after the nudge: stop and take what
-                    // streamed so far.
-                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
-                        run,
-                        text: format!(
-                            "stopped after {} tool rounds — answering with what it has",
-                            crate::app::MAX_SUBAGENT_TOOL_ROUNDS
-                        ),
-                    });
-                    break;
-                }
+                // Did this round change a file? A round that runs none of
+                // the writing tools counts toward the write watchdog.
+                let mut mutated = false;
                 // The assistant turn that asked for the calls, then one tool
                 // result per call, keeps the next request valid for every
                 // provider.
@@ -1123,6 +1096,12 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                     workspace = target;
                                 }
                             }
+                            if result.is_ok()
+                                && crate::app::WRITING_TOOLS
+                                    .contains(&requested_call.function.name.as_str())
+                            {
+                                mutated = true;
+                            }
                             result
                         }
                     };
@@ -1131,6 +1110,36 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         Err(error) => format!("Error: {error}"),
                     };
                     messages.push(Message::tool_result(requested_call.id.clone(), content));
+                }
+                // The write watchdog: a run that keeps reading without ever
+                // changing a file is stuck in reconnaissance. Ask it once to
+                // land the first artifact; the next round picks the message
+                // up with its tool results. A task that is read-only by
+                // nature may ignore this and continue.
+                if mutated {
+                    quiet_rounds = 0;
+                } else {
+                    quiet_rounds += 1;
+                }
+                if !write_nudged && quiet_rounds >= crate::app::ZERO_WRITE_NUDGE_ROUNDS {
+                    write_nudged = true;
+                    messages.push(Message::new(
+                        Role::User,
+                        format!(
+                            "You have spent {quiet_rounds} tool rounds without writing or \
+                             changing any file. If this task is meant to land work, stop \
+                             exploring: produce the first artifact now — write the file, make \
+                             the edit, run the command, commit. If this task is read-only by \
+                             nature, ignore this and continue."
+                        ),
+                    ));
+                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                        run,
+                        text: format!(
+                            "{quiet_rounds} tool rounds with no file writes — nudging it to \
+                             land an artifact"
+                        ),
+                    });
                 }
             }
             crate::tools::unregister_subagent_run(run);

@@ -18,8 +18,10 @@ use super::*;
 /// The subagent brief: appended to the system prompt for every run.
 pub(crate) const SUBAGENT_BRIEF: &str = "You are a subagent inside yopes, a terminal coding \
     assistant. You have the same tools as the main session — use them when the task needs \
-    files, commands, or the web, exactly as the main session would. Answer the task given \
-    below with only the useful final result, no preamble, no offers to help further.";
+    files, commands, or the web, exactly as the main session would. If the task involves \
+    changing files, land them: write, edit, and commit as you go, and make your final \
+    answer list what changed, not describe what a successor could do. Answer the task \
+    given below with only the useful final result, no preamble, no offers to help further.";
 
 /// The brief for the model that names a subagent task: the sidebar and the
 /// `/agents` rows show that name instead of the raw task text.
@@ -37,9 +39,14 @@ const TASK_EXCERPT: usize = 46;
 /// Longest row label shown on a picker row: the model's name is already
 /// short, but a long name is clipped the same as a long task line was.
 const LABEL_CHARS: usize = 46;
-/// How many tool rounds one subagent may run before it is stopped: a guard
-/// against a runaway loop burning tokens in the background forever.
-pub(crate) const MAX_SUBAGENT_TOOL_ROUNDS: usize = 20;
+/// The tools that change files: a round in which one of these runs
+/// successfully resets the write watchdog.
+pub(crate) const WRITING_TOOLS: [&str; 3] = ["write_file", "edit_file", "multi_edit"];
+/// Tool rounds a run may spend without one of `WRITING_TOOLS` landing
+/// before the one-time watchdog nudge asks it to produce an artifact: a run
+/// stuck in reconnaissance is told to stop exploring and write, and a task
+/// that is read-only by nature may ignore the nudge and continue.
+pub(crate) const ZERO_WRITE_NUDGE_ROUNDS: usize = 8;
 
 /// The status of one subagent run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

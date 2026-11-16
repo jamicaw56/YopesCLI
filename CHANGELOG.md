@@ -16,6 +16,13 @@ All notable changes to YopesCLI are recorded here. The format follows
   scrollable viewer with the task, the reasoning, and the full streamed
   response. Delegate tasks are capped at 60,000 characters so one call cannot
   silently burn the context.
+- A write watchdog for subagent runs: after 8 tool rounds without a
+  successful `write_file` / `edit_file` / `multi_edit`, a run is nudged once,
+  mid-run, to stop exploring and land its first artifact; a task that is
+  read-only by nature may ignore the nudge and continue. The subagent brief
+  now tells every run to land changes and report what changed, and
+  `docs/DELEGATION.md` documents the task-phrasing playbook for delegation
+  that lands committed work.
 - A `move_to` tool: the model changes the working directory that relative
   paths resolve against. The target is normalized and must be an existing
   directory; moving outside the workspace or the temp root asks for approval.
@@ -26,6 +33,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- Subagent runs no longer stop after a tool-round cap: the 20-round limit
+  and its budget nudge are gone. A run ends when the model stops calling
+  tools, the stream failure ladder is exhausted, or the main agent (or user)
+  stops it.
 - Auto compaction is now probabilistic: above ~80% of the context window each
   turn rolls for compaction, with the chance rising to about half near 90% and
   certain at 100% (always past it), instead of firing on a fixed threshold.
