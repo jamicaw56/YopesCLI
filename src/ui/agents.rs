@@ -12,8 +12,10 @@ pub(super) const SIDEBAR_WIDTH: u16 = 26;
 pub(super) const SIDEBAR_MIN_WIDTH: u16 = 90;
 
 /// One sidebar row: the status glyph, the elapsed time and the row label —
-/// the name the model gave the task, not the task text itself.
-fn agent_row(agent: &crate::app::Subagent, spinner: usize) -> Line<'static> {
+/// the name the model gave the task, not the task text itself. The label
+/// truncates to the width the row has left: the sidebar never wraps, so a
+/// long name clips with an ellipsis instead of spilling past the border.
+fn agent_row(agent: &crate::app::Subagent, spinner: usize, width: u16) -> Line<'static> {
     let (glyph, color) = match agent.status {
         crate::app::SubagentStatus::Running => (SPINNER[spinner % SPINNER.len()], accent()),
         crate::app::SubagentStatus::Done => ("✓", muted()),
@@ -26,7 +28,14 @@ fn agent_row(agent: &crate::app::Subagent, spinner: usize) -> Line<'static> {
         _ => agent.elapsed_ms,
     };
     let elapsed = crate::app::format_duration_ms(elapsed_ms);
-    let label = agent.row_label();
+    let budget = usize::from(width)
+        .saturating_sub(2) // glyph + space
+        .saturating_sub(elapsed.chars().count() + 1); // elapsed + space
+    let label = if budget == 0 {
+        String::new()
+    } else {
+        truncate(&agent.row_label(), budget)
+    };
     Line::from(vec![
         Span::styled(format!("{glyph} "), Style::default().fg(color)),
         Span::styled(format!("{elapsed} "), Style::default().fg(muted())),
@@ -37,54 +46,67 @@ fn agent_row(agent: &crate::app::Subagent, spinner: usize) -> Line<'static> {
 pub(super) fn draw_agents_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.width < 16 || area.height < 3 {
         app.sidebar_hits.clear();
+        app.sidebar_area = None;
         return;
     }
-    // Running runs pin to the top so live work is never pushed off screen by
-    // finished ones stacking below; finished runs follow, most recent first.
-    // The hit index maps back to the run's position in `subagents`.
-    let mut rows: Vec<(usize, &crate::app::Subagent)> = Vec::new();
+    app.sidebar_area = Some((area.x, area.y, area.width, area.height));
+    // Only live work lists here: a finished run is gone the moment its
+    // report lands — the transcript and `/agents` keep the history — and a
+    // failed run stays visible until it is dealt with there.
+    let mut rows: Vec<usize> = Vec::new();
     for (index, agent) in app.subagents.iter().enumerate() {
         if agent.status == crate::app::SubagentStatus::Running {
-            rows.push((index, agent));
+            rows.push(index);
         }
     }
     let running = rows.len();
     for (index, agent) in app.subagents.iter().enumerate().rev() {
-        if agent.status != crate::app::SubagentStatus::Running {
-            rows.push((index, agent));
+        if agent.status == crate::app::SubagentStatus::Failed {
+            rows.push(index);
         }
     }
+    // The list scrolls when it outgrows the terminal: the newest rows stay
+    // in view and the wheel reveals the earlier ones above them.
+    let visible = usize::from(area.height.saturating_sub(2));
+    let maximum = rows.len().saturating_sub(visible);
+    app.sidebar_scroll = app.sidebar_scroll.min(maximum);
+    let skip = maximum - app.sidebar_scroll;
+    let failed = rows.len() - running;
+    let badge = if failed > 0 {
+        format!(" agents {running} running · {failed} failed ")
+    } else {
+        format!(" agents {running} running ")
+    };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(muted()))
         .title_top(Line::styled(
-            // The badge counts live work apart from the stack: a finished run
-            // must not make the sidebar look busier than it is.
-            format!(
-                " agents {} running · {} done ",
-                running,
-                app.subagents.len().saturating_sub(running)
-            ),
+            // The badge truncates to the box: a title longer than the
+            // sidebar never paints over the border or past the box edge.
+            truncate(&badge, usize::from(area.width).saturating_sub(2)),
             Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::styled(
-            " click to view ",
+            if maximum > 0 {
+                " wheel to scroll "
+            } else {
+                " click to view "
+            },
             Style::default().fg(muted()),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     app.sidebar_hits.clear();
-    let visible = usize::from(inner.height);
-    let skip = rows.len().saturating_sub(visible);
-    for (row, (index, agent)) in rows.iter().skip(skip).enumerate() {
+    for (row, &index) in rows.iter().skip(skip).enumerate() {
+        let agent = &app.subagents[index];
         let y = inner.y.saturating_add(row as u16);
         frame.render_widget(
-            Paragraph::new(agent_row(agent, app.spinner)),
+            Paragraph::new(agent_row(agent, app.spinner, inner.width)),
             Rect::new(inner.x, y, inner.width, 1),
         );
         app.sidebar_hits
-            .push((area.x, area.x + area.width, y, *index));
+            .push((area.x, area.x + area.width, y, index));
     }
 }
 
@@ -94,8 +116,12 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     let Some(agent) = app.viewed_subagent() else {
         return;
     };
-    let width = (area.width * 4 / 5).clamp(40, area.width.saturating_sub(4));
-    let height = (area.height * 4 / 5).clamp(12, area.height.saturating_sub(2));
+    let width = (area.width * 4 / 5)
+        .clamp(40, area.width.saturating_sub(4).max(40))
+        .min(area.width);
+    let height = (area.height * 4 / 5)
+        .clamp(12, area.height.saturating_sub(2).max(12))
+        .min(area.height);
     let popup = Rect::new(
         area.x + (area.width.saturating_sub(width)) / 2,
         area.y + (area.height.saturating_sub(height)) / 2,
@@ -130,7 +156,9 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
             crate::app::SubagentStatus::Failed => error(),
         }))
         .title_top(Line::styled(
-            title,
+            // The summary truncates to the popup: a long title with tokens
+            // and elapsed time never paints past the box edge.
+            truncate(&title, usize::from(width).saturating_sub(2)),
             Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::styled(

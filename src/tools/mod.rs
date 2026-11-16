@@ -537,7 +537,10 @@ mod tests {
         let id = job_id(&started);
         let arguments = format!(r#"{{"job_id":{id}}}"#);
         let mut output = String::new();
-        for _ in 0..50 {
+        // A slow or loaded machine spawns `bash -lc` late: the poll window
+        // is generous (30s) so a scanning antivirus or parallel test load
+        // cannot flake a job that only prints one line.
+        for _ in 0..300 {
             output = execute(
                 &ToolCall::new("call_42", "bash_output", &arguments),
                 None,
@@ -547,7 +550,7 @@ mod tests {
             if output.contains("Exit code") {
                 break;
             }
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(100));
         }
         assert!(output.contains("step-one"), "{output}");
         assert!(output.contains("Exit code"), "{output}");
