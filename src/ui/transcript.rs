@@ -300,9 +300,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 if call.function.name == "delegate" {
                     if let Some(agent) = app.subagent_for_call(&call.id) {
                         let (glyph, color) = match agent.status {
-                            crate::app::SubagentStatus::Running => {
-                                (SPINNER[app.spinner % SPINNER.len()], accent())
-                            }
+                            crate::app::SubagentStatus::Running => (spinner(app.spinner), accent()),
                             crate::app::SubagentStatus::Done => ("✓", muted()),
                             crate::app::SubagentStatus::Failed => ("✗", error()),
                         };

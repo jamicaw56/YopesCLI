@@ -13,8 +13,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::{
     app::{
         App, COMMANDS, ChangeReport, CommandSpec, ConnectStage, ConnectState,
-        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, ModelRow, NoticeKind,
-        ToolApproval, ToolsMode, format_bytes, format_tokens, list_row_of,
+        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, ModelRow, NoticeKind, ToolApproval,
+        ToolsMode, format_bytes, format_tokens, list_row_of,
     },
     diff::{ChangeKind, DiffLine, FileDiff},
     session::{Message, Role, Usage},
@@ -129,8 +129,15 @@ const MASCOT_WIDTH: usize = 15;
 const YARN_TRAVEL: usize = 6;
 /// Tool output rows shown before the rest is collapsed.
 const TOOL_OUTPUT_PREVIEW_LINES: usize = 7;
-// Custom loading circle instead of the generic braille spinner.
-const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
+/// The spinner frames: a braille ring whose gap turns, the terminal stand-in
+/// for a ring with an arc sweeping around it. Eight frames, one per tick.
+const SPINNER: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// The spinner glyph for `step`: the footer, the session tabs, the sidebar and
+/// the transcript all turn off this one clock.
+pub(super) fn spinner(step: usize) -> &'static str {
+    SPINNER[step % SPINNER.len()]
+}
 
 pub(super) fn responsive_palette_width(area_width: u16) -> u16 {
     (area_width.saturating_sub(4) * 85 / 100)

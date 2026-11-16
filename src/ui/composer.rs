@@ -42,14 +42,14 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     // need is computed first, and the passive right side (provider, model,
     // spend, context load) takes only what the tabs do not use.
     let count = app.tab_count();
-    let markers: Vec<&'static str> = (0..count)
+    let markers: Vec<String> = (0..count)
         .map(|index| {
             if app.tab_streaming(index) {
-                "◐ "
+                format!("{} ", spinner(app.spinner))
             } else if app.tab_busy(index) {
-                "! "
+                "! ".to_owned()
             } else {
-                ""
+                String::new()
             }
         })
         .collect();
@@ -97,8 +97,8 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         .constraints([Constraint::Min(4), Constraint::Length(right_width)])
         .split(inner);
 
-    // Session tabs: `◐` while a tab streams, `!` when it wants a decision.
-    // Click or Alt+1..9 to switch; the active one is accent + bold.
+    // Session tabs: a turning ring while a tab streams, `!` when it wants a
+    // decision. Click or Alt+1..9 to switch; the active one is accent + bold.
     app.tab_hits.clear();
     app.tab_close_hits.clear();
     app.tab_new_hit = None;
@@ -119,7 +119,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut overflow = 0usize;
     for index in 0..count {
         let sep_w: u16 = if index > 0 { 3 } else { 0 };
-        let marker = markers[index];
+        let marker = markers[index].clone();
         let marker_w: u16 = if marker.is_empty() { 0 } else { 2 };
         let close_w: u16 = 2; // " ×"
         let label = match budget {
@@ -484,7 +484,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         (
             format!(
                 "{} running {} · {elapsed:.1}s",
-                SPINNER[app.spinner % SPINNER.len()],
+                spinner(app.spinner),
                 running.call.function.name
             ),
             accent(),
@@ -495,7 +495,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             (
                 format!(
                     "{} compacting context · {elapsed:.1}s · esc stop",
-                    SPINNER[app.spinner % SPINNER.len()]
+                    spinner(app.spinner)
                 ),
                 accent(),
             )
@@ -511,10 +511,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 }
                 None => "thinking".to_owned(),
             };
-            let mut text = format!(
-                "{} {progress} · {elapsed:.1}s",
-                SPINNER[app.spinner % SPINNER.len()]
-            );
+            let mut text = format!("{} {progress} · {elapsed:.1}s", spinner(app.spinner));
             if let Some((in_tokens, out_tokens)) = app.stream_tokens() {
                 text.push_str(&format!(" · in {}", format_tokens(in_tokens)));
                 if out_tokens > 0 {
@@ -530,10 +527,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
     } else if app.fetching_models {
         (
-            format!(
-                "{} fetching models · esc stop",
-                SPINNER[app.spinner % SPINNER.len()]
-            ),
+            format!("{} fetching models · esc stop", spinner(app.spinner)),
             accent(),
         )
     } else if let Some(notice) = &app.notice {

@@ -19,7 +19,7 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
 
     let prov_label = picker.provider_filter.as_deref().unwrap_or("All");
     let fetch_status = if app.fetching_models {
-        let glyph = SPINNER[app.spinner % SPINNER.len()];
+        let glyph = spinner(app.spinner);
         format!(" {glyph} fetching ")
     } else {
         String::new()

@@ -280,16 +280,13 @@ pub(super) fn draw_connect_list(
     frame: &mut Frame,
     app: &App,
     connect: &ConnectState,
-    spinner: usize,
+    step: usize,
     area: Rect,
 ) {
     if connect.loading {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(
-                    SPINNER[spinner % SPINNER.len()],
-                    Style::default().fg(accent()),
-                ),
+                Span::styled(spinner(step), Style::default().fg(accent())),
                 Span::styled(
                     connect.loading_detail().to_owned(),
                     Style::default().fg(muted()),

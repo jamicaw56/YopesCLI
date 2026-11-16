@@ -55,6 +55,11 @@ All notable changes to YopesCLI are recorded here. The format follows
 - A model with no known price — a provider catalog entry with no cost and no
   built-in price — no longer prints a `—` placeholder in the header: the spend
   segment is dropped, leaving the provider, model and context load.
+- The busy spinner is now one turning braille ring everywhere it appears: the
+  footer status, the session tabs, the subagent sidebar, the transcript's
+  delegate rows, the model picker and `/connect` all draw the same eight-frame
+  ring from one clock. The tabs used to park a static `◐` while the rest cycled
+  four half-circles.
 
 ### Fixed
 

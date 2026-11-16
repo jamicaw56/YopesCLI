@@ -15,9 +15,9 @@ pub(super) const SIDEBAR_MIN_WIDTH: u16 = 90;
 /// the name the model gave the task, not the task text itself. The label
 /// truncates to the width the row has left: the sidebar never wraps, so a
 /// long name clips with an ellipsis instead of spilling past the border.
-fn agent_row(agent: &crate::app::Subagent, spinner: usize, width: u16) -> Line<'static> {
+fn agent_row(agent: &crate::app::Subagent, step: usize, width: u16) -> Line<'static> {
     let (glyph, color) = match agent.status {
-        crate::app::SubagentStatus::Running => (SPINNER[spinner % SPINNER.len()], accent()),
+        crate::app::SubagentStatus::Running => (spinner(step), accent()),
         crate::app::SubagentStatus::Done => ("✓", muted()),
         crate::app::SubagentStatus::Failed => ("✗", error()),
     };
@@ -267,10 +267,9 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
             Style::default().fg(text())
         };
         let (glyph, glyph_style) = match agent.status {
-            crate::app::SubagentStatus::Running => (
-                SPINNER[app.spinner % SPINNER.len()],
-                Style::default().fg(accent()),
-            ),
+            crate::app::SubagentStatus::Running => {
+                (spinner(app.spinner), Style::default().fg(accent()))
+            }
             crate::app::SubagentStatus::Done => ("✓", Style::default().fg(muted())),
             crate::app::SubagentStatus::Failed => ("✗", Style::default().fg(error())),
         };
