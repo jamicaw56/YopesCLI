@@ -486,18 +486,6 @@ impl App {
         title
     }
 
-    /// The saved session file a tab writes, by file name: the header shows
-    /// it, so a crashed or stalled conversation can be resumed by pointing
-    /// `--session` at that exact history.
-    pub(crate) fn tab_session_file(&self, index: usize) -> Option<String> {
-        let path = if index == self.tab {
-            self.session_path.as_ref()?
-        } else {
-            self.tabs.get(index)?.session_path.as_ref()?
-        };
-        Some(path.file_name()?.to_string_lossy().into_owned())
-    }
-
     /// Save every tab's history: the active one through the snapshot writer,
     /// the parked ones directly, because this runs on the way out.
     pub(crate) fn persist_all(&self) -> Result<()> {

@@ -60,17 +60,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let active = app.tab_index();
     let labels: Vec<String> = (0..count)
-        .map(|index| {
-            let mut label = format!("{} {}", index + 1, app.tab_title(index));
-            // The session file the active tab writes: a crash or a stall can
-            // be resumed by pointing `--session` at this exact history.
-            if index == active {
-                if let Some(file) = app.tab_session_file(index) {
-                    label.push_str(&format!(" ·{file}"));
-                }
-            }
-            label
-        })
+        .map(|index| format!("{} {}", index + 1, app.tab_title(index)))
         .collect();
     let full: u16 = (0..count)
         .map(|index| tab_width(index, &labels[index]))
@@ -552,24 +542,10 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             },
         )
     } else {
-        // The mode is the idle status's first word: Tab cycles build · plan · chat.
-        let text = if app.tools_mode == ToolsMode::Auto {
-            format!(
-                "mode {} · [yolo] · shift+tab permissions · ctrl+t tabs · enter send · / commands",
-                app.mode.label()
-            )
-        } else {
-            format!(
-                "mode {} · shift+tab yolo · ctrl+t tabs · enter send · / commands · F1 help",
-                app.mode.label()
-            )
-        };
-        let color = match app.mode {
-            Mode::Build if app.tools_mode == ToolsMode::Auto => warning(),
-            Mode::Build => muted(),
-            _ => accent(),
-        };
-        (text, color)
+        // The idle row stays quiet: the mode and the permission badge already
+        // sit in the header, and the shortcut hints live in F1 help. A notice
+        // or an in-flight turn still speaks here.
+        (String::new(), muted())
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().fg(color)),

@@ -13,7 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::{
     app::{
         App, COMMANDS, ChangeReport, CommandSpec, ConnectStage, ConnectState,
-        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, Mode, ModelRow, NoticeKind,
+        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, ModelRow, NoticeKind,
         ToolApproval, ToolsMode, format_bytes, format_tokens, list_row_of,
     },
     diff::{ChangeKind, DiffLine, FileDiff},

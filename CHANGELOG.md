@@ -48,6 +48,10 @@ All notable changes to YopesCLI are recorded here. The format follows
   certain at 100% (always past it), instead of firing on a fixed threshold.
 - The `compacting context` status renders in the warning color, so it reads
   apart from the thinking caret, which stays in the accent color.
+- The header no longer prints the session file the active tab writes, and the
+  idle footer no longer prints the shortcut hint line: the mode and permission
+  badges in the header already say what the hint repeated, and the shortcuts
+  stay in `F1` help.
 
 ### Fixed
 
@@ -64,8 +68,6 @@ All notable changes to YopesCLI are recorded here. The format follows
   completion marker is detected instead of quietly truncating the reply and
   looking finished; providers that send `finish_reason` without `data: [DONE]`
   still end cleanly.
-- The header shows the session file the active tab writes, so a crashed or
-  stalled conversation can be resumed by pointing `--session` at it.
 
 ### Added
 
