@@ -350,7 +350,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // anything still streams, and steps aside once every run has finished —
     // a finished run means finished work, not a panel parked over the
     // transcript. `/agents` or the viewer still reach every run afterwards.
-    let show_sidebar = app.any_subagent_running() && area.width >= SIDEBAR_MIN_WIDTH + 60;
+    // Narrower terminals keep the sidebar: its rows and badge truncate to
+    // the box instead of the panel vanishing.
+    let show_sidebar = app.any_subagent_running() && area.width >= SIDEBAR_MIN_WIDTH;
     let transcript_area = if show_sidebar {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
@@ -360,6 +362,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         columns[0]
     } else {
         app.sidebar_hits.clear();
+        app.sidebar_area = None;
         chunks[1]
     };
     draw_transcript(frame, app, transcript_area);

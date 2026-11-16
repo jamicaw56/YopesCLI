@@ -321,6 +321,12 @@ pub struct App {
     /// Click hit-boxes for the sidebar's run rows, refilled each draw:
     /// (x_start, x_end, row, index into `subagents`).
     pub(crate) sidebar_hits: Vec<(u16, u16, u16, usize)>,
+    /// How far the sidebar's run list is scrolled up from the newest rows:
+    /// zero keeps the tail in view, scrolling reveals the runs above it.
+    pub(crate) sidebar_scroll: usize,
+    /// The sidebar's on-screen area as (x, y, width, height), refilled each
+    /// draw: the wheel scroll hit-tests against it.
+    pub(crate) sidebar_area: Option<(u16, u16, u16, u16)>,
     palette_index: usize,
     palette_hidden: bool,
     connect: Option<ConnectState>,
@@ -430,6 +436,8 @@ impl App {
             subagent_view: None,
             subagent_scroll: 0,
             sidebar_hits: Vec::new(),
+            sidebar_scroll: 0,
+            sidebar_area: None,
             palette_index: 0,
             palette_hidden: false,
             connect: None,
