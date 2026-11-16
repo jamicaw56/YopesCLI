@@ -1,4 +1,4 @@
-//! The `/connect` wizard's state: the stage machine, its list items, and the
+//! The `/provider connect` wizard's state: the stage machine, its list items, and the
 //! helpers every handler reaches for.
 use ratatui::layout::Rect;
 

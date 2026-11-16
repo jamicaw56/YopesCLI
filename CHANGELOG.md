@@ -60,6 +60,14 @@ All notable changes to YopesCLI are recorded here. The format follows
   delegate rows, the model picker and `/connect` all draw the same eight-frame
   ring from one clock. The tabs used to park a static `◐` while the rest cycled
   four half-circles.
+- The slash-command list is down from twenty commands to ten, grouped by what
+  they act on: `/session` (list, new, tab, rename, close, next, prev, 1-9)
+  absorbs `/new`, `/sessions`, `/tab` and `/rename`; `/provider` (connect,
+  disconnect, models) absorbs `/connect`, `/disconnect` and `/models`; `/set`
+  (tools, theme, system, compact, effort) absorbs `/tools`, `/theme`, `/system`,
+  `/compact` and `/effort`; the version now shows in the `F1` help title
+  instead of `/version`. `Ctrl+R` opens `/session rename` prefilled with the
+  current title, and `/set` with no key lists every setting and its value.
 
 ### Fixed
 

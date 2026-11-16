@@ -10,22 +10,20 @@ YopesCLI is a Rust/Ratatui terminal coding agent. It can chat with OpenAI-compat
 ## Starting and setup
 
 - Launch `yopes` in the project directory.
-- If no provider is configured, use `/connect` to select a models.dev provider or configure a custom OpenAI-compatible endpoint.
+- If no provider is configured, use `/provider` to select a models.dev provider or configure a custom OpenAI-compatible endpoint.
 - Prefer environment variables or the saved connection; never ask users to paste secrets into source files or commit them.
-- Use `/model <name>` to switch models.
+- Use `/provider models <name>` to switch models.
 
 ## Core commands
 
-- `/help`: keyboard help.
-- `/new`: start a separate session.
-- `/sessions`: switch saved sessions.
-- `/connect`: configure providers/models.
-- `/model`: choose from the connected endpoint's saved models.
-- `/tools on|off|auto|ask`: set tool approval mode.
-- `/system <text>`, `/system`, `/system off`: manage a custom system prompt.
-- `/compact`, `/compact now`, `/compact on|off`: summarize older history / control automatic compaction.
-- `/effort off|none|low|medium|high|xhigh`: set reasoning effort.
-- `/quit`: save and exit.
+Ten commands, each with sub-actions:
+
+- `/help`: keyboard help, the command list and the version.
+- `/session [list|new|tab|rename <title>|close|next|prev|1-9]`: sessions and tabs.
+- `/provider [connect|disconnect [name]|models [name]]`: configure providers and models.
+- `/set <tools|theme|system|compact|effort> [value]`: change a setting; `/set` alone shows every value.
+- `/run <command>`, `/cd <path>`: shell command, working directory.
+- `/agents`, `/skills`, `/revert`, `/quit`.
 
 ## Tool behavior
 

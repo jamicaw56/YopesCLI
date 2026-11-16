@@ -110,12 +110,12 @@ impl App {
         choices
     }
 
-    /// `/models` with no argument: a popup over every connected provider's
+    /// `/provider models` with no argument: a popup over every connected provider's
     /// models; empty lists fall back to the info notice.
     pub(crate) fn open_model_picker(&mut self) {
         self.model_choices = self.build_model_choices();
         if self.model_choices.is_empty() {
-            self.info("No saved model list — run /connect to browse models.");
+            self.info("No saved model list — run /provider connect to browse models.");
             return;
         }
         self.model_picker = Some(ListPicker::default());
@@ -153,12 +153,12 @@ impl App {
         if auth.requires_token() && api_key.is_none() {
             if secret.as_ref().is_some_and(|secret| secret.has_key()) {
                 self.error(format!(
-                    "{} has an encrypted key — run /connect to unlock it.",
+                    "{} has an encrypted key — run /provider connect to unlock it.",
                     choice.provider
                 ));
             } else {
                 self.error(format!(
-                    "{} has no API key stored — run /connect to enter one.",
+                    "{} has no API key stored — run /provider connect to enter one.",
                     choice.provider
                 ));
             }
@@ -362,13 +362,13 @@ impl App {
         let current = self.session_path.clone().unwrap_or_default();
         let entries = self.collect_sessions();
         if entries.len() == 1 && entries[0].path == current {
-            self.info("Only the current session exists yet — /new starts another.");
+            self.info("Only the current session exists yet — /session new starts another.");
             return;
         }
         self.session_picker = Some(ListPicker::default());
     }
 
-    /// `/sessions` rows: every file in the sessions directory, newest first,
+    /// `/session` rows: every file in the sessions directory, newest first,
     /// plus the active file when it lives somewhere else.
     pub(crate) fn collect_sessions(&self) -> Vec<SessionEntry> {
         let mut paths: Vec<PathBuf> = Vec::new();
@@ -406,7 +406,7 @@ impl App {
             .collect()
     }
 
-    /// Rows shown in the `/sessions` popup for its current filter.
+    /// Rows shown in the `/session` popup for its current filter.
     pub(crate) fn session_picker_count(&self) -> usize {
         self.session_matches().len()
     }
@@ -475,7 +475,7 @@ impl App {
         }
     }
 
-    /// State that belongs to the view of one session, reset on /new or switch.
+    /// State that belongs to the view of one session, reset on `/session new` or switch.
     /// Parked subagent reports go with the session they belong to, so a
     /// report from the old conversation never lands in the new one. Parked
     /// talk messages go with it for the same reason.
@@ -540,7 +540,7 @@ impl App {
     }
 
     /// Result of the background naming request, handled in the main loop.
-    /// The id keeps a fast `/sessions` switch from stealing another session's name.
+    /// The id keeps a fast `/session` switch from stealing another session's name.
     pub(crate) fn on_session_title(&mut self, session_id: u64, raw: String) {
         if self.session.id != session_id {
             return;
@@ -767,7 +767,7 @@ pub(crate) fn model_matching_with_provider<'a>(
         .collect()
 }
 
-/// One row of the `/sessions` popup: a saved session file with its title.
+/// One row of the `/session` popup: a saved session file with its title.
 #[derive(Clone)]
 pub struct SessionEntry {
     pub path: PathBuf,

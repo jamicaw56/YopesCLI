@@ -62,7 +62,7 @@ impl ToolsMode {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Mode {
-    /// Apply changes: tools follow the /tools setting as usual.
+    /// Apply changes: tools follow the `/set tools` setting as usual.
     #[default]
     Build,
     /// Research and propose only; writes and commands are blocked.

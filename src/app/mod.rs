@@ -42,7 +42,7 @@ mod talk;
 mod turn;
 
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
-pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, matching_commands};
+pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, SET_KEYS, matching_commands};
 pub(crate) use delegate::{
     DelegateUpdate, SUBAGENT_BRIEF, SUBAGENT_NAME_BRIEF, Subagent, SubagentStatus, WRITING_TOOLS,
     ZERO_WRITE_NUDGE_ROUNDS,
@@ -244,14 +244,14 @@ pub struct App {
     /// Terminal width the cached image rows were rendered for.
     image_width: u16,
     pub approval: Option<ToolApproval>,
-    /// Popup picker opened by `/models` with no argument.
+    /// Popup picker opened by `/provider models` with no argument.
     pub model_picker: Option<ListPicker>,
     /// The models offered by every connected provider, rebuilt when the
     /// picker opens.
     pub model_choices: Vec<ModelChoice>,
     /// Whether models are actively being fetched in the background.
     pub fetching_models: bool,
-    /// Popup picker opened by `/sessions`.
+    /// Popup picker opened by `/session`.
     pub session_picker: Option<ListPicker>,
     /// Popup picker opened by `/revert`, listing the prompts already sent.
     pub revert_picker: Option<ListPicker>,
@@ -499,7 +499,7 @@ impl App {
         self.is_streaming() || self.tools_busy()
     }
 
-    /// Path of the session currently open, for the `/sessions` popup marker.
+    /// Path of the session currently open, for the `/session` popup marker.
     pub fn active_session_path(&self) -> Option<&PathBuf> {
         self.session_path.as_ref()
     }

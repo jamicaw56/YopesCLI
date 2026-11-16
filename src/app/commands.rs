@@ -1,7 +1,14 @@
 //! The slash-command palette: the table the composer matches against and
 //! the completion rules built from it.
+//!
+//! The table stays short on purpose: related actions live under one command
+//! (`/session`, `/provider`, `/set`) instead of a dozen one-word entries, so
+//! the palette fits on one screen and each verb has one obvious home.
 
-pub(crate) const EFFORT_CHOICES: &str = "Usage: /effort off|none|low|medium|high|xhigh";
+pub(crate) const EFFORT_CHOICES: &str = "Usage: /set effort off|none|low|medium|high|xhigh";
+
+/// The keys `/set` accepts, so an unknown one can list them.
+pub(crate) const SET_KEYS: &str = "tools, theme, system, compact, effort";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandSpec {
@@ -27,26 +34,26 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 19] = [
+pub const COMMANDS: [CommandSpec; 10] = [
     CommandSpec {
         name: "/help",
-        description: "Show keys and commands",
+        description: "Show keys, commands and the version",
         argument: None,
     },
     CommandSpec {
-        name: "/new",
-        description: "Start a fresh session",
-        argument: None,
+        name: "/session",
+        description: "Sessions and tabs: list, new, tab, rename, close, next, prev, 1-9",
+        argument: Some("action"),
     },
     CommandSpec {
-        name: "/connect",
-        description: "Connect a provider and model",
-        argument: None,
+        name: "/provider",
+        description: "Connect, disconnect, or pick a model",
+        argument: Some("action"),
     },
     CommandSpec {
-        name: "/disconnect",
-        description: "Disconnect active or named provider",
-        argument: Some("name"),
+        name: "/set",
+        description: "Change a setting: tools, theme, system, compact, effort",
+        argument: Some("key"),
     },
     CommandSpec {
         name: "/run",
@@ -59,54 +66,9 @@ pub const COMMANDS: [CommandSpec; 19] = [
         argument: Some("path"),
     },
     CommandSpec {
-        name: "/models",
-        description: "Browse models from connected providers",
-        argument: Some("name"),
-    },
-    CommandSpec {
-        name: "/sessions",
-        description: "Switch between saved sessions",
-        argument: None,
-    },
-    CommandSpec {
         name: "/agents",
         description: "View subagent responses from delegate calls",
         argument: None,
-    },
-    CommandSpec {
-        name: "/tab",
-        description: "Session tabs: new, close, next, prev, or 1-9",
-        argument: Some("action"),
-    },
-    CommandSpec {
-        name: "/tools",
-        description: "Set tool permission mode: on, yolo, ask, off",
-        argument: Some("mode"),
-    },
-    CommandSpec {
-        name: "/theme",
-        description: "Show or switch the color theme",
-        argument: Some("name"),
-    },
-    CommandSpec {
-        name: "/system",
-        description: "Show or set the custom system prompt",
-        argument: Some("text"),
-    },
-    CommandSpec {
-        name: "/compact",
-        description: "Compact history now; auto on|off",
-        argument: Some("on|off|now"),
-    },
-    CommandSpec {
-        name: "/revert",
-        description: "Edit and re-run a previous prompt",
-        argument: None,
-    },
-    CommandSpec {
-        name: "/effort",
-        description: "Show or set reasoning effort",
-        argument: Some("level"),
     },
     CommandSpec {
         name: "/skills",
@@ -114,8 +76,8 @@ pub const COMMANDS: [CommandSpec; 19] = [
         argument: None,
     },
     CommandSpec {
-        name: "/version",
-        description: "Show the running version",
+        name: "/revert",
+        description: "Edit and re-run a previous prompt",
         argument: None,
     },
     CommandSpec {
@@ -149,21 +111,20 @@ mod tests {
     }
 
     #[test]
-    fn theme_command_shows_the_active_theme_and_switches() {
+    fn theme_setting_shows_the_active_theme_and_switches() {
         let mut app = test_app();
-        app.command("/theme");
+        app.command("/set theme");
         assert!(
             app.notice
                 .as_ref()
                 .is_some_and(|notice| notice.message.starts_with("Theme:"))
         );
-        app.command("/theme dark");
+        app.command("/set theme dark");
         assert!(
             app.notice
                 .as_ref()
                 .is_some_and(|notice| notice.message.contains("Theme: dark"))
         );
-        assert_eq!(command_names("/theme"), vec!["/theme"]);
     }
 
     #[test]
@@ -172,47 +133,36 @@ mod tests {
             command_names("/"),
             vec![
                 "/help",
-                "/new",
-                "/connect",
-                "/disconnect",
+                "/session",
+                "/provider",
+                "/set",
                 "/run",
                 "/cd",
-                "/models",
-                "/sessions",
                 "/agents",
-                "/tab",
-                "/tools",
-                "/theme",
-                "/system",
-                "/compact",
-                "/revert",
-                "/effort",
                 "/skills",
-                "/version",
+                "/revert",
                 "/quit",
             ]
         );
-        assert_eq!(command_names("/c"), vec!["/connect", "/cd", "/compact"]);
-        assert_eq!(command_names("/d"), vec!["/disconnect"]);
+        assert_eq!(command_names("/c"), vec!["/cd"]);
         assert_eq!(command_names("/r"), vec!["/run", "/revert"]);
-        assert_eq!(command_names("/m"), vec!["/models"]);
-        assert_eq!(command_names("/s"), vec!["/sessions", "/system", "/skills"]);
-        assert_eq!(command_names("/t"), vec!["/tab", "/tools", "/theme"]);
-        assert_eq!(command_names("/e"), vec!["/effort"]);
-        assert_eq!(command_names("/v"), vec!["/version"]);
+        assert_eq!(command_names("/s"), vec!["/session", "/set", "/skills"]);
+        assert_eq!(command_names("/p"), vec!["/provider"]);
         assert_eq!(command_names("/a"), vec!["/agents"]);
-        assert_eq!(command_names("/MO"), vec!["/models"]);
+        assert_eq!(command_names("/q"), vec!["/quit"]);
+        // The query is matched case-insensitively against the name.
+        assert!(command_names("/MO").is_empty());
         assert!(command_names("/model gpt").is_empty());
         assert!(command_names("hello").is_empty());
     }
 
     #[test]
     fn completion_adds_a_space_only_when_arguments_are_expected() {
-        let model = COMMANDS
+        let session = COMMANDS
             .iter()
-            .find(|command| command.name == "/models")
+            .find(|command| command.name == "/session")
             .unwrap();
-        assert_eq!(model.completion(), "/models ");
+        assert_eq!(session.completion(), "/session ");
         let help = COMMANDS
             .iter()
             .find(|command| command.name == "/help")

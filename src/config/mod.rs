@@ -441,7 +441,7 @@ impl Config {
                 ProviderKind::Gemini => "GEMINI_API_KEY or GOOGLE_API_KEY",
                 _ => "OPENAI_API_KEY",
             };
-            bail!("no API key for {provider:?}; set {env_var} or run /connect");
+            bail!("no API key for {provider:?}; set {env_var} or run /provider connect");
         }
 
         Ok(Self {

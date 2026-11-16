@@ -568,6 +568,20 @@ impl App {
                         self.reset_palette();
                     }
                 }
+                KeyCode::Char('r' | 'R') => {
+                    // Rename in place: the composer is prefilled with the
+                    // command and the current title, so the edit happens where
+                    // every other input does. A session the model has not
+                    // named yet starts with an empty title.
+                    let title = self.session.title.trim();
+                    let seed = if title.is_empty() || title.eq_ignore_ascii_case("new session") {
+                        String::new()
+                    } else {
+                        title.to_owned()
+                    };
+                    self.input.set(format!("/session rename {seed}"));
+                    self.reset_palette();
+                }
                 _ => {}
             }
             return Action::None;

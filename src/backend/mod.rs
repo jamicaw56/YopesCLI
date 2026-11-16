@@ -302,16 +302,16 @@ impl Backend {
             );
         let result = match self.provider {
             ProviderKind::Unconfigured => Err(anyhow!(
-                "no provider connected; run /connect to get started"
+                "no provider connected; run /provider connect to get started"
             )),
-            _ if self.model.trim().is_empty() => {
-                Err(anyhow!("no model selected; run /models or /connect"))
-            }
+            _ if self.model.trim().is_empty() => Err(anyhow!(
+                "no model selected; run /provider models or /provider connect"
+            )),
             _ if self.base_url.trim().is_empty() => {
-                Err(anyhow!("no endpoint URL configured; run /connect"))
+                Err(anyhow!("no endpoint URL configured; run /provider connect"))
             }
             _ if self.auth.requires_token() && self.api_key.is_none() => {
-                Err(anyhow!("no API key configured; run /connect"))
+                Err(anyhow!("no API key configured; run /provider connect"))
             }
             ProviderKind::OpenAi | ProviderKind::Custom => {
                 self.stream_openai(
@@ -593,7 +593,7 @@ impl Backend {
 /// Shown when a provider ends a reply with `finish_reason: "length"`.
 const OUTPUT_LIMIT: &str = "the provider stopped the reply at its output token limit \
 (finish_reason: length). Reasoning tokens count toward it, so long thinking can use the whole \
-budget before any answer. Lower /effort, or send \"continue\".";
+budget before any answer. Lower /set effort, or send \"continue\".";
 
 fn anthropic_url(base_url: &str) -> String {
     let base_url = base_url.trim_end_matches('/');

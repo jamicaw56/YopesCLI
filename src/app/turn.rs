@@ -36,22 +36,21 @@ fn compaction_chance(total: u64, window: u64, roll: u64) -> bool {
 /// touch the turn in flight. The ones that would swap the session, the
 /// provider or the conversation are not.
 fn command_is_safe_while_streaming(prompt: &str) -> bool {
-    let name = prompt.split_whitespace().next().unwrap_or_default();
-    matches!(
-        name,
-        "/help"
-            | "/models"
-            | "/agents"
-            | "/tools"
-            | "/permission"
-            | "/permissions"
-            | "/system"
-            | "/effort"
-            | "/skills"
-            | "/theme"
-            | "/version"
-            | "/quit"
-    )
+    let mut words = prompt.split_whitespace();
+    let name = words.next().unwrap_or_default();
+    // Only the rename half of `/session` touches nothing but the title; the
+    // rest swaps, closes or opens what the turn is answering in.
+    if name == "/session" {
+        return words.next() == Some("rename");
+    }
+    // An immediate compaction is a request of its own; the rest of `/set`
+    // only changes what the next request sends.
+    if name == "/set" {
+        let key = words.next().unwrap_or_default();
+        let value = words.next().unwrap_or_default();
+        return !key.eq_ignore_ascii_case("compact") || matches!(value, "on" | "off");
+    }
+    matches!(name, "/help" | "/agents" | "/skills" | "/quit")
 }
 
 fn normalize_endpoint_url(url: &str) -> (String, &str) {
@@ -361,27 +360,86 @@ impl App {
         }
     }
 
+    /// Name the session by hand: the title the header tab, the tab strip and
+    /// `/sessions` show. A manual name also stops the auto-namer from
+    /// replacing it after the first reply.
+    pub(crate) fn rename_session(&mut self, title: &str) {
+        let title: String = title.trim().chars().take(48).collect();
+        let title = title.trim();
+        if title.is_empty() {
+            return;
+        }
+        self.session.title = title.to_owned();
+        self.session.auto_named = true;
+        self.save_session();
+        self.info(format!("Session renamed to {title}"));
+    }
+
     pub(crate) fn command(&mut self, command: &str) -> Action {
         let mut parts = command.split_whitespace();
         match parts.next().unwrap_or_default() {
             "/help" => self.show_help = true,
-            "/new" => self.new_session(),
-            "/connect" => return self.begin_connect(),
-            "/disconnect" => {
-                let target = parts.collect::<Vec<_>>().join(" ");
-                if target.is_empty() {
-                    let active_endpoint = self.backend.base_url().to_owned();
-                    if active_endpoint.is_empty()
-                        || self.backend.provider_kind() == ProviderKind::Unconfigured
-                    {
-                        self.info("No provider currently connected.");
+            "/session" => match parts
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "" | "list" => self.open_session_picker(),
+                "new" => self.new_session(),
+                "tab" => self.open_tab(),
+                "close" => self.close_tab(),
+                "next" => self.cycle_tab(1),
+                "prev" | "previous" => self.cycle_tab(-1),
+                "rename" => {
+                    let title = parts.collect::<Vec<_>>().join(" ");
+                    if title.trim().is_empty() {
+                        let current = self.session.title.clone();
+                        self.info(format!("Session: {current} · /session rename <title>"));
                     } else {
-                        self.disconnect_endpoint(&active_endpoint);
+                        self.rename_session(&title);
                     }
-                } else {
-                    self.disconnect_named_provider(&target);
                 }
-            }
+                other => match other.parse::<usize>() {
+                    Ok(index) if index >= 1 => self.select_tab(index - 1),
+                    _ => self
+                        .error("Usage: /session list|new|tab|rename <title>|close|next|prev|1-9"),
+                },
+            },
+            "/provider" => match parts
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "" | "connect" => return self.begin_connect(),
+                "disconnect" => {
+                    let target = parts.collect::<Vec<_>>().join(" ");
+                    if target.is_empty() {
+                        let active_endpoint = self.backend.base_url().to_owned();
+                        if active_endpoint.is_empty()
+                            || self.backend.provider_kind() == ProviderKind::Unconfigured
+                        {
+                            self.info("No provider currently connected.");
+                        } else {
+                            self.disconnect_endpoint(&active_endpoint);
+                        }
+                    } else {
+                        self.disconnect_named_provider(&target);
+                    }
+                }
+                "models" => {
+                    let model = parts.collect::<Vec<_>>().join(" ");
+                    if model.is_empty() {
+                        self.open_model_picker();
+                    } else {
+                        self.backend.set_model(model.clone());
+                        self.persist_model(&model);
+                        self.info(format!("Model changed to {model}"));
+                    }
+                }
+                _ => self.error("Usage: /provider connect|disconnect [name]|models [name]"),
+            },
             "/run" => {
                 let cmd = parts.collect::<Vec<_>>().join(" ");
                 if cmd.is_empty() {
@@ -394,165 +452,22 @@ impl App {
                 let path = parts.collect::<Vec<_>>().join(" ");
                 self.change_directory(&path);
             }
-            "/models" => {
-                let model = parts.collect::<Vec<_>>().join(" ");
-                if model.is_empty() {
-                    self.open_model_picker();
-                } else {
-                    self.backend.set_model(model.clone());
-                    self.persist_model(&model);
-                    self.info(format!("Model changed to {model}"));
+            "/set" => {
+                let key = parts.next().unwrap_or_default().to_ascii_lowercase();
+                let value = parts.collect::<Vec<_>>().join(" ");
+                match key.as_str() {
+                    "tools" | "permission" | "permissions" => self.set_tools_mode(&value),
+                    "theme" => self.set_theme(&value),
+                    "system" | "prompt" => self.set_custom_system_prompt(&value),
+                    "effort" | "reasoning" => self.set_effort(&value),
+                    "compact" => return self.set_compact(&value),
+                    "" => self.show_settings(),
+                    other => self.error(format!("Unknown setting `{other}` · /set {SET_KEYS}")),
                 }
             }
-            "/version" => {
-                self.info(format!("yopes {}", crate::update::current_version()));
-            }
-            "/sessions" => self.open_session_picker(),
             "/agents" => self.open_agents_picker(),
-            "/revert" => self.open_revert_picker(),
-            "/tab" => {
-                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
-                match value.as_str() {
-                    "" | "new" => self.open_tab(),
-                    "close" => self.close_tab(),
-                    "next" => self.cycle_tab(1),
-                    "prev" | "previous" => self.cycle_tab(-1),
-                    other => match other.parse::<usize>() {
-                        Ok(index) if index >= 1 => self.select_tab(index - 1),
-                        _ => self.error("Usage: /tab new|close|next|prev|1-9"),
-                    },
-                }
-            }
-            "/theme" => {
-                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
-                if value.is_empty() {
-                    self.info(format!(
-                        "Theme: {} · /theme <name> · {}",
-                        crate::theme::current_name(),
-                        crate::theme::names()
-                    ));
-                } else if crate::theme::set(&value) {
-                    if let Err(error) = config::save_theme(&self.config_path, &value) {
-                        self.error(format!("Could not save the theme: {error:#}"));
-                    }
-                    self.info(format!("Theme: {}", crate::theme::current_name()));
-                } else {
-                    self.error(format!("Usage: /theme <{}>", crate::theme::names()));
-                }
-            }
-            "/system" => {
-                let rest = parts.collect::<Vec<_>>().join(" ");
-                let current = self.backend.system_prompt().map(str::to_owned);
-                if rest.is_empty() {
-                    if let Some(current) = current {
-                        self.info(format!("Custom system prompt: {current}"));
-                    } else {
-                        self.info(
-                            "No custom system prompt · /system <text> to set one, /system off to remove it",
-                        );
-                    }
-                } else if matches!(rest.as_str(), "off" | "clear" | "none") {
-                    self.backend.set_system_prompt(None);
-                    self.persist_system_prompt(None);
-                    self.info("Custom system prompt removed");
-                } else {
-                    self.backend.set_system_prompt(Some(rest.clone()));
-                    self.persist_system_prompt(Some(rest));
-                    self.info("Custom system prompt set");
-                }
-            }
-            "/tools" | "/permission" | "/permissions" => {
-                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
-                if value.is_empty() {
-                    self.info(format!(
-                        "Tools: {} — {} · /tools on|yolo|ask|off",
-                        self.tools_mode.label(),
-                        self.tools_mode.detail()
-                    ));
-                } else if let Some(mode) = ToolsMode::parse(&value) {
-                    self.tools_mode = mode;
-                    let suffix = if mode.advertised()
-                        && !matches!(
-                            self.backend.provider_kind(),
-                            ProviderKind::OpenAi
-                                | ProviderKind::Custom
-                                | ProviderKind::Anthropic
-                                | ProviderKind::Gemini
-                        ) {
-                        " · tools require an OpenAI, Anthropic, or Gemini provider"
-                    } else {
-                        ""
-                    };
-                    self.info(format!(
-                        "Tools: {} — {}{suffix}",
-                        mode.label(),
-                        mode.detail()
-                    ));
-                } else {
-                    self.error("Usage: /tools on|yolo|ask|off");
-                }
-            }
-            "/compact" => {
-                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
-                if value.is_empty() || value == "now" {
-                    if !self.backend.is_configured() {
-                        self.error("No provider connected. Run /connect to get started.");
-                    } else if self.backend.model().trim().is_empty() {
-                        self.error("No model selected. Run /models or /connect to choose a model.");
-                    } else if let Some(split) = self
-                        .session
-                        .compaction_split(
-                            self.model_context_window()
-                                .map(|w| w / COMPACTION_KEEP_FRAC)
-                                .unwrap_or(DEFAULT_CONTEXT_WINDOW / COMPACTION_KEEP_FRAC),
-                        )
-                        .filter(|split| *split > 0)
-                    {
-                        return self.begin_compaction(split, 0);
-                    } else {
-                        self.info(format!(
-                            "Nothing to compact · auto compact {} · /compact on|off|now",
-                            if self.auto_compact { "on" } else { "off" }
-                        ));
-                    }
-                } else if matches!(value.as_str(), "on" | "off") {
-                    self.auto_compact = value == "on";
-                    self.persist_auto_compact(self.auto_compact);
-                    self.info(if self.auto_compact {
-                        "Auto compact on — older turns summarize once the context fills".to_owned()
-                    } else {
-                        "Auto compact off — the full history is sent; /compact summarizes \
-                         manually"
-                            .to_owned()
-                    });
-                } else {
-                    self.error("Usage: /compact on|off|now");
-                }
-            }
-            "/effort" => {
-                let value = parts.next().unwrap_or_default().to_ascii_lowercase();
-                if value.is_empty() {
-                    match self.backend.reasoning_effort() {
-                        Some(effort) => self.info(format!(
-                            "Reasoning effort: {effort} · /effort to toggle, {EFFORT_CHOICES}"
-                        )),
-                        None => self.info(format!(
-                            "Reasoning effort: backend default · {EFFORT_CHOICES}"
-                        )),
-                    }
-                } else if matches!(value.as_str(), "off" | "none") {
-                    self.persist_reasoning_effort(None);
-                    self.backend.set_reasoning_effort(None);
-                    self.info("Reasoning effort off — the backend default applies");
-                } else if matches!(value.as_str(), "low" | "medium" | "high" | "xhigh") {
-                    self.persist_reasoning_effort(Some(value.clone()));
-                    self.backend.set_reasoning_effort(Some(value.clone()));
-                    self.info(format!("Reasoning effort set to {value}"));
-                } else {
-                    self.error(format!("Usage: {EFFORT_CHOICES}"));
-                }
-            }
             "/skills" => self.show_skills(),
+            "/revert" => self.open_revert_picker(),
             "/quit" => {
                 self.should_quit = true;
                 return Action::Quit;
@@ -560,6 +475,172 @@ impl App {
             unknown => self.error(format!(
                 "Unknown command `{unknown}`. Type / to see commands."
             )),
+        }
+        Action::None
+    }
+
+    /// `/set` with no key: every setting and its current value on one line,
+    /// so the keys are discoverable without a manual.
+    fn show_settings(&mut self) {
+        let effort = self
+            .backend
+            .reasoning_effort()
+            .unwrap_or("default")
+            .to_owned();
+        let system = self.backend.system_prompt().map_or_else(
+            || "none".to_owned(),
+            |prompt| prompt.chars().take(40).collect::<String>(),
+        );
+        let auto_compact = if self.auto_compact { "on" } else { "off" };
+        let message = format!(
+            "Settings · tools {} · theme {} · effort {effort} · auto compact {auto_compact} · \
+             system {system} · /set {SET_KEYS}",
+            self.tools_mode.label(),
+            crate::theme::current_name(),
+        );
+        self.info(message);
+    }
+
+    /// `/set tools <mode>`: the permission mode Shift+Tab cycles.
+    fn set_tools_mode(&mut self, value: &str) {
+        let value = value.trim().to_ascii_lowercase();
+        if value.is_empty() {
+            self.info(format!(
+                "Tools: {} — {} · /set tools on|yolo|ask|off",
+                self.tools_mode.label(),
+                self.tools_mode.detail()
+            ));
+            return;
+        }
+        let Some(mode) = ToolsMode::parse(&value) else {
+            self.error("Usage: /set tools on|yolo|ask|off");
+            return;
+        };
+        self.tools_mode = mode;
+        let suffix = if mode.advertised()
+            && !matches!(
+                self.backend.provider_kind(),
+                ProviderKind::OpenAi
+                    | ProviderKind::Custom
+                    | ProviderKind::Anthropic
+                    | ProviderKind::Gemini
+            ) {
+            " · tools require an OpenAI, Anthropic, or Gemini provider"
+        } else {
+            ""
+        };
+        self.info(format!(
+            "Tools: {} — {}{suffix}",
+            mode.label(),
+            mode.detail()
+        ));
+    }
+
+    /// `/set theme [name]`: the color theme, saved to the config.
+    fn set_theme(&mut self, value: &str) {
+        let value = value.trim().to_ascii_lowercase();
+        if value.is_empty() {
+            self.info(format!(
+                "Theme: {} · /set theme <name> · {}",
+                crate::theme::current_name(),
+                crate::theme::names()
+            ));
+        } else if crate::theme::set(&value) {
+            if let Err(error) = config::save_theme(&self.config_path, &value) {
+                self.error(format!("Could not save the theme: {error:#}"));
+            }
+            self.info(format!("Theme: {}", crate::theme::current_name()));
+        } else {
+            self.error(format!("Usage: /set theme <{}>", crate::theme::names()));
+        }
+    }
+
+    /// `/set system [text]`: the custom system prompt, or `off` to clear it.
+    fn set_custom_system_prompt(&mut self, value: &str) {
+        let value = value.trim().to_owned();
+        let current = self.backend.system_prompt().map(str::to_owned);
+        if value.is_empty() {
+            if let Some(current) = current {
+                self.info(format!("Custom system prompt: {current}"));
+            } else {
+                self.info(
+                    "No custom system prompt · /set system <text> to set one, \
+                     /set system off to remove it",
+                );
+            }
+        } else if matches!(value.as_str(), "off" | "clear" | "none") {
+            self.backend.set_system_prompt(None);
+            self.persist_system_prompt(None);
+            self.info("Custom system prompt removed");
+        } else {
+            self.backend.set_system_prompt(Some(value.clone()));
+            self.persist_system_prompt(Some(value));
+            self.info("Custom system prompt set");
+        }
+    }
+
+    /// `/set effort [level]`: the reasoning effort, or `off` for the backend
+    /// default.
+    fn set_effort(&mut self, value: &str) {
+        let value = value.trim().to_ascii_lowercase();
+        if value.is_empty() {
+            match self.backend.reasoning_effort() {
+                Some(effort) => {
+                    self.info(format!("Reasoning effort: {effort} · {EFFORT_CHOICES}"));
+                }
+                None => self.info(format!(
+                    "Reasoning effort: backend default · {EFFORT_CHOICES}"
+                )),
+            }
+        } else if matches!(value.as_str(), "off" | "none") {
+            self.persist_reasoning_effort(None);
+            self.backend.set_reasoning_effort(None);
+            self.info("Reasoning effort off — the backend default applies");
+        } else if matches!(value.as_str(), "low" | "medium" | "high" | "xhigh") {
+            self.persist_reasoning_effort(Some(value.clone()));
+            self.backend.set_reasoning_effort(Some(value.clone()));
+            self.info(format!("Reasoning effort set to {value}"));
+        } else {
+            self.error(format!("Usage: {EFFORT_CHOICES}"));
+        }
+    }
+
+    /// `/set compact [on|off|now]`: auto compaction, or summarize right now.
+    fn set_compact(&mut self, value: &str) -> Action {
+        let value = value.trim().to_ascii_lowercase();
+        if value.is_empty() || value == "now" {
+            if !self.backend.is_configured() {
+                self.error("No provider connected. Run /provider connect to get started.");
+            } else if self.backend.model().trim().is_empty() {
+                self.error("No model selected. Run /provider models or /provider connect.");
+            } else if let Some(split) = self
+                .session
+                .compaction_split(
+                    self.model_context_window()
+                        .map(|w| w / COMPACTION_KEEP_FRAC)
+                        .unwrap_or(DEFAULT_CONTEXT_WINDOW / COMPACTION_KEEP_FRAC),
+                )
+                .filter(|split| *split > 0)
+            {
+                return self.begin_compaction(split, 0);
+            } else {
+                self.info(format!(
+                    "Nothing to compact · auto compact {} · /set compact on|off|now",
+                    if self.auto_compact { "on" } else { "off" }
+                ));
+            }
+        } else if matches!(value.as_str(), "on" | "off") {
+            self.auto_compact = value == "on";
+            self.persist_auto_compact(self.auto_compact);
+            self.info(if self.auto_compact {
+                "Auto compact on — older turns summarize once the context fills".to_owned()
+            } else {
+                "Auto compact off — the full history is sent; /set compact now summarizes it \
+                 manually"
+                    .to_owned()
+            });
+        } else {
+            self.error("Usage: /set compact on|off|now");
         }
         Action::None
     }
@@ -973,10 +1054,10 @@ pub(crate) mod tests {
         });
 
         // Unsafe command while tool runs is blocked and restored to input
-        app.input.set("/new");
+        app.input.set("/session new");
         let action = app.submit();
         assert!(matches!(action, Action::None));
-        assert_eq!(app.input.value, "/new");
+        assert_eq!(app.input.value, "/session new");
         assert!(app.notice.is_some());
 
         // Chat message while tool runs is queued into session messages
@@ -1145,6 +1226,43 @@ pub(crate) mod tests {
         ));
         assert_eq!(app.tools_mode, ToolsMode::On);
         assert_eq!(app.tools_mode.label(), "on");
+    }
+
+    #[test]
+    fn ctrl_r_prefills_the_rename_command_with_the_current_title() {
+        let mut app = test_app();
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('r'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        // An unnamed session seeds an empty title: the command and a space.
+        assert_eq!(app.input.value, "/session rename ");
+        assert_eq!(app.input.cursor, app.input.value.len());
+
+        app.session.title = "Refactor the parser".to_owned();
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('R'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.input.value, "/session rename Refactor the parser");
+    }
+
+    #[test]
+    fn rename_command_sets_the_title_and_keeps_the_auto_namer_off() {
+        let mut app = test_app();
+        app.command("/session rename  parser refactor ");
+        assert_eq!(app.session.title, "parser refactor");
+        // The generated name must not overwrite a name the user chose.
+        assert!(app.session.auto_named);
+
+        // Bare `/session rename` reports the title instead of clearing it.
+        app.command("/session rename");
+        assert_eq!(app.session.title, "parser refactor");
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("parser refactor"))
+        );
     }
 
     #[test]

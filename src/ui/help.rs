@@ -15,7 +15,9 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(muted()))
         .title_top(Line::styled(
-            " help ",
+            // The version lives in the help title: `/set` has no room for a
+            // command that exists only to print one number.
+            format!(" help · v{} ", crate::update::current_version()),
             Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::styled(
@@ -43,6 +45,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         help_row("right-click", "paste image / text"),
         help_row("click run", "open a subagent's response in the viewer"),
         help_row("ctrl+p", "fold / unfold the Progress panel"),
+        help_row("ctrl+r", "rename this session"),
         help_row("ctrl+n", "new session"),
         help_row("ctrl+u", "clear input"),
         help_row("ctrl+w", "delete previous word"),
