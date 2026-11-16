@@ -168,6 +168,17 @@ impl App {
                         self.info(
                             "The model returned no content for this turn; try sending again.",
                         );
+                    } else if self.session.messages.last().is_some_and(|last| {
+                        last.role == Role::Assistant
+                            && last.content.is_empty()
+                            && last.tool_calls.is_none()
+                            && last.error.is_none()
+                    }) {
+                        // Reasoning is kept, but a turn that thought and then
+                        // ended with no answer must not look finished.
+                        self.info(
+                            "The model stopped after thinking, with no answer; send \"continue\".",
+                        );
                     }
                     self.save_session();
                     // Subagents that finished mid-turn report now, alerting

@@ -34,6 +34,11 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- A reply that hit the provider's output token cap (`finish_reason: "length"`,
+  common when long reasoning uses the budget) used to end as a clean finish,
+  so it just stopped with no warning. It now shows a provider error naming the
+  limit. A turn that ends after thinking with no answer gets a footer notice,
+  and a last stream line without a trailing newline is no longer dropped.
 - Streams that stall or get cut short no longer end the turn: a silent
   connection (idle past 180s) or a provider closing the stream mid-reply now
   resumes the request automatically — up to three times per turn, keeping any
