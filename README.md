@@ -32,6 +32,14 @@ The script picks the latest release, verifies its SHA256SUMS checksum, installs 
 2. Type a message. Tools ask for approval before they change anything; press `Enter` to allow one, `a` for the session, `Esc` to deny.
 3. `/` opens the command palette; `F1` shows keyboard help.
 
+## Headless runs
+
+`yopes run "task text"` sends one task and exits when the agent is idle: no
+interface, one turn chain, exit code `0` on success and non-zero when the
+provider fails. The usual flags (`--no-save`, `--system-prompt`, `--model`,
+`--session`, …) work and may come before or after `run`. Nothing can answer an
+approval prompt in a headless run, so tools run unattended (YOLO mode).
+
 ## Docs
 
 The [wiki](https://github.com/Jamicaw56/YopesCLI/wiki) holds the detail:

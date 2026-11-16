@@ -8,6 +8,12 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- A headless one-shot mode: `yopes run "task text"` submits one task, runs the
+  turn chain until the agent is idle, and exits — `0` on success, non-zero when
+  the provider fails. It needs no tty, so CI runners can drive the agent. Tools
+  run unattended (YOLO mode), since nothing can answer an approval prompt, and
+  the usual flags (`--no-save`, `--system-prompt`, `--model`, `--session`, …)
+  are accepted before or after the subcommand.
 - A real delegate system: the `delegate` tool now spawns a subagent run that
   streams live into a right-hand sidebar (status glyph, elapsed time, task
   excerpt, stacked as they start). Several delegate calls in one turn run in
