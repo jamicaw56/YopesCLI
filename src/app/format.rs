@@ -43,14 +43,16 @@ pub(super) fn known_model_price(model: &str) -> Option<(f64, f64)> {
 }
 
 /// Session spend as `$0.0000`, priced from the active model. A model with no
-/// known price shows `—`; a free one shows `free` rather than a fake bill.
+/// known price yields an empty string — the header drops the segment rather
+/// than printing a placeholder for a bill it cannot price; a free one shows
+/// `free` rather than a fake bill.
 pub fn format_cost(
     prompt_tokens: u64,
     completion_tokens: u64,
     price: Option<(f64, f64)>,
 ) -> String {
     let Some((input, output)) = price else {
-        return "—".to_owned();
+        return String::new();
     };
     if input == 0.0 && output == 0.0 {
         return "free".to_owned();
@@ -88,7 +90,7 @@ pub fn format_duration_ms(millis: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_bytes, format_tokens};
+    use super::{format_bytes, format_cost, format_tokens};
 
     #[test]
     fn formats_keep_tokens_and_bytes_compact() {
@@ -96,5 +98,15 @@ mod tests {
         assert_eq!(format_tokens(1200), "1.2k");
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(2150), "2.1 KB");
+    }
+
+    #[test]
+    fn an_unpriced_model_has_no_cost_segment() {
+        // No catalog or built-in price: nothing to show, not a `—`.
+        assert_eq!(format_cost(1_000_000, 0, None), "");
+        // A free model says so instead of `$0.0000`.
+        assert_eq!(format_cost(1_000_000, 0, Some((0.0, 0.0))), "free");
+        // A priced model keeps four decimals under a dollar.
+        assert_eq!(format_cost(1_000_000, 0, Some((0.12, 0.3))), "$0.1200");
     }
 }

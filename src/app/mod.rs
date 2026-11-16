@@ -552,7 +552,8 @@ impl App {
     }
 
     /// Session spend so far, priced from the active model. A provider catalog
-    /// price wins over the built-in list; an unknown model shows `—`.
+    /// price wins over the built-in list; a model neither of them prices
+    /// returns an empty string, so the header can drop the segment.
     pub fn spent_cost(&self) -> String {
         let price = self
             .backend

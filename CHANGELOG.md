@@ -52,6 +52,9 @@ All notable changes to YopesCLI are recorded here. The format follows
   idle footer no longer prints the shortcut hint line: the mode and permission
   badges in the header already say what the hint repeated, and the shortcuts
   stay in `F1` help.
+- A model with no known price — a provider catalog entry with no cost and no
+  built-in price — no longer prints a `—` placeholder in the header: the spend
+  segment is dropped, leaving the provider, model and context load.
 
 ### Fixed
 

@@ -202,8 +202,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
 /// `ctx used/window`.
 ///
 /// A narrow terminal drops the least useful segments from the front — model
-/// name first — so the context load and the spend survive instead of being
-/// cut mid-string.
+/// name first — so the context load survives instead of being cut mid-string.
 fn header_right(
     provider: &str,
     model: &str,
@@ -219,7 +218,11 @@ fn header_right(
     if !model.is_empty() {
         segments.push(model.to_owned());
     }
-    segments.push(cost.to_owned());
+    // A provider that bills nothing it can price sends an empty cost: the
+    // segment is dropped, so no `—` placeholder reaches the row.
+    if !cost.is_empty() {
+        segments.push(cost.to_owned());
+    }
     if context > 0 {
         segments.push(format!(
             "ctx {}/{}",
@@ -584,8 +587,10 @@ mod tests {
         // Narrow: provider and model drop, the spend and context load survive.
         let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 12_800, 128_000, 30);
         assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k");
-        // A malformed window of 0 renders without panicking.
-        assert!(header_right("p", "m", "—", 500, 0, 200).contains("ctx 500/0"));
+        // A malformed window of 0 renders without panicking, and a provider
+        // with no price drops the spend segment: no `—` placeholder, and no
+        // dangling separator where it used to sit.
+        assert_eq!(header_right("p", "m", "", 500, 0, 200), "p · m · ctx 500/0");
     }
 
     /// Nine tabs with long titles must all stay visible on a terminal that
