@@ -1,5 +1,10 @@
 use super::*;
 
+/// Sent after a reply that hit the output token cap: the model carries on from
+/// the partial answer instead of starting over.
+const CONTINUATION_PROMPT: &str = "Continue exactly where you stopped. Do not repeat text you \
+already wrote; pick up mid-sentence if that is where the reply was cut.";
+
 impl App {
     pub(crate) fn on_stream_event(&mut self, event: StreamEvent) -> Action {
         match event {
@@ -126,8 +131,9 @@ impl App {
                     return self.begin_turn_after_compaction(attempts + 1);
                 }
                 // The turn chain finished cleanly: the next one starts with a
-                // full stream-resume budget.
+                // full stream-resume budget and a full continuation budget.
                 self.resume_attempts = 0;
+                self.continue_attempts = 0;
                 // Record what the reply cost and how long it took, so the
                 // transcript can show it under the finished message.
                 let finished = self.active.as_ref().map(|active| {
@@ -251,6 +257,64 @@ impl App {
                     self.resume_attempts
                 ));
                 self.begin_request(self.session.messages.clone(), None)
+            }
+            StreamEvent::OutputLimit { request_id }
+                if self.active_request_id() == Some(request_id) =>
+            {
+                // A capped reply is still billed: fold this request's usage
+                // into the session total before the active request drops.
+                if let Some((prompt, completion)) = self.active.as_ref().and_then(|a| a.usage) {
+                    self.spent_prompt_tokens = self.spent_prompt_tokens.saturating_add(prompt);
+                    self.spent_completion_tokens =
+                        self.spent_completion_tokens.saturating_add(completion);
+                }
+                let compacting = self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.compacting.is_some());
+                self.active = None;
+                self.retry = None;
+                if compacting {
+                    // The queued turn never started, so continue without the
+                    // summary instead of failing it too.
+                    self.info("Compaction hit the output limit; sending the full history.");
+                    self.save_session();
+                    let messages = self.session.messages.clone();
+                    return self.begin_request(messages, None);
+                }
+                self.continue_attempts = self.continue_attempts.saturating_add(1);
+                if self.continue_attempts > MAX_AUTO_CONTINUES {
+                    // Out of continuations: the cap is reported and the turn
+                    // goes back to the user, partial answer and all.
+                    self.continue_attempts = 0;
+                    self.prompt_started = None;
+                    self.discard_pending_tools(
+                        "The reply hit the output limit before this tool call could run.",
+                    );
+                    self.remove_empty_response();
+                    self.session
+                        .messages
+                        .push(Message::provider_error(crate::backend::OUTPUT_LIMIT));
+                    self.follow_tail = true;
+                    self.save_session();
+                    return Action::None;
+                }
+                // The partial reply stays in the transcript, and a prompt asks
+                // the model to carry on from it, so a capped reply finishes
+                // itself instead of waiting for the user to type "continue".
+                self.info(format!(
+                    "The reply hit the output limit. Continuing automatically \
+                     (attempt {} of {MAX_AUTO_CONTINUES}).",
+                    self.continue_attempts
+                ));
+                // A reply that produced nothing leaves no empty bubble: the
+                // continuation prompt stands on its own.
+                self.remove_empty_response();
+                self.session
+                    .messages
+                    .push(Message::new(Role::User, CONTINUATION_PROMPT));
+                self.save_session();
+                self.begin_turn()
             }
             StreamEvent::Error {
                 request_id,

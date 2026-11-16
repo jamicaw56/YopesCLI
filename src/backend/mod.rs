@@ -70,6 +70,12 @@ pub enum StreamEvent {
         request_id: u64,
         message: String,
     },
+    /// The reply hit the provider's output token cap (`finish_reason:
+    /// "length"`). The request is over; the interface keeps the partial text
+    /// and asks the model to continue instead of reporting a failure.
+    OutputLimit {
+        request_id: u64,
+    },
     Done {
         request_id: u64,
     },
@@ -273,6 +279,7 @@ impl Backend {
                 StreamEvent::Delta { text: delta, .. } => text.push_str(&delta),
                 StreamEvent::Stalled { message, .. } => bail!("{message}"),
                 StreamEvent::Error { message, .. } => bail!("{message}"),
+                StreamEvent::OutputLimit { .. } => bail!("{OUTPUT_LIMIT}"),
                 StreamEvent::Done { .. } => break,
                 _ => {}
             }
@@ -342,13 +349,17 @@ impl Backend {
             }
             Err(error) => {
                 // A stall is typed: the interface resumes the turn instead of
-                // reporting the response as dead.
+                // reporting the response as dead. So is a capped reply: the
+                // interface keeps the partial text and continues it.
                 let stalled = error.downcast_ref::<Stalled>().is_some();
+                let capped = error.downcast_ref::<OutputLimit>().is_some();
                 let _ = events.send(if stalled {
                     StreamEvent::Stalled {
                         request_id,
                         message: format!("{error:#}"),
                     }
+                } else if capped {
+                    StreamEvent::OutputLimit { request_id }
                 } else {
                     StreamEvent::Error {
                         request_id,
@@ -418,9 +429,10 @@ impl Backend {
             let (parsed, done) = parse_openai_line(line, &mut state)?;
             let more = send_parsed(request_id, parsed, done, events)?;
             // Text of the final chunk is already sent; a capped reply is
-            // reported instead of passing as a finished one.
+            // reported as its own event so the turn continues instead of
+            // passing as a finished one.
             if done && state.truncated {
-                bail!(OUTPUT_LIMIT);
+                return Err(OutputLimit.into());
             }
             Ok(more)
         })
@@ -590,10 +602,24 @@ impl Backend {
     }
 }
 
-/// Shown when a provider ends a reply with `finish_reason: "length"`.
-const OUTPUT_LIMIT: &str = "the provider stopped the reply at its output token limit \
+/// Shown when a provider ends a reply with `finish_reason: "length"` and the
+/// automatic continuation has run out of attempts.
+pub(crate) const OUTPUT_LIMIT: &str = "the provider stopped the reply at its output token limit \
 (finish_reason: length). Reasoning tokens count toward it, so long thinking can use the whole \
-budget before any answer. Lower /set effort, or send \"continue\".";
+budget before any answer. Lower it with /set effort low, or raise the model's output budget.";
+
+/// Typed error: the reply stopped at the output token cap. The interface keeps
+/// the partial text and continues the reply instead of reporting a failure.
+#[derive(Debug)]
+pub(crate) struct OutputLimit;
+
+impl std::fmt::Display for OutputLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(OUTPUT_LIMIT)
+    }
+}
+
+impl std::error::Error for OutputLimit {}
 
 fn anthropic_url(base_url: &str) -> String {
     let base_url = base_url.trim_end_matches('/');

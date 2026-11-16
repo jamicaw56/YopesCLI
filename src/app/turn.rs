@@ -177,28 +177,36 @@ impl App {
         }
         if !self.backend.is_configured() {
             self.input.set(value);
-            self.error("No provider connected. Run /connect to get started.");
+            self.error("No provider connected. Run /provider connect to get started.");
             return Action::None;
         }
         if self.backend.model().trim().is_empty() {
             self.input.set(value);
-            self.error("No model selected. Run /models or /connect to choose a model.");
+            self.error(
+                "No model selected. Run /provider models or /provider connect to choose a model.",
+            );
             return Action::None;
         }
         if self.backend.base_url().trim().is_empty() {
             self.input.set(value);
-            self.error("No endpoint URL configured. Run /connect to configure this provider.");
+            self.error(
+                "No endpoint URL configured. Run /provider connect to configure this provider.",
+            );
             return Action::None;
         }
         if self.backend.auth().requires_token() && self.backend.api_key().is_none() {
             self.input.set(value);
-            self.error("No API key configured for this provider. Run /connect to enter a key.");
+            self.error(
+                "No API key configured for this provider. Run /provider connect to enter a key.",
+            );
             return Action::None;
         }
 
         self.notice = None;
-        // A new user turn starts with a fresh stream-resume budget.
+        // A new user turn starts with a fresh stream-resume budget and a
+        // fresh continuation budget.
         self.resume_attempts = 0;
+        self.continue_attempts = 0;
         self.send_pulse = Some(self.spinner);
         self.session.update_title(&prompt);
         self.prompt_started = Some(Instant::now());
@@ -1321,6 +1329,36 @@ pub(crate) mod tests {
         assert_eq!(last_message.role, Role::Assistant);
         let usage = last_message.usage.expect("usage recorded");
         assert!(usage.elapsed_ms >= 500);
+    }
+
+    #[test]
+    fn a_capped_reply_continues_itself_until_the_budget_runs_out() {
+        let mut app = test_app();
+        app.input.set("write the long version");
+        let mut action = app.submit();
+        assert!(matches!(&action, Action::Start { .. }));
+
+        let mut caps = 0;
+        while let Action::Start { request_id, .. } = action {
+            action = app.on_stream_event(StreamEvent::OutputLimit { request_id });
+            caps += 1;
+            assert!(
+                caps <= MAX_AUTO_CONTINUES + 1,
+                "the continuation cap must end the loop"
+            );
+        }
+
+        // Every cap before the budget was spent starts another request; the
+        // last one reports the limit instead of a fourth request.
+        assert_eq!(caps, MAX_AUTO_CONTINUES + 1);
+        assert!(matches!(action, Action::None));
+        assert!(
+            app.session
+                .messages
+                .last()
+                .is_some_and(|message| message.error.is_some()),
+            "the reported cap lands in the reply block"
+        );
     }
 
     #[test]

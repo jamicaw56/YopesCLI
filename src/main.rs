@@ -279,6 +279,7 @@ async fn run() -> Result<()> {
                     | StreamEvent::Retrying { request_id, .. }
                     | StreamEvent::Done { request_id }
                     | StreamEvent::Stalled { request_id, .. }
+                    | StreamEvent::OutputLimit { request_id }
                     | StreamEvent::Error { request_id, .. } => *request_id,
                 };
                 // Text deltas arrive in bursts and can be drawn at the fixed
@@ -294,6 +295,7 @@ async fn run() -> Result<()> {
                     event,
                     StreamEvent::Done { .. }
                         | StreamEvent::Error { .. }
+                        | StreamEvent::OutputLimit { .. }
                         | StreamEvent::Stalled { .. }
                 );
                 // Route to the tab that owns the request: a background tab
@@ -1018,6 +1020,11 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         StreamEvent::Error { message, .. } => {
                             failed = true;
                             failure = message;
+                            break;
+                        }
+                        StreamEvent::OutputLimit { .. } => {
+                            failed = true;
+                            failure = "the reply hit the output token limit".to_owned();
                             break;
                         }
                         StreamEvent::Done { .. } => break,

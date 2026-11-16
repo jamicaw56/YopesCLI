@@ -36,6 +36,13 @@ All notable changes to YopesCLI are recorded here. The format follows
   instead of soft-locking it, and their output lands as its own message when
   the command finishes. `Esc` now interrupts a running command or tool: the
   foreground processes are killed and queued tools are discarded.
+- Auto-continue: a reply the provider stops at its output token cap
+  (`finish_reason: "length"`) no longer ends the turn with an error asking the
+  user to type "continue". The stream raises a typed `OutputLimit` event
+  instead of a failure, the partial answer stays in the transcript, and a
+  continuation prompt asks the model to carry on from where it stopped — up to
+  three times per turn. When that budget runs out the cap is reported in the
+  reply block, with the `/set effort` hint for reasoning-heavy models.
 
 ### Changed
 

@@ -77,6 +77,10 @@ const MAX_COMPACTION_ATTEMPTS: u32 = 2;
 /// reported. Each resume re-sends the request; without a cap a provider that
 /// stalls every time would loop the turn forever.
 const MAX_STREAM_RESUMES: u32 = 3;
+/// How many times a reply that hit the output token cap continues itself
+/// before the cap is reported. Each continuation is a fresh request, so the
+/// cap keeps a provider that truncates every reply from looping the turn.
+const MAX_AUTO_CONTINUES: u32 = 3;
 
 struct ActiveRequest {
     id: u64,
@@ -222,6 +226,9 @@ pub struct App {
     pub retry: Option<RetryNotice>,
     /// Automatic resumes of a stalled stream this turn chain has used.
     resume_attempts: u32,
+    /// Automatic continuations of a reply that hit the output token cap this
+    /// turn chain has used.
+    continue_attempts: u32,
     /// Whether the terminal has focus. A background terminal draws nothing.
     pub focused: bool,
     pub spinner: usize,
@@ -386,6 +393,7 @@ impl App {
             notice: None,
             retry: None,
             resume_attempts: 0,
+            continue_attempts: 0,
             focused: true,
             spinner: 0,
             send_pulse: None,
