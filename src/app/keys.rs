@@ -151,6 +151,35 @@ impl App {
             }
             return Action::None;
         }
+        // The sidebar captures the wheel when its run list outgrows the
+        // terminal: scrolling up reveals the earlier runs, scrolling down
+        // returns to the newest. Open pickers keep their own wheel handling.
+        if let Some(&(x, y, width, height)) = self.sidebar_area.as_ref() {
+            let over_sidebar = mouse.column >= x
+                && mouse.column < x + width
+                && mouse.row >= y
+                && mouse.row < y + height;
+            if over_sidebar
+                && self.model_picker.is_none()
+                && self.session_picker.is_none()
+                && self.revert_picker.is_none()
+                && self.agents_picker.is_none()
+            {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        self.sidebar_scroll = self.sidebar_scroll.saturating_add(3);
+                        // The wheel is spent here: the transcript underneath
+                        // must not scroll the same event.
+                        return Action::None;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.sidebar_scroll = self.sidebar_scroll.saturating_sub(3);
+                        return Action::None;
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Sidebar runs: a click opens that run in the viewer.
         if let Some(index) = self
             .sidebar_hits
