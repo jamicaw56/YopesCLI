@@ -27,8 +27,8 @@ use messages::{
 };
 use retry::send_with_retry;
 use sse::{
-    OpenAiState, consume_lines, parse_anthropic_line, parse_gemini_line, parse_ollama_line,
-    parse_openai_line, send_parsed,
+    OpenAiState, Stalled, consume_lines, parse_anthropic_line, parse_gemini_line,
+    parse_ollama_line, parse_openai_line, send_parsed,
 };
 
 #[derive(Debug)]
@@ -62,6 +62,13 @@ pub enum StreamEvent {
         attempt: u32,
         delay_secs: u64,
         reason: String,
+    },
+    /// A stream went silent or closed before the response finished. The
+    /// request itself is over; the interface resumes the turn automatically
+    /// instead of reporting the response as dead.
+    Stalled {
+        request_id: u64,
+        message: String,
     },
     Done {
         request_id: u64,
@@ -264,6 +271,7 @@ impl Backend {
         while let Some(event) = receiver.recv().await {
             match event {
                 StreamEvent::Delta { text: delta, .. } => text.push_str(&delta),
+                StreamEvent::Stalled { message, .. } => bail!("{message}"),
                 StreamEvent::Error { message, .. } => bail!("{message}"),
                 StreamEvent::Done { .. } => break,
                 _ => {}
@@ -333,9 +341,19 @@ impl Backend {
                 let _ = events.send(StreamEvent::Done { request_id });
             }
             Err(error) => {
-                let _ = events.send(StreamEvent::Error {
-                    request_id,
-                    message: format!("{error:#}"),
+                // A stall is typed: the interface resumes the turn instead of
+                // reporting the response as dead.
+                let stalled = error.downcast_ref::<Stalled>().is_some();
+                let _ = events.send(if stalled {
+                    StreamEvent::Stalled {
+                        request_id,
+                        message: format!("{error:#}"),
+                    }
+                } else {
+                    StreamEvent::Error {
+                        request_id,
+                        message: format!("{error:#}"),
+                    }
                 });
             }
         }

@@ -73,6 +73,10 @@ pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
 /// sent regardless. Without a cap a provider that answers empty, or a summary
 /// that never shrinks the load, loops the turn forever.
 const MAX_COMPACTION_ATTEMPTS: u32 = 2;
+/// How many times a stalled stream automatically resumes before the stall is
+/// reported. Each resume re-sends the request; without a cap a provider that
+/// stalls every time would loop the turn forever.
+const MAX_STREAM_RESUMES: u32 = 3;
 
 struct ActiveRequest {
     id: u64,
@@ -216,6 +220,8 @@ pub struct App {
     pub notice: Option<Notice>,
     /// A request being retried, shown in the footer while it waits.
     pub retry: Option<RetryNotice>,
+    /// Automatic resumes of a stalled stream this turn chain has used.
+    resume_attempts: u32,
     /// Whether the terminal has focus. A background terminal draws nothing.
     pub focused: bool,
     pub spinner: usize,
@@ -373,6 +379,7 @@ impl App {
             should_quit: false,
             notice: None,
             retry: None,
+            resume_attempts: 0,
             focused: true,
             spinner: 0,
             send_pulse: None,

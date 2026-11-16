@@ -198,6 +198,8 @@ impl App {
         }
 
         self.notice = None;
+        // A new user turn starts with a fresh stream-resume budget.
+        self.resume_attempts = 0;
         self.send_pulse = Some(self.spinner);
         self.session.update_title(&prompt);
         self.prompt_started = Some(Instant::now());

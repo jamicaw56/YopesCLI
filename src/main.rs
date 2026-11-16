@@ -230,6 +230,7 @@ async fn run() -> Result<()> {
                     | StreamEvent::ToolCalls { request_id, .. }
                     | StreamEvent::Retrying { request_id, .. }
                     | StreamEvent::Done { request_id }
+                    | StreamEvent::Stalled { request_id, .. }
                     | StreamEvent::Error { request_id, .. } => *request_id,
                 };
                 // Text deltas arrive in bursts and can be drawn at the fixed
@@ -241,7 +242,12 @@ async fn run() -> Result<()> {
                         | StreamEvent::Reasoning { .. }
                         | StreamEvent::ToolProgress { .. }
                 );
-                let finished = matches!(event, StreamEvent::Done { .. } | StreamEvent::Error { .. });
+                let finished = matches!(
+                    event,
+                    StreamEvent::Done { .. }
+                        | StreamEvent::Error { .. }
+                        | StreamEvent::Stalled { .. }
+                );
                 // Route to the tab that owns the request: a background tab
                 // streams on while another is on screen, and its events must
                 // land in its own session.
@@ -914,6 +920,11 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                     "attempt {attempt} failed: {reason} — retrying in {delay_secs}s"
                                 ),
                             });
+                        }
+                        StreamEvent::Stalled { message, .. } => {
+                            failed = true;
+                            failure = message;
+                            break;
                         }
                         StreamEvent::Error { message, .. } => {
                             failed = true;

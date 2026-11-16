@@ -32,6 +32,19 @@ All notable changes to YopesCLI are recorded here. The format follows
 - The `compacting context` status renders in the warning color, so it reads
   apart from the thinking caret, which stays in the accent color.
 
+### Fixed
+
+- Streams that stall or get cut short no longer end the turn: a silent
+  connection (idle past 180s) or a provider closing the stream mid-reply now
+  resumes the request automatically — up to three times per turn, keeping any
+  partial text as the trailing assistant message so the model continues where
+  it stopped — and only then reports the failure. A stream closing without a
+  completion marker is detected instead of quietly truncating the reply and
+  looking finished; providers that send `finish_reason` without `data: [DONE]`
+  still end cleanly.
+- The header shows the session file the active tab writes, so a crashed or
+  stalled conversation can be resumed by pointing `--session` at it.
+
 ### Added
 
 - `/revert` opens a picker over the prompts already sent this session, newest

@@ -125,6 +125,9 @@ impl App {
                     self.save_session();
                     return self.begin_turn_after_compaction(attempts + 1);
                 }
+                // The turn chain finished cleanly: the next one starts with a
+                // full stream-resume budget.
+                self.resume_attempts = 0;
                 // Record what the reply cost and how long it took, so the
                 // transcript can show it under the finished message.
                 let finished = self.active.as_ref().map(|active| {
@@ -176,6 +179,68 @@ impl App {
                 }
                 self.save_session();
                 self.advance_tools()
+            }
+            StreamEvent::Stalled { request_id, message }
+                if self.active_request_id() == Some(request_id) =>
+            {
+                let compacting = self
+                    .active
+                    .as_ref()
+                    .and_then(|active| active.compacting.as_ref())
+                    .map(|compaction| (compaction.split, compaction.attempts));
+                self.active = None;
+                self.retry = None;
+                self.resume_attempts = self.resume_attempts.saturating_add(1);
+                if self.resume_attempts > MAX_STREAM_RESUMES {
+                    // Out of resumes: the stall is reported like any other
+                    // failure and the turn goes back to the user.
+                    self.resume_attempts = 0;
+                    if let Some((_split, _attempts)) = compacting {
+                        // The queued turn never started, so continue without
+                        // the summary instead of failing it too.
+                        self.info("Compaction kept stalling; sending the full history.");
+                        self.save_session();
+                        let messages = self.session.messages.clone();
+                        return self.begin_request(messages, None);
+                    }
+                    self.prompt_started = None;
+                    self.discard_pending_tools(
+                        "The response stalled before this tool call could run.",
+                    );
+                    self.remove_empty_response();
+                    self.session.messages.push(Message::provider_error(message));
+                    self.follow_tail = true;
+                    self.save_session();
+                    return Action::None;
+                }
+                if let Some((split, attempts)) = compacting {
+                    // The summary restarts against the same history prefix
+                    // with a fresh buffer; the queued turn waits for it.
+                    self.info(format!(
+                        "The stream stalled: {message}. Retrying the summary automatically \
+                         (attempt {} of {MAX_STREAM_RESUMES}).",
+                        self.resume_attempts
+                    ));
+                    return self.begin_compaction(split, attempts);
+                }
+                // A stall mid-reply keeps the partial text as the trailing
+                // assistant message, so the model continues it instead of
+                // starting over; a stall before any output drops the empty
+                // placeholder and restarts the request.
+                let partial = self.session.messages.last().is_some_and(|last| {
+                    last.role == Role::Assistant
+                        && last.error.is_none()
+                        && !last.content.is_empty()
+                });
+                if !partial {
+                    self.remove_empty_response();
+                }
+                self.info(format!(
+                    "The stream stalled: {message}. Continuing automatically \
+                     (attempt {} of {MAX_STREAM_RESUMES}).",
+                    self.resume_attempts
+                ));
+                return self.begin_request(self.session.messages.clone(), None);
             }
             StreamEvent::Error {
                 request_id,

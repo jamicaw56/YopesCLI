@@ -71,6 +71,8 @@ pub(crate) struct TabState {
     pub(crate) notice: Option<Notice>,
     /// A retry notice belongs to the tab whose request is retrying.
     pub(crate) retry: Option<RetryNotice>,
+    /// Automatic resumes of a stalled stream this tab's turn chain has used.
+    pub(crate) resume_attempts: u32,
     /// Whether this tab's `/run` command is running, so another tab's
     /// command is not blocked by it.
     pub(crate) user_command_running: bool,
@@ -127,6 +129,7 @@ impl Default for TabState {
             working_dir: PathBuf::from("."),
             notice: None,
             retry: None,
+            resume_attempts: 0,
             user_command_running: false,
             queued_message: None,
             queued_images: Vec::new(),
@@ -177,6 +180,7 @@ impl TabState {
             working_dir: std::mem::take(&mut app.working_dir),
             notice: app.notice.take(),
             retry: app.retry.take(),
+            resume_attempts: std::mem::take(&mut app.resume_attempts),
             user_command_running: std::mem::take(&mut app.user_command_running),
             queued_message: app.queued_message.take(),
             queued_images: std::mem::take(&mut app.queued_images),
@@ -224,6 +228,7 @@ impl TabState {
         app.working_dir = self.working_dir;
         app.notice = self.notice;
         app.retry = self.retry;
+        app.resume_attempts = self.resume_attempts;
         app.user_command_running = self.user_command_running;
         app.queued_message = self.queued_message;
         app.queued_images = self.queued_images;
@@ -479,6 +484,18 @@ impl App {
             title.push('…');
         }
         title
+    }
+
+    /// The saved session file a tab writes, by file name: the header shows
+    /// it, so a crashed or stalled conversation can be resumed by pointing
+    /// `--session` at that exact history.
+    pub(crate) fn tab_session_file(&self, index: usize) -> Option<String> {
+        let path = if index == self.tab {
+            self.session_path.as_ref()?
+        } else {
+            self.tabs.get(index)?.session_path.as_ref()?
+        };
+        Some(path.file_name()?.to_string_lossy().into_owned())
     }
 
     /// Save every tab's history: the active one through the snapshot writer,

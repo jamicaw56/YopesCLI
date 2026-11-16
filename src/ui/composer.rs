@@ -58,8 +58,19 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         let marker_w: u16 = if markers[index].is_empty() { 0 } else { 2 };
         sep_w + marker_w + UnicodeWidthStr::width(label) as u16 + 2 // " ×"
     };
+    let active = app.tab_index();
     let labels: Vec<String> = (0..count)
-        .map(|index| format!("{} {}", index + 1, app.tab_title(index)))
+        .map(|index| {
+            let mut label = format!("{} {}", index + 1, app.tab_title(index));
+            // The session file the active tab writes: a crash or a stall can
+            // be resumed by pointing `--session` at this exact history.
+            if index == active {
+                if let Some(file) = app.tab_session_file(index) {
+                    label.push_str(&format!(" ·{file}"));
+                }
+            }
+            label
+        })
         .collect();
     let full: u16 = (0..count)
         .map(|index| tab_width(index, &labels[index]))
@@ -102,7 +113,6 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     app.tab_close_hits.clear();
     app.tab_new_hit = None;
     let tab_row = area.y;
-    let active = app.tab_index();
     let mut x = inner.x + title_w;
     let end_x = columns[0].x + columns[0].width;
     // Full labels first; when they do not fit, every label shrinks to an

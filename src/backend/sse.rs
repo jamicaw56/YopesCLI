@@ -18,6 +18,26 @@ use crate::session::ToolCall;
 /// without it a dropped connection stalls the response with no way to finish.
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// A stream that went silent or closed before the response finished: a
+/// dropped connection, a proxy timeout, or a provider that stopped halfway.
+/// Typed so the interface can tell a stall worth resuming from a provider
+/// rejecting the request.
+#[derive(Debug)]
+pub(super) struct Stalled(pub(super) String);
+
+impl std::fmt::Display for Stalled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Stalled {}
+
+/// The stream closed without the parser seeing a completion marker: the
+/// reply was cut short, not finished. Before this was an error, a dropped
+/// connection quietly truncated the reply and the turn looked finished.
+const STREAM_CUT_SHORT: &str = "the provider closed the stream before the response finished";
+
 pub(super) async fn consume_lines<F>(response: Response, mut on_line: F) -> Result<()>
 where
     F: FnMut(&str) -> Result<bool>,
@@ -27,11 +47,16 @@ where
     loop {
         let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
             Ok(Some(chunk)) => chunk?,
-            Ok(None) => break,
-            Err(_) => bail!(
-                "the provider stopped sending for {}s; the connection may have dropped",
-                STREAM_IDLE_TIMEOUT.as_secs()
-            ),
+            // The stream ended without the parser reporting a completion:
+            // the reply was cut short, not finished.
+            Ok(None) => return Err(Stalled(STREAM_CUT_SHORT.to_owned()).into()),
+            Err(_) => {
+                return Err(Stalled(format!(
+                    "the provider stopped sending for {}s; the connection may have dropped",
+                    STREAM_IDLE_TIMEOUT.as_secs()
+                ))
+                .into())
+            }
         };
         buffer.extend_from_slice(&chunk);
         while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
@@ -43,9 +68,11 @@ where
         }
     }
     if !buffer.is_empty() {
-        on_line(std::str::from_utf8(&buffer)?)?;
+        if !on_line(std::str::from_utf8(&buffer)?)? {
+            return Ok(());
+        }
     }
-    Ok(())
+    Err(Stalled(STREAM_CUT_SHORT.to_owned()).into())
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -285,6 +312,9 @@ struct OpenAiUsage {
 #[derive(Deserialize)]
 struct OpenAiChoice {
     delta: OpenAiDelta,
+    /// Present on the final chunk of a reply; a provider that closes the
+    /// stream without `data: [DONE]` still ends cleanly when this arrives.
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -334,6 +364,7 @@ pub(super) fn parse_openai_line(
         bail!("OpenAI stream error: {}", error.message);
     }
     let mut events = Vec::new();
+    let mut done = false;
     if let Some(usage) = chunk.usage {
         if usage.prompt_tokens > 0 || usage.completion_tokens > 0 {
             events.push(ParsedEvent::Usage {
@@ -356,8 +387,11 @@ pub(super) fn parse_openai_line(
         if let Some(calls) = choice.delta.tool_calls {
             events.extend(state.record(calls));
         }
+        if choice.finish_reason.is_some() {
+            done = true;
+        }
     }
-    Ok((events, false))
+    Ok((events, done))
 }
 
 #[derive(Deserialize)]
