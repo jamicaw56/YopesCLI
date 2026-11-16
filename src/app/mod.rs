@@ -44,7 +44,8 @@ mod turn;
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
 pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, matching_commands};
 pub(crate) use delegate::{
-    DelegateUpdate, SUBAGENT_BRIEF, SUBAGENT_NAME_BRIEF, Subagent, SubagentStatus,
+    DelegateUpdate, SUBAGENT_BRIEF, SUBAGENT_NAME_BRIEF, Subagent, SubagentStatus, WRITING_TOOLS,
+    ZERO_WRITE_NUDGE_ROUNDS,
 };
 pub(crate) use input::Input;
 pub(crate) use pickers::{ListPicker, ModelChoice, ModelRow};

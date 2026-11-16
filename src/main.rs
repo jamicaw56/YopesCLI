@@ -854,9 +854,15 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             // ladder when the current model or endpoint keeps failing.
             let mut run_backend = backend.clone();
             let mut failover = failover.into_iter();
-            // The empty nudge asks again when a round streams nothing, so a
+            // One nudge each: the write watchdog asks a run that has spent
+            // many tool rounds without changing any file to land an artifact;
+            // the empty nudge asks again when a round streams nothing, so a
             // run that worked never ends with no report.
+            let mut write_nudged = false;
             let mut empty_nudges = 0u32;
+            // Tool rounds since the last round that changed a file: the
+            // watchdog fires once this passes ZERO_WRITE_NUDGE_ROUNDS.
+            let mut quiet_rounds = 0usize;
             let mut workspace = root;
             loop {
                 let (events, mut receiver) = mpsc::unbounded_channel::<StreamEvent>();
@@ -1010,6 +1016,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     });
                     break;
                 }
+                // Did this round change a file? A round that runs none of
+                // the writing tools counts toward the write watchdog.
+                let mut mutated = false;
                 // The assistant turn that asked for the calls, then one tool
                 // result per call, keeps the next request valid for every
                 // provider.
@@ -1087,6 +1096,12 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                     workspace = target;
                                 }
                             }
+                            if result.is_ok()
+                                && crate::app::WRITING_TOOLS
+                                    .contains(&requested_call.function.name.as_str())
+                            {
+                                mutated = true;
+                            }
                             result
                         }
                     };
@@ -1095,6 +1110,36 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         Err(error) => format!("Error: {error}"),
                     };
                     messages.push(Message::tool_result(requested_call.id.clone(), content));
+                }
+                // The write watchdog: a run that keeps reading without ever
+                // changing a file is stuck in reconnaissance. Ask it once to
+                // land the first artifact; the next round picks the message
+                // up with its tool results. A task that is read-only by
+                // nature may ignore this and continue.
+                if mutated {
+                    quiet_rounds = 0;
+                } else {
+                    quiet_rounds += 1;
+                }
+                if !write_nudged && quiet_rounds >= crate::app::ZERO_WRITE_NUDGE_ROUNDS {
+                    write_nudged = true;
+                    messages.push(Message::new(
+                        Role::User,
+                        format!(
+                            "You have spent {quiet_rounds} tool rounds without writing or \
+                             changing any file. If this task is meant to land work, stop \
+                             exploring: produce the first artifact now — write the file, make \
+                             the edit, run the command, commit. If this task is read-only by \
+                             nature, ignore this and continue."
+                        ),
+                    ));
+                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                        run,
+                        text: format!(
+                            "{quiet_rounds} tool rounds with no file writes — nudging it to \
+                             land an artifact"
+                        ),
+                    });
                 }
             }
             crate::tools::unregister_subagent_run(run);
