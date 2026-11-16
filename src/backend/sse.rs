@@ -55,7 +55,7 @@ where
                     "the provider stopped sending for {}s; the connection may have dropped",
                     STREAM_IDLE_TIMEOUT.as_secs()
                 ))
-                .into())
+                .into());
             }
         };
         buffer.extend_from_slice(&chunk);
@@ -67,10 +67,8 @@ where
             }
         }
     }
-    if !buffer.is_empty() {
-        if !on_line(std::str::from_utf8(&buffer)?)? {
-            return Ok(());
-        }
+    if !buffer.is_empty() && !on_line(std::str::from_utf8(&buffer)?)? {
+        return Ok(());
     }
     Err(Stalled(STREAM_CUT_SHORT.to_owned()).into())
 }
