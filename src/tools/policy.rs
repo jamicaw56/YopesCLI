@@ -162,10 +162,10 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              Sessions can talk between themselves: `check_session` lists the open tabs with \
              their tab numbers, and `talk_to` delivers a message into another tab's \
              conversation — an idle tab wakes its model at once, a busy tab receives the \
-             message when its turn ends. Use them when the user asks to coordinate across \
-             tabs or hand findings over, and never in a loop that answers itself. When a \
-             talk message arrives in this conversation, reply with talk_to addressed to \
-             the sender's tab number. \
+             message when its turn ends. When a message like `[talk from tab N — Title] <text>` \
+             arrives, it is another open session in the terminal talking to you. Read what \
+             they ask and reply directly using `talk_to(tab: N, message: \"...\")`. Never ignore \
+             it, and do not repeat in conversational text to the user instead of replying to tab N. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \
