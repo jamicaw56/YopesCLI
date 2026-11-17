@@ -207,6 +207,16 @@ impl SessionSaver {
     }
 }
 
+/// One rendered markdown block for a finished message: the width it was
+/// rendered at, the content hash it was rendered from, the shared lines, and
+/// their total wrapped rows.
+pub(crate) type MarkdownBlock = (
+    u16,
+    u64,
+    std::sync::Arc<[ratatui::text::Line<'static>]>,
+    usize,
+);
+
 pub struct App {
     pub session: Session,
     pub backend: Backend,
@@ -304,11 +314,9 @@ pub struct App {
     pub logos: Logos,
     /// The logos that still have to be fetched.
     pending_logos: Vec<String>,
-    /// Cache of rendered markdown lines for completed messages, with their
-    /// wrap row counts: (width, content hash, lines, counts).
-    pub(crate) markdown_cache:
-        HashMap<usize, (u16, u64, std::sync::Arc<[ratatui::text::Line<'static>]>, Vec<usize>)>,
-    /// A message typed while subagents still stream, queued for the
+    /// Cache of rendered markdown blocks for completed messages, with their
+    /// wrap row total: see `MarkdownBlock`.
+    pub(crate) markdown_cache: HashMap<usize, MarkdownBlock>,    /// A message typed while subagents still stream, queued for the
     /// post-delegate continuation (see `TabState::queued_message`).
     pub queued_message: Option<String>,
     pub queued_images: Vec<ImageAttachment>,

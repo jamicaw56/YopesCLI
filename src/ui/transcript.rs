@@ -40,6 +40,18 @@ fn measure_line(line: &Line<'_>, scratch: &mut String, width: u16) -> usize {
     wrapped_line_count(scratch, width)
 }
 
+/// One slot of transcript output: an owned line for the small per-message
+/// pieces, or a shared block of rendered markdown whose lines live in the
+/// cache. A frame only clones the blocks the visible window shows.
+enum Slot<'a> {
+    Line(Line<'a>),
+    Block {
+        lines: std::sync::Arc<[Line<'static>]>,
+        /// Total wrapped rows of the block, measured once when it is built.
+        rows: usize,
+    },
+}
+
 pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     app.output_rows.clear();
     let inner = Block::default()
@@ -109,11 +121,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     // borrows the session immutably, so it can only read the finished cache.
     app.warm_image_cache(inner.width.clamp(4, 48));
 
-    let mut lines = Vec::new();
+    // The transcript is assembled as slots: owned lines for the small
+    // per-message pieces, shared blocks for cached markdown. A frame only
+    // clones the blocks the visible window shows (see the render step).
+    let mut slots: Vec<Slot<'_>> = Vec::new();
     let mut rows: Vec<(usize, String)> = Vec::new();
-    // Global line ranges whose wrap counts come from the markdown cache, so
-    // the walk below skips re-wrapping cached text.
-    let mut cached_counts_range: Vec<(usize, usize, usize)> = Vec::new();
     // Copied out: the summary is owned so the session can stay borrowed.
     let compaction = app.compaction_text().map(str::to_owned);
     for (index, message) in app.session.messages.iter().enumerate() {
@@ -142,8 +154,8 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         {
             continue;
         }
-        if !lines.is_empty() {
-            lines.push(Line::raw(""));
+        if !slots.is_empty() {
+            slots.push(Slot::Line(Line::raw("")));
         }
         let (label, color) = match message.role {
             Role::User => ("you", muted()),
@@ -155,11 +167,17 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         };
         if message.role == Role::Tool {
-            let start = lines.len();
+            let start = slots.len();
             let name = call_name.map(str::to_owned);
             let framed =
                 tool_result_lines(app, message, inner.width, &mut rows, start, name.as_deref());
-            lines.extend(framed);
+            // The framed result is one shared block: its wrap rows are
+            // measured once here instead of every frame.
+            let counts = line_counts(&framed, inner.width);
+            slots.push(Slot::Block {
+                lines: framed.into(),
+                rows: counts.iter().sum(),
+            });
             continue;
         }
         let show_label = if message.role == Role::Assistant {
@@ -175,18 +193,18 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             true
         };
         if show_label {
-            lines.push(Line::styled(
+            slots.push(Slot::Line(Line::styled(
                 label,
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
+            )));
         }
         // A failed request shows its provider message here, where the answer
         // would have been, instead of as a footer notice.
         if let Some(error) = &message.error {
-            lines.push(Line::styled(
+            slots.push(Slot::Line(Line::styled(
                 format!("✗ {error}"),
                 Style::default().fg(crate::theme::current().error),
-            ));
+            )));
             continue;
         }
         // Thinking: shown in full while streaming or expanded, otherwise a
@@ -199,51 +217,65 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             .count();
         let reasoning = reasoning_lines(message, streaming, app.expanded.contains(&reason_key));
         if !reasoning.is_empty() {
-            let start = lines.len();
+            let start = slots.len();
             if think_count > 2 && !streaming {
                 rows.push((start, reason_key));
             }
-            lines.extend(reasoning);
+            for line in reasoning {
+                slots.push(Slot::Line(line));
+            }
         }
         if message.content.is_empty() && streaming && !has_calls && message.reasoning.is_empty() {
-            lines.push(Line::styled(
+            slots.push(Slot::Line(Line::styled(
                 caret(app.spinner),
                 Style::default().fg(accent()),
-            ));
+            )));
             continue;
         }
         if !message.content.is_empty() {
             if !streaming {
                 let content_key = content_hash(&message.content);
-                if let Some((cached_width, cached_hash, cached_lines, _cached_counts)) =
+                if let Some((cached_width, cached_hash, cached_lines, cached_rows)) =
                     app.markdown_cache.get(&index)
                 {
                     if *cached_width == inner.width && *cached_hash == content_key {
-                        let start = lines.len();
-                        lines.extend(cached_lines.iter().cloned());
-                        // The cached lines bring their wrap counts: the walk
-                        // below reuses them instead of re-wrapping every
-                        // character of the session on every keystroke.
-                        cached_counts_range.push((start, lines.len(), index));
+                        // The block is shared, never copied: a frame clones
+                        // only the lines the visible window shows (see the
+                        // render step below), and its wrap rows come from the
+                        // cache instead of re-wrapping every character.
+                        slots.push(Slot::Block {
+                            lines: cached_lines.clone(),
+                            rows: *cached_rows,
+                        });
                     } else {
                         let parsed = markdown_lines(&message.content, inner.width);
                         let counts = line_counts(&parsed, inner.width);
+                        let block_rows: usize = counts.iter().sum();
                         let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
-                        app.markdown_cache
-                            .insert(index, (inner.width, content_key, arc_lines.clone(), counts));
-                        let start = lines.len();
-                        lines.extend(arc_lines.iter().cloned());
-                        cached_counts_range.push((start, lines.len(), index));
+                        app.markdown_cache.insert(index, (
+                            inner.width,
+                            content_key,
+                            arc_lines.clone(),
+                            block_rows,
+                        ));
+                        slots.push(Slot::Block {
+                            lines: arc_lines,
+                            rows: block_rows,
+                        });
                     }
                 } else {
                     let parsed = markdown_lines(&message.content, inner.width);
                     let counts = line_counts(&parsed, inner.width);
+                    let block_rows: usize = counts.iter().sum();
                     let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
-                    app.markdown_cache
-                        .insert(index, (inner.width, content_key, arc_lines.clone(), counts));
-                    let start = lines.len();
-                    lines.extend(arc_lines.iter().cloned());
-                    cached_counts_range.push((start, lines.len(), index));
+                    app.markdown_cache.insert(
+                        index,
+                        (inner.width, content_key, arc_lines.clone(), block_rows),
+                    );
+                    slots.push(Slot::Block {
+                        lines: arc_lines,
+                        rows: block_rows,
+                    });
                     // One entry per message: a very long session must not
                     // keep every message's rendered lines in memory forever.
                     while app.markdown_cache.len() > MARKDOWN_CACHE_LIMIT {
@@ -260,28 +292,36 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 // message finishes, and the result is cached.
                 let tail = streaming_tail(&message.content);
                 if tail.len() != message.content.len() {
-                    lines.push(Line::styled(
+                    slots.push(Slot::Line(Line::styled(
                         "… earlier reply hidden while it streams".to_owned(),
                         Style::default().fg(muted()),
-                    ));
+                    )));
                 }
-                lines.extend(markdown_lines(tail, inner.width));
+                // The tail is rebuilt every frame while it streams, so it
+                // stays plain owned lines.
+                for line in markdown_lines(tail, inner.width) {
+                    slots.push(Slot::Line(line));
+                }
             }
         }
         // Pasted screenshots show up as pixel art directly under the text.
         for image in &message.images {
             match app.cached_image(&image.name) {
-                Some(rows) => lines.extend(rows.iter().cloned()),
-                None => lines.push(Line::styled(
+                Some(rows) => {
+                    for line in rows {
+                        slots.push(Slot::Line(line.clone()));
+                    }
+                }
+                None => slots.push(Slot::Line(Line::styled(
                     format!(" {}", image.name),
                     Style::default().fg(muted()),
-                )),
+                ))),
             }
         }
         // Stats belong under a finished answer, not under a tool-call turn.
         if let Some(usage) = message.usage {
             if (!message.content.is_empty() || !message.reasoning.is_empty()) && !has_calls {
-                lines.push(usage_line(usage));
+                slots.push(Slot::Line(usage_line(usage)));
             }
         }
         if let Some(calls) = &message.tool_calls {
@@ -314,7 +354,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                             format!("  subagent · {}", agent.row_label()),
                             Style::default().fg(muted()),
                         ));
-                        lines.push(Line::from(spans));
+                        slots.push(Slot::Line(Line::from(spans)));
                         continue;
                     }
                 }
@@ -322,23 +362,31 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     format!("  {}", tools::preview(call)),
                     Style::default().fg(muted()),
                 ));
-                lines.push(Line::from(spans));
+                slots.push(Slot::Line(Line::from(spans)));
             }
         }
         if streaming {
-            if let Some(line) = lines.last_mut() {
-                let line_len = spans_width(&line.spans);
-                if line_len + 2 < usize::from(inner.width) {
-                    line.spans.push(Span::styled(
-                        format!(" {}", caret(app.spinner)),
-                        Style::default().fg(accent()),
-                    ));
-                } else {
-                    lines.push(Line::styled(
-                        caret(app.spinner),
-                        Style::default().fg(accent()),
-                    ));
+            // A streaming message's content is plain lines (never a cached
+            // block), so the caret still lands on the last one.
+            match slots.last_mut() {
+                Some(Slot::Line(line)) => {
+                    let line_len = spans_width(&line.spans);
+                    if line_len + 2 < usize::from(inner.width) {
+                        line.spans.push(Span::styled(
+                            format!(" {}", caret(app.spinner)),
+                            Style::default().fg(accent()),
+                        ));
+                    } else {
+                        slots.push(Slot::Line(Line::styled(
+                            caret(app.spinner),
+                            Style::default().fg(accent()),
+                        )));
+                    }
                 }
+                _ => slots.push(Slot::Line(Line::styled(
+                    caret(app.spinner),
+                    Style::default().fg(accent()),
+                ))),
             }
         }
     }
@@ -346,48 +394,42 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     // Compaction streams into its own buffer: show it live so a long summary
     // does not look like a frozen screen.
     if let Some(summary) = compaction {
-        if !lines.is_empty() {
-            lines.push(Line::raw(""));
+        if !slots.is_empty() {
+            slots.push(Slot::Line(Line::raw("")));
         }
-        lines.push(Line::styled(
+        slots.push(Slot::Line(Line::styled(
             "compacting context",
             // Warning color, so compaction reads apart from the thinking
             // caret above, which stays in the accent color.
             Style::default().fg(warning()).add_modifier(Modifier::BOLD),
-        ));
+        )));
         if summary.trim().is_empty() {
-            lines.push(Line::styled(
+            slots.push(Slot::Line(Line::styled(
                 caret(app.spinner),
                 Style::default().fg(accent()),
-            ));
+            )));
         } else {
-            lines.extend(markdown_lines(&summary, inner.width));
+            let parsed = markdown_lines(&summary, inner.width);
+            let counts = line_counts(&parsed, inner.width);
+            slots.push(Slot::Block {
+                lines: parsed.into(),
+                rows: counts.iter().sum(),
+            });
         }
     }
 
-    // Screen row of every transcript line, accounting for wrapped text above.
-    // Cached markdown lines bring their wrap counts from the cache, so one
-    // long session no longer re-wraps every character on every keystroke:
-    // only lines rebuilt this frame get measured.
-    let mut starts: Vec<usize> = Vec::with_capacity(lines.len());
+    // Screen row of every slot, accounting for wrapped text above. Shared
+    // blocks carry their wrap row total from the cache, so one long session
+    // no longer re-wraps or re-measures its history on every keystroke: only
+    // the small owned lines get measured.
+    let mut starts: Vec<usize> = Vec::with_capacity(slots.len());
     let mut next_row = 0;
     let mut scratch = String::new();
-    let mut ranges = cached_counts_range.iter().copied().peekable();
-    let mut active: Option<(usize, usize, usize)> = ranges.next();
-    for (line_index, line) in lines.iter().enumerate() {
+    for slot in &slots {
         starts.push(next_row);
-        if let Some((_, end, _)) = active {
-            if line_index >= end {
-                active = ranges.next();
-            }
-        }
-        let count = match active {
-            Some((start, end, key)) if line_index >= start && line_index < end => app
-                .markdown_cache
-                .get(&key)
-                .and_then(|(_, _, _, counts)| counts.get(line_index - start).copied())
-                .unwrap_or_else(|| measure_line(line, &mut scratch, inner.width)),
-            _ => measure_line(line, &mut scratch, inner.width),
+        let count = match slot {
+            Slot::Block { rows, .. } => *rows,
+            Slot::Line(line) => measure_line(line, &mut scratch, inner.width),
         };
         next_row += count;
     }
@@ -412,10 +454,18 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         usize::from(inner.height),
     );
     app.scroll = starts[first] + hidden;
-    lines.truncate(last);
-    lines.drain(..first);
+    // Only the visible window is materialized: a long session's history
+    // stays in the shared blocks, and a frame clones just the blocks and
+    // lines on screen.
+    let mut visible: Vec<Line<'_>> = Vec::new();
+    for slot in &slots[first..last] {
+        match slot {
+            Slot::Line(line) => visible.push(line.clone()),
+            Slot::Block { lines, .. } => visible.extend(lines.iter().cloned()),
+        }
+    }
     frame.render_widget(
-        Paragraph::new(Text::from(lines))
+        Paragraph::new(Text::from(visible))
             .wrap(Wrap { trim: false })
             .scroll((hidden.min(u16::MAX as usize) as u16, 0)),
         inner,
@@ -587,6 +637,11 @@ mod tests {
             let elapsed = start.elapsed();
             total += elapsed;
             worst = worst.max(elapsed);
+        }
+        // Print the timings only when asked: the steady-state frame cost of
+        // a long session depends on the host, so it is not a hard assert.
+        if std::env::var("YOPES_BENCH").is_err() {
+            return;
         }
         panic!(
             "[BENCHMARK] 240 msgs: avg = {:.2} ms, worst = {:.2} ms",

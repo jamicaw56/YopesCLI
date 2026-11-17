@@ -62,11 +62,9 @@ pub(crate) struct TabState {
     spent_completion_tokens: u64,
     pub(crate) prompt_started: Option<Instant>,
     /// Rendered markdown per finished message, keyed by message index: the
-    /// value carries the wrap row counts next to the lines, so the transcript
-    /// walk reuses them instead of re-wrapping every character every frame.
-    pub(crate) markdown_cache:
-        HashMap<usize, (u16, u64, std::sync::Arc<[Line<'static>]>, Vec<usize>)>,
-    pub(crate) working_dir: PathBuf,
+    /// value carries the wrap row total next to the lines, so the transcript
+    /// walk reuses it instead of re-wrapping every character every frame.
+    pub(crate) markdown_cache: HashMap<usize, super::MarkdownBlock>,    pub(crate) working_dir: PathBuf,
     /// Footer notices belong to the tab that raised them: an error from one
     /// conversation must not sit over every other tab's view.
     pub(crate) notice: Option<Notice>,
