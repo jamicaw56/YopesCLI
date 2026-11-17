@@ -208,12 +208,13 @@ impl SessionSaver {
 }
 
 /// One rendered markdown block for a finished message: the width it was
-/// rendered at, the content hash it was rendered from, the shared lines, and
-/// their total wrapped rows.
+/// rendered at, the content hash it was rendered from, the shared lines, their
+/// total wrapped rows, and the content length it was rendered from.
 pub(crate) type MarkdownBlock = (
     u16,
     u64,
     std::sync::Arc<[ratatui::text::Line<'static>]>,
+    usize,
     usize,
 );
 

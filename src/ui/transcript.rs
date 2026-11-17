@@ -257,11 +257,20 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         if !message.content.is_empty() {
             if !streaming {
-                let content_key = content_hash(&message.content);
-                if let Some((cached_width, cached_hash, cached_lines, cached_rows)) =
+                // A completed message's content cannot change in place: a
+                // revert, a compaction, or a new session clears the cache.
+                // Only the newest message — the one a stopped stream can
+                // still replace — pays for the full content hash every
+                // frame; the rest match on width and length.
+                let is_newest = index + 1 == app.session.messages.len();
+                let content_len = message.content.len();
+                if let Some((cached_width, cached_hash, cached_lines, cached_rows, cached_len)) =
                     app.markdown_cache.get(&index)
                 {
-                    if *cached_width == inner.width && *cached_hash == content_key {
+                    if *cached_width == inner.width
+                        && *cached_len == content_len
+                        && (!is_newest || *cached_hash == content_hash(&message.content))
+                    {
                         // The block is shared, never copied: a frame clones
                         // only the lines the visible window shows (see the
                         // render step below), and its wrap rows come from the
@@ -271,6 +280,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                             rows: *cached_rows,
                         });
                     } else {
+                        let content_key = content_hash(&message.content);
                         let parsed = markdown_lines(&message.content, inner.width);
                         let counts = line_counts(&parsed, inner.width);
                         let block_rows: usize = counts.iter().sum();
@@ -280,6 +290,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                             content_key,
                             arc_lines.clone(),
                             block_rows,
+                            content_len,
                         ));
                         slots.push(Slot::Block {
                             lines: arc_lines,
@@ -287,13 +298,14 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                         });
                     }
                 } else {
+                    let content_key = content_hash(&message.content);
                     let parsed = markdown_lines(&message.content, inner.width);
                     let counts = line_counts(&parsed, inner.width);
                     let block_rows: usize = counts.iter().sum();
                     let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
                     app.markdown_cache.insert(
                         index,
-                        (inner.width, content_key, arc_lines.clone(), block_rows),
+                        (inner.width, content_key, arc_lines.clone(), block_rows, content_len),
                     );
                     slots.push(Slot::Block {
                         lines: arc_lines,
@@ -602,6 +614,17 @@ mod tests {
         assert_eq!(transcript_window(&[], 0, 5, false, 10), (0, 0, 0));
     }
 
+    /// The whole terminal buffer as one string, rows in order.
+    fn rendered_text(
+        terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
+    ) -> String {
+        let area = terminal.backend().buffer().area;
+        (0..area.height)
+            .flat_map(|row| (0..area.width).map(move |column| (row, column)))
+            .map(|(row, column)| terminal.backend().buffer()[(column, row)].symbol().to_string())
+            .collect()
+    }
+
     #[test]
     fn a_hidden_tool_result_leaves_no_trace_in_the_transcript() {
         use crate::session::{Message, Role, ToolCall};
@@ -638,17 +661,78 @@ mod tests {
         terminal
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
-        let text: String = (0..40u16)
-            .flat_map(|row| (0..120u16).map(move |column| (row, column)))
-            .map(|(row, column)| terminal.backend().buffer()[(column, row)].symbol().to_string())
-            .collect();
+        let text = rendered_text(&terminal);
         assert!(
             !text.contains("Wrote 3 todos."),
             "hidden tool result leaked into the transcript"
         );
+        assert!(text.contains("plan the work"), "user message missing");
+    }
+
+    #[test]
+    fn a_completed_message_keeps_its_cached_render_without_rehashing() {
+        use crate::session::{Message, Role};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.messages.push(Message::new(Role::User, "first prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "the reply text"));
+        // A third message makes the reply a completed, non-newest message.
+        app.session
+            .messages
+            .push(Message::new(Role::User, "second prompt"));
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+
+        // Same length, different text: a completed message's render is served
+        // from the cache without re-hashing, per the invariant that in-place
+        // content edits only happen while streaming, and every structural
+        // change (revert, compaction, new session) clears the cache.
+        app.session.messages[1].content = "the reply TEXT".to_owned();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let text = rendered_text(&terminal);
         assert!(
-            text.contains("plan the work"),
-            "user message missing: {text}"
+            text.contains("the reply text"),
+            "cached render expected for a completed message"
+        );
+        assert!(!text.contains("the reply TEXT"), "re-hashing should not happen");
+    }
+
+    #[test]
+    fn the_newest_message_still_re_renders_when_its_content_changes() {
+        use crate::session::{Message, Role};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.messages.push(Message::new(Role::User, "first prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "the reply text"));
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+
+        // The newest message keeps the full content hash: a stopped stream
+        // can still replace it, so its render must follow the content.
+        app.session.messages[1].content = "the reply TEXT".to_owned();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let text = rendered_text(&terminal);
+        assert!(
+            text.contains("the reply TEXT"),
+            "newest message should follow its content"
         );
     }
 
