@@ -466,11 +466,6 @@ impl App {
         self.is_streaming() || self.tabs.iter().any(TabState::is_streaming)
     }
 
-    /// Whether any tab is busy, ticking the spinner for background work.
-    pub(crate) fn any_tools_busy(&self) -> bool {
-        (0..self.tabs.len()).any(|index| self.tab_busy(index))
-    }
-
     pub(crate) fn tab_title(&self, index: usize) -> String {
         let title = if index == self.tab {
             self.session.title.trim()

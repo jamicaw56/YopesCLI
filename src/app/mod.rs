@@ -649,6 +649,32 @@ impl App {
         }
     }
 
+    /// Whether the 100ms ticker should redraw this frame: only when something
+    /// visible animates or a timer has to run. A queued tool or a background
+    /// `/run` command draws nothing animated, so they no longer keep the
+    /// ticker alive; an approval dialog pulses its border and a running tool
+    /// ticks its footer spinner, so those still do.
+    pub(crate) fn ticker_wanted(&self) -> bool {
+        self.any_streaming()
+            || self.connect_open()
+            || self.approval.is_some()
+            || self.running_tool.is_some()
+            || self.any_subagent_running()
+            // The startup mascot animates across ticks.
+            || self.session.messages.is_empty()
+            // A notice dismisses itself after a few seconds: the ticker runs
+            // that expiry.
+            || self.notice.is_some()
+            // A retry counts down its delay in the footer.
+            || self.retry.is_some()
+            // The submitted-prompt flash animates for a few ticks on its own.
+            || self
+                .send_pulse
+                .is_some_and(|mark| self.spinner.wrapping_sub(mark) < 5)
+            // The model fetch spinner animates while it waits.
+            || self.fetching_models
+    }
+
     /// Record whether the terminal has focus.
     ///
     /// A background terminal shows nothing, so the ticker stops and the

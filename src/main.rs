@@ -478,17 +478,9 @@ async fn run() -> Result<()> {
             _ = &mut interrupt => break,
             _ = term_signal.as_mut() => break,
             _ = ticker.tick(),
-            if app.focused
-                && (app.any_streaming()
-                    || app.connect_open()
-                    || app.any_tools_busy()
-                    || app.any_subagent_running()
-                    || app.session.messages.is_empty()
-                    // A notice dismisses itself after a few seconds: the
-                    // ticker is what runs that expiry and redraws the footer.
-                    || app.notice.is_some()
-                    || app.retry.is_some()) =>
-            {
+            // The ticker only redraws when something visible animates or a
+            // timer has to run; see `App::ticker_wanted`.
+            if app.focused && app.ticker_wanted() => {
                 app.tick();
                 redraw_now = true;
             }

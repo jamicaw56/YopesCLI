@@ -1481,4 +1481,44 @@ pub(crate) mod tests {
         assert!(app.revert_picker.is_none());
         assert!(app.notice.is_some());
     }
+
+    #[test]
+    fn a_background_command_does_not_keep_the_ticker_alive() {
+        let mut app = test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "$ echo hi"));
+        app.user_command_running = true;
+        assert!(
+            !app.ticker_wanted(),
+            "a queued or background command draws nothing animated"
+        );
+    }
+
+    #[test]
+    fn visible_animations_keep_the_ticker_alive() {
+        let mut app = test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "hello"));
+        assert!(!app.ticker_wanted(), "an idle session does not tick");
+
+        // A running tool ticks its footer spinner.
+        app.user_command_running = false;
+        app.running_tool = Some(RunningTool {
+            call: crate::session::ToolCall::new("call_1", "read_file", "{}"),
+            started: Instant::now(),
+            before: None,
+            existed: false,
+            targets: Vec::new(),
+        });
+        assert!(app.ticker_wanted(), "a running tool animates the footer");
+
+        // The submitted-prompt flash animates for a few ticks on its own.
+        app.running_tool = None;
+        app.send_pulse = Some(app.spinner);
+        assert!(app.ticker_wanted(), "the send flash animates");
+        app.spinner = app.spinner.wrapping_add(6);
+        assert!(!app.ticker_wanted(), "the flash ends after a few ticks");
+    }
 }
