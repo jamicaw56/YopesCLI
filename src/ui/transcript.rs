@@ -128,9 +128,31 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut rows: Vec<(usize, String)> = Vec::new();
     // Copied out: the summary is owned so the session can stay borrowed.
     let compaction = app.compaction_text().map(str::to_owned);
+    // Call names by tool-call id, built in one forward pass: the per-result
+    // lookup below no longer rescans the session backwards for every tool
+    // message.
+    let mut call_names: std::collections::HashMap<&str, &str> =
+        std::collections::HashMap::with_capacity(app.session.messages.len());
+    for message in &app.session.messages {
+        if let Some(calls) = &message.tool_calls {
+            for call in calls {
+                call_names
+                    .entry(call.id.as_str())
+                    .or_insert(call.function.name.as_str());
+            }
+        }
+    }
+    // The role of the last non-tool message seen so far: the label walk below
+    // reads it instead of rescanning backwards for every assistant message.
+    let mut last_speaker: Option<Role> = None;
     for (index, message) in app.session.messages.iter().enumerate() {
         let call_name = (message.role == Role::Tool)
-            .then(|| tool_call_name(app, index))
+            .then(|| {
+                message
+                    .tool_call_id
+                    .as_deref()
+                    .and_then(|id| call_names.get(id).copied())
+            })
             .flatten();
         // A hidden tool leaves no trace in the transcript; its effect shows in
         // the Progress panel instead.
@@ -152,6 +174,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             && !streaming
             && message.error.is_none()
         {
+            // The message still counts as the latest speaker for the label
+            // walk, exactly like the backward scan it replaces.
+            last_speaker = Some(Role::Assistant);
             continue;
         }
         if !slots.is_empty() {
@@ -181,17 +206,15 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             continue;
         }
         let show_label = if message.role == Role::Assistant {
-            let is_first_response = index == 0
-                || app.session.messages[..index]
-                    .iter()
-                    .rev()
-                    .find(|m| m.role != Role::Tool)
-                    .is_some_and(|m| m.role == Role::User);
+            let is_first_response = last_speaker.is_none_or(|speaker| speaker == Role::User);
             let is_end_stream = index + 1 == app.session.messages.len();
             is_first_response || is_end_stream
         } else {
             true
         };
+        // From here the current non-tool message is the latest speaker for
+        // every later message, including the early-continue paths below.
+        last_speaker = Some(message.role);
         if show_label {
             slots.push(Slot::Line(Line::styled(
                 label,
@@ -580,6 +603,56 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_tool_result_leaves_no_trace_in_the_transcript() {
+        use crate::session::{Message, Role, ToolCall};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.messages.push(Message::new(Role::User, "plan the work"));
+        app.session.messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            reasoning: String::new(),
+            tool_calls: Some(vec![ToolCall::new("call_1", "todo_write", "{}")]),
+            tool_call_id: None,
+            usage: None,
+            images: Vec::new(),
+            error: None,
+        });
+        // A message between the call and its result forces the name lookup to
+        // reach past the immediately preceding message.
+        app.session.messages.push(Message::new(Role::User, "second"));
+        app.session.messages.push(Message {
+            role: Role::Tool,
+            content: "Wrote 3 todos.".to_owned(),
+            reasoning: String::new(),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_owned()),
+            usage: None,
+            images: Vec::new(),
+            error: None,
+        });
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let text: String = (0..40u16)
+            .flat_map(|row| (0..120u16).map(move |column| (row, column)))
+            .map(|(row, column)| terminal.backend().buffer()[(column, row)].symbol().to_string())
+            .collect();
+        assert!(
+            !text.contains("Wrote 3 todos."),
+            "hidden tool result leaked into the transcript"
+        );
+        assert!(
+            text.contains("plan the work"),
+            "user message missing: {text}"
+        );
+    }
+
+    #[test]
     fn benchmark_draw_transcript() {
         use crate::session::{Message, Role, ToolCall};
         use ratatui::{Terminal, backend::TestBackend};
@@ -624,6 +697,21 @@ mod tests {
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
 
+        // 120 tool results whose calls sit 120-360 messages earlier: the
+        // worst case for the removed backward scans.
+        for i in 0..120 {
+            app.session.messages.push(Message {
+                role: Role::Tool,
+                content: "ok".to_owned(),
+                reasoning: String::new(),
+                tool_calls: None,
+                tool_call_id: Some(format!("call_{i}")),
+                usage: None,
+                images: Vec::new(),
+                error: None,
+            });
+        }
+
         // Warm-up frame fills the markdown cache, like a session already on
         // screen.
         terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
@@ -644,7 +732,7 @@ mod tests {
             return;
         }
         panic!(
-            "[BENCHMARK] 240 msgs: avg = {:.2} ms, worst = {:.2} ms",
+            "[BENCHMARK] 360 msgs + 120 distant results: avg = {:.2} ms, worst = {:.2} ms",
             total.as_secs_f64() * 1000.0 / f64::from(count),
             worst.as_secs_f64() * 1000.0
         );

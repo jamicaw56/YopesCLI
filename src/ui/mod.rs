@@ -60,20 +60,6 @@ fn is_hidden_tool(name: &str) -> bool {
     matches!(name, "todo_write")
 }
 
-/// Name of the tool that produced the result at `index`, found by walking
-/// back to the assistant message that requested the call.
-fn tool_call_name(site: &App, index: usize) -> Option<&str> {
-    let id = site.session.messages[index].tool_call_id.as_deref()?;
-    for message in site.session.messages[..index].iter().rev() {
-        if let Some(calls) = &message.tool_calls {
-            if let Some(call) = calls.iter().find(|call| call.id.as_str() == id) {
-                return Some(call.function.name.as_str());
-            }
-        }
-    }
-    None
-}
-
 /// Colors come from the active theme; see `crate::theme`.
 pub(crate) fn muted() -> Color {
     crate::theme::current().muted
