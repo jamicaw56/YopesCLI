@@ -591,13 +591,15 @@ impl App {
         tokens
     }
 
-    /// Context-window size of the active model from its saved metadata, if known.
+    /// Context-window size of the active model from its saved metadata, built-in
+    /// model table, or cached catalog, if known.
     pub fn model_context_window(&self) -> Option<u64> {
         let model_id = self.backend.model();
         // The backend's active model list carries the limit saved at connect
         // time, so this survives self.connect being cleared, and it is scoped
         // to the active provider: model ids are not globally unique.
-        self.backend
+        if let Some(window) = self
+            .backend
             .saved_models()
             .iter()
             .find(|saved| {
@@ -605,6 +607,17 @@ impl App {
                     || (!saved.name.is_empty() && saved.name.eq_ignore_ascii_case(model_id))
             })
             .and_then(|saved| saved.context_window)
+        {
+            return Some(window);
+        }
+
+        // Built-in model table and family heuristics
+        if let Some(window) = crate::models::context_window(model_id) {
+            return Some(window);
+        }
+
+        // Cached models.dev catalog fallback
+        crate::catalog::lookup_cached_context_window(&self.config_path, model_id)
     }
 
     pub fn custom_providers(&self) -> &[config::CustomProvider] {

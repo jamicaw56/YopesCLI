@@ -6,6 +6,7 @@ mod config;
 mod credentials;
 mod diff;
 mod logos;
+mod models;
 mod session;
 mod skills;
 mod temp;

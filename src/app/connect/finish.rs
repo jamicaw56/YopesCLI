@@ -298,9 +298,13 @@ impl App {
                 model_name
             };
             let context_window = if context_window_str.is_empty() {
-                Some(128_000)
+                crate::models::context_window(&final_id).or(Some(128_000))
             } else {
-                context_window_str.parse::<u64>().ok().or(Some(128_000))
+                context_window_str
+                    .parse::<u64>()
+                    .ok()
+                    .or_else(|| crate::models::context_window(&final_id))
+                    .or(Some(128_000))
             };
             (
                 Some(final_id.clone()),
@@ -536,9 +540,11 @@ impl App {
                         } else {
                             name
                         };
+                        let context_window = crate::models::context_window(&id);
                         saved_models.push(SavedModel {
                             id,
                             name: display_name,
+                            context_window,
                             ..SavedModel::default()
                         });
                     }

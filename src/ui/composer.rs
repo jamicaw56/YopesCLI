@@ -3,7 +3,10 @@ use super::*;
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
     let context = app.context_tokens();
-    let window = app.model_context_window().unwrap_or(DEFAULT_CONTEXT_WINDOW);
+    let window = app
+        .model_context_window()
+        .map(|w| w.max(context))
+        .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
 
     // No product branding in the working view: the mode dot, the permission
     // badge and the session tabs are what need the space.

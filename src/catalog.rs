@@ -33,6 +33,25 @@ pub fn load_cached(config_path: &Path) -> Option<Catalog> {
     serde_json::from_str(&text).ok()
 }
 
+/// Search cached catalog for any model matching `model_id` and return its context window.
+pub fn lookup_cached_context_window(config_path: &Path, model_id: &str) -> Option<u64> {
+    let catalog = load_cached(config_path)?;
+    let clean = crate::models::normalize_model_id(model_id);
+    for provider in catalog.providers.values() {
+        for (id, model) in &provider.models {
+            if id.eq_ignore_ascii_case(model_id)
+                || id.eq_ignore_ascii_case(&clean)
+                || crate::models::normalize_model_id(id).eq_ignore_ascii_case(&clean)
+            {
+                if let Some(ctx) = model.limit.as_ref().and_then(|l| l.context) {
+                    return Some(ctx);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Keep the fetched catalog for the next run.
 pub fn save_cached(config_path: &Path, catalog: &Catalog) -> Result<()> {
     let path = cache_path(config_path);
