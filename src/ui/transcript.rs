@@ -220,7 +220,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 {
                     if *cached_width == inner.width && *cached_hash == content_key {
                         let start = lines.len();
-                        lines.extend(cached_lines.clone());
+                        lines.extend(cached_lines.iter().cloned());
                         // The cached lines bring their wrap counts: the walk
                         // below reuses them instead of re-wrapping every
                         // character of the session on every keystroke.
@@ -228,19 +228,21 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         let parsed = markdown_lines(&message.content, inner.width);
                         let counts = line_counts(&parsed, inner.width);
+                        let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
                         app.markdown_cache
-                            .insert(index, (inner.width, content_key, parsed.clone(), counts));
+                            .insert(index, (inner.width, content_key, arc_lines.clone(), counts));
                         let start = lines.len();
-                        lines.extend(parsed);
+                        lines.extend(arc_lines.iter().cloned());
                         cached_counts_range.push((start, lines.len(), index));
                     }
                 } else {
                     let parsed = markdown_lines(&message.content, inner.width);
                     let counts = line_counts(&parsed, inner.width);
+                    let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
                     app.markdown_cache
-                        .insert(index, (inner.width, content_key, parsed.clone(), counts));
+                        .insert(index, (inner.width, content_key, arc_lines.clone(), counts));
                     let start = lines.len();
-                    lines.extend(parsed);
+                    lines.extend(arc_lines.iter().cloned());
                     cached_counts_range.push((start, lines.len(), index));
                     // One entry per message: a very long session must not
                     // keep every message's rendered lines in memory forever.
@@ -525,5 +527,71 @@ mod tests {
     fn an_empty_transcript_window_is_a_no_op() {
         assert_eq!(transcript_window(&[], 0, 0, true, 10), (0, 0, 0));
         assert_eq!(transcript_window(&[], 0, 5, false, 10), (0, 0, 0));
+    }
+
+    #[test]
+    fn benchmark_draw_transcript() {
+        use crate::session::{Message, Role, ToolCall};
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::time::Instant;
+
+        let mut app = crate::app::test_app();
+        // 240 messages: user + assistant pairs, the assistant carrying a
+        // multi-line reply with reasoning and a tool call, like a long
+        // working session.
+        for i in 0..120 {
+            app.session.messages.push(Message {
+                role: Role::User,
+                content: format!("Question {i}: how do I make the transcript render faster?"),
+                reasoning: String::new(),
+                tool_calls: None,
+                tool_call_id: None,
+                usage: None,
+                images: Vec::new(),
+                error: None,
+            });
+            app.session.messages.push(Message {
+                role: Role::Assistant,
+                content: format!(
+                    "Answer {i}.\n\nHere is a longer reply with **markdown** and \
+                     several sentences so it wraps a few times in a 100-column \
+                     terminal. The `read_file` tool ran first.\n\n- one point\n- \
+                     another point\n- a third point"
+                ),
+                reasoning: format!("Reasoning for question {i}\nsecond line\nthird line"),
+                tool_calls: Some(vec![ToolCall::new(
+                    format!("call_{i}"),
+                    "read_file",
+                    "{\"path\":\"src/ui/transcript.rs\"}",
+                )]),
+                tool_call_id: None,
+                usage: None,
+                images: Vec::new(),
+                error: None,
+            });
+        }
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Warm-up frame fills the markdown cache, like a session already on
+        // screen.
+        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+
+        let count = 20;
+        let mut total = std::time::Duration::ZERO;
+        let mut worst = std::time::Duration::ZERO;
+        for _ in 0..count {
+            let start = Instant::now();
+            terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+            let elapsed = start.elapsed();
+            total += elapsed;
+            worst = worst.max(elapsed);
+        }
+        panic!(
+            "[BENCHMARK] 240 msgs: avg = {:.2} ms, worst = {:.2} ms",
+            total.as_secs_f64() * 1000.0 / f64::from(count),
+            worst.as_secs_f64() * 1000.0
+        );
     }
 }

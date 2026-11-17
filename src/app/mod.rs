@@ -307,7 +307,7 @@ pub struct App {
     /// Cache of rendered markdown lines for completed messages, with their
     /// wrap row counts: (width, content hash, lines, counts).
     pub(crate) markdown_cache:
-        HashMap<usize, (u16, u64, Vec<ratatui::text::Line<'static>>, Vec<usize>)>,
+        HashMap<usize, (u16, u64, std::sync::Arc<[ratatui::text::Line<'static>]>, Vec<usize>)>,
     /// A message typed while subagents still stream, queued for the
     /// post-delegate continuation (see `TabState::queued_message`).
     pub queued_message: Option<String>,
