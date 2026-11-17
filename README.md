@@ -1,6 +1,6 @@
 # YopesCLI
 
-A better coding CLI, built with Rust, Ratatui, and Tokio.
+A better coding CLI, built with Rust, Ratatui, and Tokio. [Discord](https://discord.gg/xrRAJKHAVP) Join ig if you want
 
 ## Highlights
 
