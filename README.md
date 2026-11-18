@@ -8,7 +8,7 @@ A better coding CLI, built with Rust, Ratatui, and Tokio. [Discord](https://disc
 - Tool calling for reading, writing, editing, and running commands, with per-tool approval and a diff viewer.
 - A real delegate system: `delegate` hands a subtask to a subagent on the same provider. Runs stream live in a right-hand sidebar, stack in parallel, and every response is readable with `/agents`.
 - Image pasting: `Ctrl+V` and right-click attach clipboard images, file paths paste as attachments, and `read_image` sends screenshots to vision models.
-- A quiet, minimal interface with a popout command palette.
+- A quiet interface with a popout command palette and nine built-in themes, each with a two-accent color system (`/set theme`).
 - Provider and model discovery from [models.dev](https://models.dev) plus custom endpoints with `/provider`.
 - One-command self-updates with `yopes update`.
 - Persistent sessions with `/session`, fresh session on launch, `--resume` to continue.
@@ -30,7 +30,7 @@ The script picks the latest release, verifies its SHA256SUMS checksum, installs 
 
 1. `/provider` — pick a provider and model. Keys are stored per endpoint, so connecting a second time never asks for the key again.
 2. Type a message. Tools ask for approval before they change anything; press `Enter` to allow one, `a` for the session, `Esc` to deny.
-3. `/` opens the command palette; `F1` shows keyboard help.
+3. `/` opens the command palette; `F1` shows keyboard help; `/set theme <name>` picks one of the nine built-in palettes (`dark`, `midnight`, `nord`, `gruvbox`, `dracula`, `tokyo`, `rose`, `catppuccin`, `light`).
 
 ## Headless runs
 

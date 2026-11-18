@@ -6,6 +6,47 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A full visual redesign around a two-accent theme system. Every palette
+  now defines two extra roles beyond the classic eight: `dim`, for
+  separators, tool frames and hint rows that must sit quieter than `muted`
+  text, and `accent2`, a secondary accent for the brand mark, the composer
+  caret, links and highlights, so the primary accent stays reserved for
+  interactive state. All six existing palettes were retuned around the new
+  roles, and three joined the roster: `tokyo`, `rose`, and `catppuccin`
+  (`/set theme`, nine built-ins total).
+- The welcome screen's mascot trades the cat for a cursor owl: it scans its
+  pupils like a block cursor hunting a prompt, blinks, lifts its brow on a
+  once-per-cycle mew, and dozes with a floating z when the session sits
+  idle.
+- The divider above the composer fades from the secondary accent into the
+  dim role across its width, so the input edge reads as one soft band
+  instead of a hard rule.
+- The approval dialog's border breathes between the two accents on the
+  ticker instead of blinking bold: the eye is drawn without strobing. Run
+  reads green, Deny red, and the dialog dot matches the header's mode dot.
+- The Progress checklist swaps checkbox glyphs for a ✓/○ pair and its title
+  row carries a tiny ■/□ meter beside the done/total ratio.
+- Markdown headings read their depth from color: h1 takes the primary
+  accent, h2 the secondary, deeper levels stay bold body text. Code fences,
+  rules, quote bars and table borders move to the dim role; links take the
+  secondary accent underlined.
+- Popup chrome (pickers, dialogs, sidebar, help) drops its borders and hint
+  rows to the dim role, so the list rows step forward. The help dialog's
+  section headers take the secondary accent.
+- The footer spinner takes the secondary accent while a turn runs, and
+  compaction says its own color, so waiting, thinking and summarizing read
+  apart at a glance. The header's mode dot becomes a ◆ and the ask/off
+  badges drop to dim.
+
+### Fixed
+
+- Session ids no longer collide when two tabs are created inside the same
+  millisecond (a fast `alt+t`, or test processes starting together). The id
+  folds a per-process counter and the process id into the wall clock, which
+  stops `talk_to` from routing a message to the wrong tab.
+
 ### Added
 
 - A headless one-shot mode: `yopes run "task text"` submits one task, runs the
