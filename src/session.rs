@@ -175,9 +175,19 @@ impl Default for Session {
 
 impl Session {
     pub fn new() -> Self {
+        // The id must never collide: two sessions born in the same
+        // millisecond (a fast tab open, or two tests in one pass) would
+        // otherwise merge into one `talk_to` target. A process-lifetime
+        // counter folded into the wall clock is collision-free inside the
+        // process and near-impossible across processes.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tick = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let salt = std::process::id() as u64;
         let id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_millis() as u64);
+            .map_or(0, |duration| duration.as_millis() as u64)
+            ^ tick.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (salt << 32);
         Self {
             version: SESSION_VERSION,
             id,
