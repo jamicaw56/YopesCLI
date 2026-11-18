@@ -245,10 +245,47 @@ pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
     if inner.width == 0 {
         return;
     }
-    frame.render_widget(
-        Paragraph::new("─".repeat(usize::from(inner.width))).style(Style::default().fg(muted())),
-        inner,
-    );
+    // The divider fades from the secondary accent into dim across its width,
+    // so the composer edge reads as one soft band instead of a hard rule.
+    let (accent2, dim) = {
+        let theme = crate::theme::current();
+        (theme.accent2, theme.dim)
+    };
+    let left = blend(accent2, dim, 0);
+    let mid = blend(accent2, dim, 50);
+    let right = dim;
+    let width = usize::from(inner.width);
+    let mut spans = Vec::with_capacity(3);
+    let third = width / 3;
+    for (index, (color, count)) in [(left, third), (mid, third), (right, width - 2 * third)]
+        .into_iter()
+        .enumerate()
+    {
+        if index == 2 && count == 0 {
+            // A narrow terminal splits into thirds with nothing left over.
+            continue;
+        }
+        spans.push(Span::styled(
+            "─".repeat(count),
+            Style::default().fg(color),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+}
+
+/// The color `blend%` of the way from `from` to `to`, per channel.
+fn blend(from: Color, to: Color, blend: usize) -> Color {
+    let (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) = (from, to) else {
+        return to;
+    };
+    let mix = |f: u8, t: u8| {
+        // Widened math: the target channel can sit below the source, so the
+        // interpolation runs in i32 before clamping back into a byte.
+        let f = i32::from(f);
+        let t = i32::from(t);
+        (f + (t - f) * blend as i32 / 100).clamp(0, 255) as u8
+    };
+    Color::Rgb(mix(fr, tr), mix(fg, tg), mix(fb, tb))
 }
 
 pub(super) fn composer_height(app: &App, width: u16, height: u16) -> u16 {
@@ -280,14 +317,18 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
     } else if pulse {
         (
             "›",
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(crate::theme::current().accent2)
+                .add_modifier(Modifier::BOLD),
         )
     } else if app.is_busy() {
         ("›", Style::default().fg(muted()))
     } else {
         (
             "›",
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(crate::theme::current().accent2)
+                .add_modifier(Modifier::BOLD),
         )
     };
     frame.render_widget(
@@ -324,7 +365,7 @@ fn render_composer_text(input: &Input) -> Text<'static> {
     let sel = input.selection();
     let sel_style = Style::default().add_modifier(Modifier::REVERSED);
     let norm_style = Style::default().fg(text());
-    let cursor_style = Style::default().fg(accent());
+    let cursor_style = Style::default().fg(crate::theme::current().accent2);
     let style_at = |start: usize| match &sel {
         Some(range) if start >= range.start && start < range.end => sel_style,
         _ => norm_style,
@@ -405,19 +446,25 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
             return;
         }
         // One pass counts completion for every task and renders the visible
-        // rows, so the header never costs a second scan.
+        // rows, so the header never costs a second scan. Done tasks take the
+        // added color: a checklist that scans as green-first reads its own
+        // progress without counting checkboxes.
         let mut counted = 0usize;
         for (index, task) in app.session.tasks.iter().enumerate() {
             counted += usize::from(task.done);
             match index {
                 0..=5 => {
-                    let mark = if task.done { "[x]" } else { "[ ]" };
+                    let (mark, mark_color) = if task.done {
+                        ("✓", added())
+                    } else {
+                        ("○", accent())
+                    };
                     lines.push(Line::from(vec![
+                        Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
                         Span::styled(
-                            format!("{mark} "),
-                            Style::default().fg(if task.done { muted() } else { accent() }),
+                            task.text.clone(),
+                            Style::default().fg(if task.done { muted() } else { text() }),
                         ),
-                        Span::styled(task.text.clone(), Style::default().fg(text())),
                     ]));
                 }
                 6 => lines.push(Line::styled(
@@ -430,20 +477,49 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
         counted
     };
 
-    lines.insert(
-        0,
-        Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default().fg(muted())),
-            Span::styled(
-                format!("Progress {done}/{total}"),
-                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " · todo_write · click to fold",
+    // The title row carries a tiny progress meter: done and open boxes side
+    // by side, so the ratio reads at a glance before the words.
+    let meter = {
+        let done_boxes = "■".repeat(done.min(6));
+        let open_boxes = "□".repeat(total.min(6).saturating_sub(done));
+        let mut spans = Vec::new();
+        if !done_boxes.is_empty() {
+            spans.push(Span::styled(
+                done_boxes.clone(),
+                Style::default().fg(added()),
+            ));
+        }
+        if !open_boxes.is_empty() {
+            spans.push(Span::styled(open_boxes, Style::default().fg(dim())));
+        }
+        if total > 6 {
+            spans.push(Span::styled(
+                format!(" +{}", total - 6),
                 Style::default().fg(muted()),
-            ),
-        ]),
-    );
+            ));
+        }
+        spans
+    };
+    let mut title = vec![
+        Span::styled(format!("{marker} "), Style::default().fg(dim())),
+        Span::styled(
+            "Progress ",
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{done}/{total}"),
+            Style::default().fg(text()).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if !meter.is_empty() {
+        title.push(Span::styled("  ", Style::default()));
+        title.extend(meter);
+    }
+    title.push(Span::styled(
+        " · click to fold",
+        Style::default().fg(dim()),
+    ));
+    lines.insert(0, Line::from(title));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -490,7 +566,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 spinner(app.spinner),
                 running.call.function.name
             ),
-            accent(),
+            accent2(),
         )
     } else if let Some(elapsed) = app.elapsed_seconds() {
         // Compaction is a request of its own: say so instead of "thinking".
@@ -500,7 +576,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                     "{} compacting context · {elapsed:.1}s · esc stop",
                     spinner(app.spinner)
                 ),
-                accent(),
+                warning(),
             )
         } else {
             let progress = match app.stream_tool_progress() {
@@ -526,7 +602,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
             text.push_str(" · esc stop");
-            (text, accent())
+            (text, accent2())
         }
     } else if app.fetching_models {
         (

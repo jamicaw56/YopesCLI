@@ -85,6 +85,12 @@ pub(crate) fn text() -> Color {
 pub(crate) fn code() -> Color {
     crate::theme::current().code
 }
+pub(crate) fn dim() -> Color {
+    crate::theme::current().dim
+}
+pub(crate) fn accent2() -> Color {
+    crate::theme::current().accent2
+}
 
 pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans

@@ -73,7 +73,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut welcome = vec![
             Line::styled(
                 heading,
-                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(crate::theme::current().accent2)
+                    .add_modifier(Modifier::BOLD),
             ),
             Line::raw(""),
         ];
