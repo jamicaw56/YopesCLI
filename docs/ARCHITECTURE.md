@@ -20,7 +20,7 @@ loop owns all I/O, and rendering is a pure function of `App`.
 | `session.rs` | `Session`, `Message`, `ToolCall`, save/load, token estimation, compaction. |
 | `diff.rs` | Line diffing, hunks, and side-by-side rows. |
 | `skills.rs` | `SKILL.md` discovery, frontmatter parsing, slash expansion. |
-| `tools/` | The tool surface: `definitions.rs` schemas, `policy.rs` approval rules and system prompt, `preview.rs` change previews, `mod.rs` registry and execution, one module per family (`files`, `search`, `shell`, `web`, `todo`). `delegate` is dispatched by `main.rs`, which owns the backend the subagent streams through. |
+| `tools/` | The tool surface: `definitions.rs` schemas, `policy.rs` approval rules and system prompt, `preview.rs` change previews, `mod.rs` registry and execution, `ignore.rs` the `.yopesignore` filter that `glob`, `grep`, `list_dir` and `multi_read` apply, one module per family (`files`, `search`, `shell`, `web`, `todo`). `delegate` is dispatched by `main.rs`, which owns the backend the subagent streams through. |
 | `update.rs` | `yopes update` self-update. |
 
 ## Data flow

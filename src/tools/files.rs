@@ -23,9 +23,14 @@ fn directory_listing(requested: &str) -> Result<String> {
     if !directory.is_dir() {
         bail!("{requested} is not a directory");
     }
+    let ignore = Ignore::load(&workspace());
     let mut entries = fs::read_dir(&directory)
         .with_context(|| format!("listing {requested}"))?
         .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+            !ignore.skip(&entry.path(), is_dir)
+        })
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| {
         let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
@@ -234,9 +239,11 @@ pub(super) fn multi_read(arguments: &str) -> Result<String> {
         }
         let names = match fs::read_dir(resolve(requested)) {
             Ok(entries) => {
+                let ignore = Ignore::load(&workspace());
                 let mut names = entries
                     .filter_map(|entry| entry.ok())
                     .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                    .filter(|entry| !ignore.skip(&entry.path(), false))
                     .map(|entry| entry.file_name().to_string_lossy().to_string())
                     .collect::<Vec<_>>();
                 names.sort_by_key(|name| name.to_ascii_lowercase());

@@ -40,6 +40,23 @@ provider fails. The usual flags (`--no-save`, `--system-prompt`, `--model`,
 `--session`, …) work and may come before or after `run`. Nothing can answer an
 approval prompt in a headless run, so tools run unattended (YOLO mode).
 
+## Ignore rules
+
+A `.yopesignore` file at the workspace root hides paths from the tools that
+walk the tree: `glob`, `grep`, `list_dir`, and `multi_read` with `all: true`.
+The format is gitignore's: one pattern per line, `#` comments, `!` to
+re-include, a trailing `/` for directories only, `/` anywhere in the pattern to
+anchor it to the root, and `*`, `?` and `**` inside a segment. Nothing is
+filtered without the file, and the built-in skips (`target`, `node_modules`,
+`.git`, virtualenvs, caches) stay in force either way.
+
+```
+node_modules/
+dist/
+*.log
+!keep.log
+```
+
 ## Docs
 
 The [wiki](https://github.com/Jamicaw56/YopesCLI/wiki) holds the detail:
@@ -56,7 +73,6 @@ The [wiki](https://github.com/Jamicaw56/YopesCLI/wiki) holds the detail:
 In the checkout: [Architecture](docs/ARCHITECTURE.md), [Adding a tool](docs/ADDING-A-TOOL.md), [Changelog](CHANGELOG.md), [Security policy](SECURITY.md).
 
 ## Known limitations
-
 - **`Ctrl+V` on Windows Terminal** performs the terminal's own text-only
   paste, so a screenshot-only clipboard sends nothing to the app. Use
   **right-click** to paste a clipboard image, or paste an image file path as

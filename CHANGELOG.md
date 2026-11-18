@@ -49,6 +49,12 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- A `.yopesignore` file at the workspace root filters the filesystem walks:
+  `glob`, `grep`, `list_dir` and `multi_read` with `all: true` skip whatever it
+  names, so build output and vendored trees stop eating the context. The format
+  is gitignore's (comments, `!` re-include, trailing `/` for directories, `/`
+  to anchor, `*`, `?`, `**`), rules resolve deepest-match-first, the built-in
+  skips stay in force, and with no file present nothing changes.
 - A headless one-shot mode: `yopes run "task text"` submits one task, runs the
   turn chain until the agent is idle, and exits — `0` on success, non-zero when
   the provider fails. It needs no tty, so CI runners can drive the agent. Tools

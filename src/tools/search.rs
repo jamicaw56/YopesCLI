@@ -46,7 +46,8 @@ pub(super) fn glob(arguments: &str) -> Result<String> {
     }
     let mut matches = Vec::new();
     let mut walked = 0usize;
-    walk_glob(&root, "", &segments, &mut matches, &mut walked)?;
+    let ignore = Ignore::load(&workspace());
+    walk_glob(&root, "", &segments, &ignore, &mut matches, &mut walked)?;
     matches.sort();
     matches.dedup();
     let mut output = format!("{pattern} ({} matches)\n", matches.len());
@@ -65,6 +66,7 @@ fn walk_glob(
     directory: &Path,
     display: &str,
     segments: &[String],
+    ignore: &Ignore,
     matches: &mut Vec<String>,
     walked: &mut usize,
 ) -> Result<()> {
@@ -76,7 +78,7 @@ fn walk_glob(
         // An unreadable directory never stops the walk.
         Err(_) => return Ok(()),
     };
-    let mut names: Vec<(String, bool)> = Vec::new();
+    let mut names: Vec<(String, bool, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         *walked += 1;
         if *walked > MAX_WALKED_ENTRIES {
@@ -84,19 +86,22 @@ fn walk_glob(
         }
         let name = entry.file_name().to_string_lossy().to_string();
         let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-        names.push((name, is_dir));
+        names.push((name, is_dir, entry.path()));
     }
-    for (name, is_dir) in names {
+    for (name, is_dir, full) in names {
         let path = if display.is_empty() {
             name.clone()
         } else {
             format!("{display}/{name}")
         };
+        if ignore.skip(&full, is_dir) {
+            continue;
+        }
         if match_path(segments, &path) {
             matches.push(path.clone());
         }
         if is_dir && !SKIP_DIRS.contains(&name.as_str()) {
-            walk_glob(&directory.join(&name), &path, segments, matches, walked)?;
+            walk_glob(&full, &path, segments, ignore, matches, walked)?;
         }
     }
     Ok(())
@@ -216,6 +221,7 @@ pub(super) fn grep(arguments: &str) -> Result<String> {
     };
     let mut matches = Vec::new();
     let mut walked = 0usize;
+    let ignore = Ignore::load(&workspace());
     let include_segments = include.as_deref();
     walk_grep(
         &root,
@@ -223,6 +229,7 @@ pub(super) fn grep(arguments: &str) -> Result<String> {
         &needle,
         args.ignore_case,
         include_segments,
+        &ignore,
         &mut matches,
         &mut walked,
     )?;
@@ -247,6 +254,7 @@ fn walk_grep(
     needle: &str,
     ignore_case: bool,
     include: Option<&[String]>,
+    ignore: &Ignore,
     matches: &mut Vec<String>,
     walked: &mut usize,
 ) -> Result<()> {
@@ -257,7 +265,7 @@ fn walk_grep(
         Ok(entries) => entries,
         Err(_) => return Ok(()),
     };
-    let mut names: Vec<(String, bool)> = Vec::new();
+    let mut names: Vec<(String, bool, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         *walked += 1;
         if *walked > MAX_WALKED_ENTRIES {
@@ -265,39 +273,40 @@ fn walk_grep(
         }
         let name = entry.file_name().to_string_lossy().to_string();
         let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-        names.push((name, is_dir));
+        names.push((name, is_dir, entry.path()));
     }
-    for (name, is_dir) in names {
+    for (name, is_dir, full) in names {
         let path = if display.is_empty() {
             name.clone()
         } else {
             format!("{display}/{name}")
         };
         if is_dir {
-            if !SKIP_DIRS.contains(&name.as_str()) {
+            if !SKIP_DIRS.contains(&name.as_str()) && !ignore.skip(&full, true) {
                 walk_grep(
-                    &directory.join(&name),
+                    &full,
                     &path,
                     needle,
                     ignore_case,
                     include,
+                    ignore,
                     matches,
                     walked,
                 )?;
             }
             continue;
         }
-        if !include_accepts(include, &name, &path) {
+        if !include_accepts(include, &name, &path) || ignore.skip(&full, false) {
             continue;
         }
-        let metadata = match fs::metadata(directory.join(&name)) {
+        let metadata = match fs::metadata(&full) {
             Ok(metadata) => metadata,
             Err(_) => continue,
         };
         if metadata.len() > MAX_GREP_FILE_BYTES {
             continue;
         }
-        let bytes = match fs::read(directory.join(&name)) {
+        let bytes = match fs::read(&full) {
             Ok(bytes) => bytes,
             Err(_) => continue,
         };

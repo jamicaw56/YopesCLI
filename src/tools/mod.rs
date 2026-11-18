@@ -6,10 +6,12 @@
 //! the approval rules and system prompt, and `preview` the change previews.
 //! The tools themselves live in one module per family: `files` (read, write,
 //! edit), `search` (glob, grep), `shell` (commands and background jobs), `web`
-//! (search, fetch) and `todo`.
+//! (search, fetch) and `todo`. `ignore` holds the `.yopesignore` filter the
+//! filesystem walkers apply.
 
 mod definitions;
 mod files;
+mod ignore;
 mod policy;
 mod preview;
 mod search;
@@ -27,6 +29,7 @@ use std::{
 
 pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets, move_target};
+pub(crate) use ignore::Ignore;
 pub use policy::{requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
 pub(crate) use shell::BashNotice;
@@ -728,6 +731,61 @@ mod tests {
         let output = execute(&missing, None, Path::new(".")).unwrap();
         assert!(output.contains("(no matches)"), "{output}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn yopesignore_filters_globs_and_listings() {
+        use super::execute;
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("yopes-ignore-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("dist").join("nested")).unwrap();
+        fs::write(dir.join("src.rs"), "x").unwrap();
+        fs::write(dir.join("debug.log"), "x").unwrap();
+        fs::write(dir.join("keep.log"), "x").unwrap();
+        fs::write(dir.join("dist").join("bundle.js"), "x").unwrap();
+        fs::write(dir.join("dist").join("nested").join("chunk.js"), "x").unwrap();
+        fs::write(dir.join(".yopesignore"), "dist/\n*.log\n!keep.log\n").unwrap();
+
+        let glob = |pattern: &str| {
+            let arguments = format!(r#"{{"pattern":{pattern:?},"path":"."}}"#);
+            execute(&ToolCall::new("call_20", "glob", arguments), None, &dir).unwrap()
+        };
+        let every = glob("**/*");
+        assert!(every.contains("src.rs"), "{every}");
+        assert!(every.contains("keep.log"), "{every}");
+        assert!(!every.contains("debug.log"), "{every}");
+        assert!(!every.contains("dist"), "{every}");
+
+        let listing = execute(
+            &ToolCall::new("call_21", "list_dir", r#"{"path":"."}"#),
+            None,
+            &dir,
+        )
+        .unwrap();
+        assert!(listing.contains("src.rs"), "{listing}");
+        assert!(!listing.contains("debug.log"), "{listing}");
+        assert!(!listing.contains("dist/"), "{listing}");
+
+        let search = execute(
+            &ToolCall::new(
+                "call_22",
+                "grep",
+                r#"{"pattern":"x","path":".","include":"*.log"}"#,
+            ),
+            None,
+            &dir,
+        )
+        .unwrap();
+        assert!(search.contains("keep.log:1:"), "{search}");
+        assert!(!search.contains("debug.log"), "{search}");
+
+        // Without the file nothing is filtered again.
+        fs::remove_file(dir.join(".yopesignore")).unwrap();
+        let every = glob("**/*");
+        assert!(every.contains("debug.log"), "{every}");
+        assert!(every.contains("dist"), "{every}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

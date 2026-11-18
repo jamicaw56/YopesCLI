@@ -130,7 +130,9 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              that a file changed unless a tool result confirms it. Set run_command risk to \
              true for anything destructive or hard to undo so the user is asked first. \
              Use glob to find files by pattern and grep to search their contents, so you \
-             do not read whole directories blindly. \
+             do not read whole directories blindly. A `.yopesignore` at the workspace root \
+             filters what those walks and list_dir see, so a path missing from results may \
+             be excluded there; read it when something you expect is absent. \
              For several replacements in one or more files, batch them with multi_edit: \
              it applies every edit in order, and one failure refuses the whole batch. \
              Change the working directory with move_to when a task lives in another folder: \
