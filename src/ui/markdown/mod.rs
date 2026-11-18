@@ -212,7 +212,11 @@ fn heading_line(level: usize, title: &str) -> Line<'static> {
     };
     // Depth bars: one ▰ per level reads as a heading's weight without the
     // shout of repeating the title color at every depth.
-    let bar_color = if level <= 2 { theme.accent } else { theme.accent2 };
+    let bar_color = if level <= 2 {
+        theme.accent
+    } else {
+        theme.accent2
+    };
     let mut spans = vec![Span::styled(
         format!("{} ", "▰".repeat(level.min(3))),
         Style::default().fg(bar_color),
@@ -278,10 +282,7 @@ fn quote(line: &str) -> Option<(usize, &str)> {
 }
 
 fn quote_line(depth: usize, text: &str) -> Line<'static> {
-    let mut spans = vec![Span::styled(
-        "│ ".repeat(depth),
-        Style::default().fg(dim()),
-    )];
+    let mut spans = vec![Span::styled("│ ".repeat(depth), Style::default().fg(dim()))];
     spans.extend(inline_spans(
         text,
         Style::default().fg(muted()).add_modifier(Modifier::ITALIC),

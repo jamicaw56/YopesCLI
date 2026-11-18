@@ -265,10 +265,7 @@ pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
             // A narrow terminal splits into thirds with nothing left over.
             continue;
         }
-        spans.push(Span::styled(
-            "─".repeat(count),
-            Style::default().fg(color),
-        ));
+        spans.push(Span::styled("─".repeat(count), Style::default().fg(color)));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
@@ -515,10 +512,7 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
         title.push(Span::styled("  ", Style::default()));
         title.extend(meter);
     }
-    title.push(Span::styled(
-        " · click to fold",
-        Style::default().fg(dim()),
-    ));
+    title.push(Span::styled(" · click to fold", Style::default().fg(dim())));
     lines.insert(0, Line::from(title));
     frame.render_widget(Paragraph::new(lines), inner);
 }

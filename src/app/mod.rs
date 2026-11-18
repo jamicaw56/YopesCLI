@@ -317,7 +317,8 @@ pub struct App {
     pending_logos: Vec<String>,
     /// Cache of rendered markdown blocks for completed messages, with their
     /// wrap row total: see `MarkdownBlock`.
-    pub(crate) markdown_cache: HashMap<usize, MarkdownBlock>,    /// A message typed while subagents still stream, queued for the
+    pub(crate) markdown_cache: HashMap<usize, MarkdownBlock>,
+    /// A message typed while subagents still stream, queued for the
     /// post-delegate continuation (see `TabState::queued_message`).
     pub queued_message: Option<String>,
     pub queued_images: Vec<ImageAttachment>,

@@ -287,13 +287,16 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                         let counts = line_counts(&parsed, inner.width);
                         let block_rows: usize = counts.iter().sum();
                         let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
-                        app.markdown_cache.insert(index, (
-                            inner.width,
-                            content_key,
-                            arc_lines.clone(),
-                            block_rows,
-                            content_len,
-                        ));
+                        app.markdown_cache.insert(
+                            index,
+                            (
+                                inner.width,
+                                content_key,
+                                arc_lines.clone(),
+                                block_rows,
+                                content_len,
+                            ),
+                        );
                         slots.push(Slot::Block {
                             lines: arc_lines,
                             rows: block_rows,
@@ -307,7 +310,13 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     let arc_lines: std::sync::Arc<[Line<'static>]> = parsed.into();
                     app.markdown_cache.insert(
                         index,
-                        (inner.width, content_key, arc_lines.clone(), block_rows, content_len),
+                        (
+                            inner.width,
+                            content_key,
+                            arc_lines.clone(),
+                            block_rows,
+                            content_len,
+                        ),
                     );
                     slots.push(Slot::Block {
                         lines: arc_lines,
@@ -617,13 +626,15 @@ mod tests {
     }
 
     /// The whole terminal buffer as one string, rows in order.
-    fn rendered_text(
-        terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
-    ) -> String {
+    fn rendered_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
         let area = terminal.backend().buffer().area;
         (0..area.height)
             .flat_map(|row| (0..area.width).map(move |column| (row, column)))
-            .map(|(row, column)| terminal.backend().buffer()[(column, row)].symbol().to_string())
+            .map(|(row, column)| {
+                terminal.backend().buffer()[(column, row)]
+                    .symbol()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -633,7 +644,9 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
 
         let mut app = crate::app::test_app();
-        app.session.messages.push(Message::new(Role::User, "plan the work"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "plan the work"));
         app.session.messages.push(Message {
             role: Role::Assistant,
             content: String::new(),
@@ -646,7 +659,9 @@ mod tests {
         });
         // A message between the call and its result forces the name lookup to
         // reach past the immediately preceding message.
-        app.session.messages.push(Message::new(Role::User, "second"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "second"));
         app.session.messages.push(Message {
             role: Role::Tool,
             content: "Wrote 3 todos.".to_owned(),
@@ -677,7 +692,9 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
 
         let mut app = crate::app::test_app();
-        app.session.messages.push(Message::new(Role::User, "first prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "first prompt"));
         app.session
             .messages
             .push(Message::new(Role::Assistant, "the reply text"));
@@ -705,7 +722,10 @@ mod tests {
             text.contains("the reply text"),
             "cached render expected for a completed message"
         );
-        assert!(!text.contains("the reply TEXT"), "re-hashing should not happen");
+        assert!(
+            !text.contains("the reply TEXT"),
+            "re-hashing should not happen"
+        );
     }
 
     #[test]
@@ -714,7 +734,9 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
 
         let mut app = crate::app::test_app();
-        app.session.messages.push(Message::new(Role::User, "first prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "first prompt"));
         app.session
             .messages
             .push(Message::new(Role::Assistant, "the reply text"));
@@ -800,14 +822,18 @@ mod tests {
 
         // Warm-up frame fills the markdown cache, like a session already on
         // screen.
-        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
 
         let count = 20;
         let mut total = std::time::Duration::ZERO;
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..count {
             let start = Instant::now();
-            terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
             let elapsed = start.elapsed();
             total += elapsed;
             worst = worst.max(elapsed);

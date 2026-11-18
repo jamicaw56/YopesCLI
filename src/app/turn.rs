@@ -1498,9 +1498,7 @@ pub(crate) mod tests {
     #[test]
     fn visible_animations_keep_the_ticker_alive() {
         let mut app = test_app();
-        app.session
-            .messages
-            .push(Message::new(Role::User, "hello"));
+        app.session.messages.push(Message::new(Role::User, "hello"));
         assert!(!app.ticker_wanted(), "an idle session does not tick");
 
         // A running tool ticks its footer spinner.
