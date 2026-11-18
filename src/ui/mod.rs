@@ -95,24 +95,6 @@ pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
 
 /// Rows of command text shown in the approval prompt before it stops.
 const MAX_APPROVAL_LINES: usize = 4;
-/// The startup mascot: a small cat, drawn only on the welcome screen, with a
-/// ball of yarn that rolls beneath it.
-const CAT_ROWS: [&str; 6] = [
-    "  /\\_/\\  ",
-    " ( o.o ) ",
-    "  > ^ <  ",
-    "  /| . |\\  ",
-    " (_|   |_)",
-    "   \"   \"  ",
-];
-/// The tail flicks through these positions.
-const TAILS: [&str; 4] = ["", "\\", "\\\\", "\\~"];
-/// The yarn ball spins while rolling.
-const BALL_FRAMES: [&str; 4] = ["(o)", "(@)", "(O)", "(@)"];
-/// How wide the whole mascot is, so every row lines up.
-const MASCOT_WIDTH: usize = 15;
-/// The ball of yarn rolls this many steps out and back.
-const YARN_TRAVEL: usize = 6;
 /// Tool output rows shown before the rest is collapsed.
 const TOOL_OUTPUT_PREVIEW_LINES: usize = 7;
 /// The spinner frames: a braille ring whose gap turns, the terminal stand-in
@@ -133,17 +115,14 @@ pub(super) fn responsive_palette_width(area_width: u16) -> u16 {
 
 /// One frame of the welcome mascot.
 ///
-/// The cat tracks the rolling yarn, blinks, twitches its ears, paws the ball,
-/// and snoozes during longer idle stretches.
+/// The cursor owl blinks, swivels its head like the block cursor it guards,
+/// and dozes off when the session sits idle. Cached per tick pair: the art
+/// redraws in pairs, so the last frame serves both ticks.
 fn mascot_frame(step: usize) -> Vec<Line<'static>> {
     use std::cell::RefCell;
     thread_local! {
-        // The art redraws in tick pairs; keep the last frame instead of
-        // rebuilding seven string rows for an identical picture.
         static LAST: RefCell<Option<(usize, Vec<Line<'static>>)>> = const { RefCell::new(None) };
     }
-    // Only the odd mew (70 mod 160) and the sleep boundary (135 mod 160)
-    // change the picture inside a tick pair.
     let key = match step % 160 {
         70 | 135 => step,
         _ => step & !1,
@@ -161,83 +140,58 @@ fn mascot_frame(step: usize) -> Vec<Line<'static>> {
     })
 }
 
+/// The mascot's static art rows, wide enough for every animation state.
+const OWL_ROWS: [&str; 6] = [
+    "   \u{256d}\u{2500}\u{2500}\u{2500}\u{256e}    ",
+    "  \u{2502} \u{25cf} \u{25cf} \u{2502}   ",
+    "  \u{2502}  \u{2500}\u{2500}  \u{2502}  ",
+    "   \u{2570}\u{252c}\u{2500}\u{252c}\u{256f}   ",
+    "    \u{2502} \u{2502}     ",
+    "   \u{256d}\u{2534}\u{2500}\u{2534}\u{256e}    ",
+];
+/// Width of the mascot art, so every row lines up.
+const OWL_WIDTH: usize = 12;
+
 fn build_mascot_frame(step: usize) -> Vec<Line<'static>> {
-    // ponytail: procedural tick animation; add stateful sprite machine if interactive pet actions are needed.
-    let mut rows: Vec<String> = CAT_ROWS.iter().map(|row| (*row).to_owned()).collect();
     let sleeping = step % 160 >= 135;
+    let mut rows: Vec<String> = OWL_ROWS.iter().map(|row| (*row).to_owned()).collect();
 
     if sleeping {
+        // Dozing: the eyes close and a z floats up beside the head.
+        rows[1] = "  \u{2502} \u{2500} \u{2500} \u{2502}   ".to_owned();
+        // The z labels are 3 columns wide, so row 0 stays at OWL_WIDTH.
         let z = match (step / 4) % 3 {
-            0 => "  /\\_/\\  z",
-            1 => "  /\\_/\\  Z",
-            _ => "  /\\_/\\ zZ",
+            0 => "z  ",
+            1 => " Z ",
+            _ => "zZ ",
         };
-        rows[0] = z.to_owned();
-        rows[1] = rows[1].replace("o.o", "-.-");
-        rows[2] = rows[2].replace('^', "v");
-        let mut yarn = String::from("(o)");
-        yarn.push_str(&"~".repeat(MASCOT_WIDTH - 3));
-        rows.push(yarn);
+        rows[0] = format!("   \u{256d}\u{2500}\u{2500}\u{2500}\u{256e} {z}");
     } else {
-        // Ear twitches and occasional mew.
-        if step % 70 == 20 {
-            rows[0] = "  --_/\\  ".to_owned();
-        } else if step % 70 == 50 {
-            rows[0] = "  /\\_--  ".to_owned();
-        } else if step % 160 == 70 {
-            rows[0] = "  /\\_/\\  *mew".to_owned();
-        }
-
-        // Yarn ball position and rolling direction.
-        let travel = (step / 2) % (YARN_TRAVEL * 2);
-        let (position, trailing_left) = if travel < YARN_TRAVEL {
-            (travel, true)
-        } else {
-            (YARN_TRAVEL * 2 - travel, false)
-        };
-
-        // Eye tracking: follow the yarn, blink, or smile when batting.
+        // The pupils scan left and right on a slow triangular path; every
+        // 40th tick they blink shut for a frame.
+        let travel = (step / 2) % 8;
+        let position = if travel < 4 { travel } else { 8 - travel };
         let eyes = if step % 40 >= 38 {
-            "-.-"
-        } else if position >= 5 && !trailing_left {
-            "^.^"
+            "\u{2500} \u{2500}"
         } else {
             match position {
-                0..=1 => "<.<",
-                2..=3 => "o.o",
-                _ => ">.>",
+                0 => "\u{25CF} \u{25CF}",
+                1 => "\u{2022} \u{25CF}",
+                2 => "\u{00B7} \u{25CF}",
+                _ => "\u{2022} \u{2022}",
             }
         };
-        rows[1] = rows[1].replace("o.o", eyes);
-
-        // Paw bats the yarn at the right turn.
-        if position >= 5 && trailing_left {
-            rows[4] = rows[4].replace("|_)", "/_)");
-            rows[5] = "   \"    / ".to_owned();
+        rows[1] = format!("  \u{2502} {eyes} \u{2502}   ");
+        // The brow lifts during the once-per-cycle mew.
+        if step % 160 == 70 {
+            rows[0] = "   \u{256D}\u{2500}\u{02C6}\u{02C6}\u{2500}\u{256E}   ".to_owned();
         }
-
-        // Tail flick.
-        rows[4].push_str(TAILS[(step / 4) % TAILS.len()]);
-
-        // Rolling yarn ball.
-        let ball = BALL_FRAMES[(step / 2) % BALL_FRAMES.len()];
-        let mut yarn = String::new();
-        if trailing_left {
-            yarn.push_str(&"~".repeat(position));
-            yarn.push_str(ball);
-            yarn.push_str(&" ".repeat(MASCOT_WIDTH - position - 3));
-        } else {
-            yarn.push_str(&" ".repeat(position));
-            yarn.push_str(ball);
-            yarn.push_str(&"~".repeat(MASCOT_WIDTH - position - 3));
-        }
-        rows.push(yarn);
     }
 
     rows.into_iter()
         .map(|row| {
             let mut row = row;
-            row.push_str(&" ".repeat(MASCOT_WIDTH.saturating_sub(row.chars().count())));
+            row.push_str(&" ".repeat(OWL_WIDTH.saturating_sub(row.chars().count())));
             Line::styled(row, Style::default().fg(accent()))
         })
         .collect()
@@ -815,7 +769,7 @@ mod tests {
 
         let frames: Vec<Vec<String>> = (0..200)
             .map(|step| {
-                mascot_frame(step)
+                let f: Vec<String> = mascot_frame(step)
                     .into_iter()
                     .map(|line| {
                         line.spans
@@ -823,7 +777,12 @@ mod tests {
                             .map(|span| span.content.to_string())
                             .collect()
                     })
-                    .collect()
+                    .collect();
+                let w: Vec<usize> = f.iter().map(|r| r.chars().count()).collect();
+                if w.iter().any(|x| *x != 12) {
+                    panic!("step {step}: {w:?} rows {f:?}");
+                }
+                f
             })
             .collect();
         for frame in &frames {
@@ -833,7 +792,7 @@ mod tests {
                 widths.windows(2).all(|pair| pair[0] == pair[1]),
                 "{widths:?}"
             );
-            assert_eq!(frame.len(), 7, "the cat and the ball of yarn");
+            assert_eq!(frame.len(), 6, "the owl and its perch");
         }
         // The mascot animates across ticks.
         let first = &frames[0];
