@@ -61,7 +61,13 @@ try {
     Write-Host "Downloading $Asset..." -NoNewline
     $Zip = Join-Path $Temporary $Asset
     Invoke-WebRequest -Uri $AssetUrl -OutFile $Zip
-    $ChecksumsText = Invoke-WebRequest -Uri $ChecksumsUrl -UseBasicParsing | Select-Object -ExpandProperty Content
+    $ChecksumsText = Invoke-WebRequest -Uri $ChecksumsUrl -UseBasicParsing |
+        Select-Object -ExpandProperty Content
+    # PowerShell 7 decodes a text/plain response as a byte array here, so
+    # join it back into a string when that happens; a string passes through.
+    if ($ChecksumsText -isnot [string]) {
+        $ChecksumsText = [Text.Encoding]::UTF8.GetString([byte[]]$ChecksumsText)
+    }
     Write-Host " done"
 
     # Keep this: an unverified binary is the one thing we must never install.
