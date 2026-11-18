@@ -54,7 +54,7 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(title_top)
         .title_bottom(Line::styled(
             " ↑↓ move · enter switch · tab provider · ctrl+r fetch · esc cancel ",
@@ -168,14 +168,14 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(Line::styled(
             format!(" sessions{filter_field} "),
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ))
         .title_bottom(Line::styled(
             " ↑↓ move · enter load · esc cancel ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -242,14 +242,14 @@ pub(super) fn draw_revert_picker(frame: &mut Frame, app: &App, picker: &ListPick
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(Line::styled(
             format!(" revert{filter_field} "),
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ))
         .title_bottom(Line::styled(
             " ↑↓ move · enter edit · esc cancel ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -322,11 +322,11 @@ pub(super) fn draw_palette(
     );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
-        .title_top(Line::styled(" commands ", Style::default().fg(muted())))
+        .border_style(Style::default().fg(dim()))
+        .title_top(Line::styled(" commands ", Style::default().fg(dim())))
         .title_bottom(Line::styled(
             " ↑↓ move · tab complete · enter run ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);

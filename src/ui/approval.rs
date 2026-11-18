@@ -47,12 +47,11 @@ pub(super) fn draw_approval(
     );
     frame.render_widget(Clear, popup);
 
-    let blink = (spinner / 5) % 2 == 0;
-    let border = Style::default().fg(accent()).add_modifier(if blink {
-        Modifier::BOLD
-    } else {
-        Modifier::empty()
-    });
+    // The border breathes between the two accents instead of blinking bold:
+    // a glow cycle draws the eye without strobing.
+    let glow = (spinner % 10) as f32 / 10.0;
+    let wave = ((glow * std::f32::consts::TAU).sin() * 0.5 + 0.5) as f64;
+    let border = Style::default().fg(blend(accent(), accent2(), (wave * 100.0) as usize));
     approval.popup_area.set(popup);
     let has_command = tools::command_text(&approval.call).is_some();
     let block = Block::bordered()
@@ -61,7 +60,7 @@ pub(super) fn draw_approval(
         .title_top(Line::from(vec![
             Span::styled(
                 "● ",
-                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+                Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 if has_command {
@@ -75,7 +74,7 @@ pub(super) fn draw_approval(
         .title_bottom(Line::from(vec![
             Span::styled(
                 " [Enter] Run ",
-                Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+                Style::default().fg(added()).add_modifier(Modifier::BOLD),
             ),
             Span::styled(" [A] Always ", Style::default().fg(muted())),
             Span::styled(
@@ -115,7 +114,7 @@ pub(super) fn tool_result_lines(
     let outer = usize::from(width).saturating_sub(1).max(1);
     let inner_width = outer.saturating_sub(4);
     let failed = message.content.starts_with("Error: ");
-    let border = if failed { error() } else { muted() };
+    let border = if failed { error() } else { dim() };
     let call_id = message.tool_call_id.clone().unwrap_or_default();
     let expanded = app.expanded.contains(&call_id);
     // Only the lines the frame shows are normalized: a folded 5,000-line

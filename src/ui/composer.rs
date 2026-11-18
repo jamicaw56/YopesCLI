@@ -274,7 +274,7 @@ pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
 }
 
 /// The color `blend%` of the way from `from` to `to`, per channel.
-fn blend(from: Color, to: Color, blend: usize) -> Color {
+pub(super) fn blend(from: Color, to: Color, blend: usize) -> Color {
     let (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) = (from, to) else {
         return to;
     };
