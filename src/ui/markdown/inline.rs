@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use super::code;
-use super::{accent, muted};
+use super::muted;
 
 pub(super) fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut spans = Vec::new();

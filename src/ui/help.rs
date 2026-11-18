@@ -72,7 +72,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 
 pub(super) fn help_section(title: &'static str) -> Line<'static> {
     Line::styled(
-        format!("{title}"),
+        title.to_owned(),
         Style::default()
             .fg(crate::theme::current().accent2)
             .add_modifier(Modifier::BOLD),
