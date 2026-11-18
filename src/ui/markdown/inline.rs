@@ -187,7 +187,7 @@ fn parse_link(text: &str) -> Option<(String, String, usize)> {
 
 fn link_style() -> Style {
     Style::default()
-        .fg(accent())
+        .fg(crate::theme::current().accent2)
         .add_modifier(Modifier::UNDERLINED)
 }
 

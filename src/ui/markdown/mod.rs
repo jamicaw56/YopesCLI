@@ -10,7 +10,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, muted, normalize_line, text};
+use super::{accent, dim, muted, normalize_line, text};
 
 mod inline;
 mod table;
@@ -126,6 +126,7 @@ fn render_code(
     output: &mut Vec<Line<'static>>,
 ) -> usize {
     output.push(code_open(info, width));
+    let gutter = Style::default().fg(dim());
     let mut cursor = index + 1;
     while cursor < source.len() {
         if fence.closes(&source[cursor]) {
@@ -133,7 +134,7 @@ fn render_code(
             return cursor + 1;
         }
         output.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(muted())),
+            Span::styled("│ ", gutter),
             Span::styled(source[cursor].clone(), Style::default().fg(code())),
         ]));
         cursor += 1;
@@ -160,13 +161,13 @@ fn border_line(prefix: &str, width: u16) -> Line<'static> {
     let mut text = super::truncate(prefix, total);
     let used = UnicodeWidthStr::width(text.as_str());
     text.push_str(&"─".repeat(total.saturating_sub(used)));
-    Line::styled(text, Style::default().fg(muted()))
+    Line::styled(text, Style::default().fg(dim()))
 }
 
 fn rule_line(width: u16) -> Line<'static> {
     Line::styled(
         "─".repeat(usize::from(width).saturating_sub(1).max(1)),
-        Style::default().fg(muted()),
+        Style::default().fg(dim()),
     )
 }
 
@@ -198,14 +199,23 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 }
 
 fn heading_line(level: usize, title: &str) -> Line<'static> {
-    let style = if level <= 2 {
-        Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(text()).add_modifier(Modifier::BOLD)
+    let theme = crate::theme::current();
+    let style = match level {
+        1 => Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+        2 => Style::default()
+            .fg(theme.accent2)
+            .add_modifier(Modifier::BOLD),
+        3..=5 => Style::default().fg(text()).add_modifier(Modifier::BOLD),
+        _ => Style::default().fg(text()),
     };
+    // Depth bars: one ▰ per level reads as a heading's weight without the
+    // shout of repeating the title color at every depth.
+    let bar_color = if level <= 2 { theme.accent } else { theme.accent2 };
     let mut spans = vec![Span::styled(
         format!("{} ", "▰".repeat(level.min(3))),
-        Style::default().fg(accent()),
+        Style::default().fg(bar_color),
     )];
     spans.extend(inline_spans(title, style));
     Line::from(spans)
@@ -270,7 +280,7 @@ fn quote(line: &str) -> Option<(usize, &str)> {
 fn quote_line(depth: usize, text: &str) -> Line<'static> {
     let mut spans = vec![Span::styled(
         "│ ".repeat(depth),
-        Style::default().fg(muted()),
+        Style::default().fg(dim()),
     )];
     spans.extend(inline_spans(
         text,

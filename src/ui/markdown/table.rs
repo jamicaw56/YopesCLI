@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use super::super::truncate;
 use super::Fence;
 use super::inline::inline_spans;
-use super::{muted, text};
+use super::{dim, muted, text};
 
 /// Tables are capped so one long cell cannot crowd out every other column.
 const MAX_TABLE_CELL: usize = 40;
@@ -167,7 +167,7 @@ fn table_border(left: char, middle: char, right: char, widths: &[usize]) -> Line
             middle
         });
     }
-    Line::styled(text, Style::default().fg(muted()))
+    Line::styled(text, Style::default().fg(dim()))
 }
 
 fn table_row(
@@ -181,7 +181,7 @@ fn table_row(
     } else {
         Style::default().fg(text())
     };
-    let mut spans = vec![Span::styled("│", Style::default().fg(muted()))];
+    let mut spans = vec![Span::styled("│", Style::default().fg(dim()))];
     for (index, width) in widths.iter().enumerate() {
         let cell = cells.get(index).map_or("", |cell| cell.as_str());
         let clipped = truncate(cell, *width);
