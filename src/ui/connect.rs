@@ -28,7 +28,7 @@ pub(super) fn draw_connect(
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(Line::from(vec![
             Span::styled(
                 " connect ",
@@ -41,7 +41,7 @@ pub(super) fn draw_connect(
         ]))
         .title_bottom(Line::styled(
             " providers + custom · stored locally ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = block.inner(popup);

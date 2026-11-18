@@ -12,7 +12,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     // badge and the session tabs are what need the space.
     let mut title_spans = vec![
         Span::styled(
-            "●",
+            "◆",
             Style::default()
                 .fg(app.mode.color())
                 .add_modifier(Modifier::BOLD),
@@ -32,10 +32,10 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             ));
         }
         ToolsMode::Ask => {
-            title_spans.push(Span::styled(" [ASK]", Style::default().fg(muted())));
+            title_spans.push(Span::styled(" [ASK]", Style::default().fg(dim())));
         }
         ToolsMode::Off => {
-            title_spans.push(Span::styled(" [OFF]", Style::default().fg(muted())));
+            title_spans.push(Span::styled(" [OFF]", Style::default().fg(dim())));
         }
         ToolsMode::On => {}
     }
@@ -144,7 +144,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             break;
         }
         if index > 0 {
-            title_spans.push(Span::styled(" │ ", Style::default().fg(muted())));
+            title_spans.push(Span::styled(" │ ", Style::default().fg(dim())));
             x = x.saturating_add(sep_w);
         }
         if !marker.is_empty() {
@@ -166,7 +166,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         let start = x.saturating_sub(label_w + marker_w);
         app.tab_hits.push((start, x, tab_row, index));
         // `×` after each label: mouse users close that tab without switching.
-        title_spans.push(Span::styled(" ×", Style::default().fg(muted())));
+        title_spans.push(Span::styled(" ×", Style::default().fg(dim())));
         x = x.saturating_add(close_w);
         let close_start = x.saturating_sub(close_w);
         app.tab_close_hits.push((close_start, x, tab_row, index));
@@ -176,7 +176,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         // and Alt+1..9 still reaches every one of them.
         title_spans.push(Span::styled(
             format!(" +{overflow}"),
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
     }
     // `+` after the last tab: opens one. A click past the limit is told so.

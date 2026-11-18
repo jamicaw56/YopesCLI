@@ -79,7 +79,7 @@ pub(super) fn draw_agents_sidebar(frame: &mut Frame, app: &mut App, area: Rect) 
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(Line::styled(
             // The badge truncates to the box: a title longer than the
             // sidebar never paints over the border or past the box edge.
@@ -92,7 +92,7 @@ pub(super) fn draw_agents_sidebar(frame: &mut Frame, app: &mut App, area: Rect) 
             } else {
                 " click to view "
             },
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -163,7 +163,7 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
         ))
         .title_bottom(Line::styled(
             " ↑↓ scroll · esc close ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -238,14 +238,14 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(Line::styled(
             format!(" agents{filter_field} "),
             Style::default().fg(muted()),
         ))
         .title_bottom(Line::styled(
             " ↑↓ move · enter view · type to filter · esc cancel ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(Clear, popup);

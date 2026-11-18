@@ -13,7 +13,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(muted()))
+        .border_style(Style::default().fg(dim()))
         .title_top(Line::styled(
             // The version lives in the help title: `/set` has no room for a
             // command that exists only to print one number.
@@ -22,7 +22,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         ))
         .title_bottom(Line::styled(
             " esc close · ↑↓ scroll ",
-            Style::default().fg(muted()),
+            Style::default().fg(dim()),
         ))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = block.inner(popup);
@@ -72,8 +72,10 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 
 pub(super) fn help_section(title: &'static str) -> Line<'static> {
     Line::styled(
-        title,
-        Style::default().fg(muted()).add_modifier(Modifier::BOLD),
+        format!("{title}"),
+        Style::default()
+            .fg(crate::theme::current().accent2)
+            .add_modifier(Modifier::BOLD),
     )
 }
 
