@@ -34,7 +34,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 11] = [
+pub const COMMANDS: [CommandSpec; 12] = [
     CommandSpec {
         name: "/help",
         description: "Show keys, commands and the version",
@@ -84,6 +84,11 @@ pub const COMMANDS: [CommandSpec; 11] = [
         name: "/revert",
         description: "Edit and re-run a previous prompt",
         argument: None,
+    },
+    CommandSpec {
+        name: "/goal",
+        description: "Set the objective the model must reach no matter what",
+        argument: Some("goal"),
     },
     CommandSpec {
         name: "/quit",
@@ -147,11 +152,13 @@ mod tests {
                 "/agents",
                 "/skills",
                 "/revert",
+                "/goal",
                 "/quit",
             ]
         );
         assert_eq!(command_names("/c"), vec!["/cd"]);
         assert_eq!(command_names("/r"), vec!["/run", "/revert"]);
+        assert_eq!(command_names("/g"), vec!["/goal"]);
         assert_eq!(command_names("/s"), vec!["/session", "/set", "/settings", "/skills"]);
         assert_eq!(command_names("/p"), vec!["/provider"]);
         assert_eq!(command_names("/a"), vec!["/agents"]);

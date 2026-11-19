@@ -53,7 +53,7 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
     // `/settings` and the read-only commands change nothing about the turn.
     matches!(
         name,
-        "/help" | "/agents" | "/skills" | "/quit" | "/settings"
+        "/help" | "/agents" | "/skills" | "/quit" | "/settings" | "/goal"
     )
 }
 
@@ -336,6 +336,12 @@ impl App {
         // every request carries the true state of every delegated run, even
         // after compaction dropped the messages that mentioned them.
         let mut notes: Vec<String> = Vec::new();
+        // The goal rides first: it outranks the mode and the ledger.
+        if let Some(goal) = self.session.goal.as_deref() {
+            notes.push(format!(
+                "GOAL — the user's objective for this session, to be achieved no matter what. Do not stop early, do not hand it back as a question, and do not call it done until you have checked the result:\n{goal}"
+            ));
+        }
         if let Some(instruction) = self.mode.instruction(self.tools_mode) {
             notes.push(instruction.to_owned());
         }
@@ -496,6 +502,10 @@ impl App {
             "/agents" => self.open_agents_picker(),
             "/skills" => self.show_skills(),
             "/revert" => self.open_revert_picker(),
+            "/goal" => {
+                let goal = parts.collect::<Vec<_>>().join(" ");
+                self.set_goal(&goal);
+            }
             "/quit" => {
                 self.should_quit = true;
                 return Action::Quit;
@@ -505,6 +515,31 @@ impl App {
             )),
         }
         Action::None
+    }
+
+    /// `/goal`: the objective the model is told to reach, carried in every
+    /// request's system note so compaction cannot drop it. `/goal clear` drops
+    /// it; `clear`, `off` and `none` are reserved words, not goals.
+    fn set_goal(&mut self, goal: &str) {
+        let goal = goal.trim();
+        let lowered = goal.to_ascii_lowercase();
+        if goal.is_empty() {
+            match self.session.goal.clone() {
+                Some(current) => self.info(format!("Goal: {current} · /goal clear to drop it")),
+                None => self.info("Usage: /goal <what the model must achieve>"),
+            }
+        } else if matches!(lowered.as_str(), "clear" | "off" | "none") {
+            if self.session.goal.take().is_some() {
+                self.save_session();
+                self.info("Goal cleared.");
+            } else {
+                self.info("No goal set.");
+            }
+        } else {
+            self.session.goal = Some(goal.to_owned());
+            self.save_session();
+            self.info("Goal set: it rides in every request until /goal clear.");
+        }
     }
 
     /// `/set` with no key: every setting and its current value on one line,
@@ -1593,5 +1628,27 @@ pub(crate) mod tests {
         assert!(app.ticker_wanted(), "the send flash animates");
         app.spinner = app.spinner.wrapping_add(6);
         assert!(!app.ticker_wanted(), "the flash ends after a few ticks");
+    }
+
+    #[test]
+    fn the_goal_rides_in_every_request_until_cleared() {
+        let mut app = test_app();
+        app.command("/goal ship the release");
+        app.input.set("start on it");
+        let Action::Start { mode_note, .. } = app.submit() else {
+            panic!("the goal turn starts");
+        };
+        let note = mode_note.expect("the goal note rides the request");
+        assert!(note.contains("no matter what"));
+        assert!(note.contains("ship the release"));
+
+        // Clearing drops it from the next request.
+        app.command("/goal clear");
+        assert!(app.session.goal.is_none());
+        app.input.set("keep going");
+        let Action::Start { mode_note, .. } = app.submit() else {
+            panic!("the second turn starts");
+        };
+        assert!(!mode_note.unwrap_or_default().contains("ship the release"));
     }
 }

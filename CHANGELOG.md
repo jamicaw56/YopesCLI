@@ -110,6 +110,11 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `/goal <text>`: an objective the model is told to reach "no matter what".
+  It rides in every request's system note, ahead of the mode instruction, so
+  compaction cannot drop it and every tab keeps its own; it persists in the
+  session file until `/goal clear`. `/goal` with no argument shows the current
+  one.
 - `apply_patch` tool: one `*** Begin Patch` envelope adds, deletes, updates
   and renames files. Every hunk is matched in memory first (exact, then
   whitespace-tolerant), so a patch applies fully or touches nothing. It shows

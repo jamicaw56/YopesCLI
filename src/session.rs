@@ -173,6 +173,10 @@ pub struct Session {
     /// state of every run survives a restart and is never assumed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegations: Vec<crate::delegation::DelegationRecord>,
+    /// `/goal`: the objective every request is told to reach, carried in the
+    /// system note until `/goal clear`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
 }
 
 impl Default for Session {
@@ -205,6 +209,7 @@ impl Session {
             tasks: Vec::new(),
             auto_named: false,
             delegations: Vec::new(),
+            goal: None,
         }
     }
 
