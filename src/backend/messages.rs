@@ -8,12 +8,42 @@ use anyhow::Result;
 use crate::session::{Message, Role};
 use crate::{skills, tools};
 
+/// The system prompt every provider shape sends: the built-in tool prompt,
+/// the user's custom prompt, the mode note, then the skills listing.
+fn system_prompt(
+    tooling: bool,
+    custom_prompt: Option<&str>,
+    mode_note: Option<String>,
+    workspace: &Path,
+) -> String {
+    let mut system = tools::system_prompt(tooling, workspace);
+    // The user's prompt may duplicate what a built-in line already says: send
+    // it anyway, since a provider may also enforce its own system prompt.
+    if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
+        system.push_str("\n\n");
+        system.push_str(custom.trim());
+    }
+    if let Some(note) = mode_note {
+        system.push_str("\n\n");
+        system.push_str(note);
+    }
+    // Skills auto-load through read_file, so only tool-capable sessions get
+    // the listing; slash invocation injects the content by itself.
+    if tooling {
+        if let Some(listing) = skills::section(workspace) {
+            system.push_str("\n\n");
+            system.push_str(&listing);
+        }
+    }
+    system
+}
+
 pub(super) fn request_messages(
     messages: &[Message],
     tooling: bool,
     image_style: ImageStyle,
     custom_prompt: Option<&str>,
-    mode_note: Option<String>,
+    mode_note: Option<&'static str>,
     workspace: &Path,
 ) -> Result<Vec<serde_json::Value>> {
     let mut request = Vec::with_capacity(messages.len() + 1);
@@ -26,25 +56,7 @@ pub(super) fn request_messages(
     // turn's last tool result: every tool_call id still gets its own tool
     // message first, and the image sits in the turn it was read in.
     let mut tool_images: Vec<&crate::session::ImageAttachment> = Vec::new();
-    let mut system = tools::system_prompt(tooling, workspace);
-    // The user's prompt may duplicate what a built-in line already says: send
-    // it anyway, since a provider may also enforce its own system prompt.
-    if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
-        system.push_str("\n\n");
-        system.push_str(custom.trim());
-    }
-    if let Some(note) = mode_note {
-        system.push_str("\n\n");
-        system.push_str(&note);
-    }
-    // Skills auto-load through read_file, so only tool-capable sessions get
-    // the listing; slash invocation injects the content by itself.
-    if tooling {
-        if let Some(listing) = skills::section(workspace) {
-            system.push_str("\n\n");
-            system.push_str(&listing);
-        }
-    }
+    let system = system_prompt(tooling, custom_prompt, mode_note.as_deref(), workspace);
     request.push(serde_json::json!({
         "role": "system",
         "content": system,
@@ -230,21 +242,7 @@ pub(super) fn anthropic_request_payload(
     mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<(Option<String>, Vec<serde_json::Value>)> {
-    let mut system = tools::system_prompt(tooling, workspace);
-    if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
-        system.push_str("\n\n");
-        system.push_str(custom.trim());
-    }
-    if let Some(note) = mode_note {
-        system.push_str("\n\n");
-        system.push_str(&note);
-    }
-    if tooling {
-        if let Some(listing) = skills::section(workspace) {
-            system.push_str("\n\n");
-            system.push_str(&listing);
-        }
-    }
+    let system = system_prompt(tooling, custom_prompt, mode_note.as_deref(), workspace);
 
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
     let valid_tool_call_ids: std::collections::HashSet<&str> = messages
@@ -456,21 +454,7 @@ pub(super) fn gemini_request_payload(
     mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<(Option<serde_json::Value>, Vec<serde_json::Value>)> {
-    let mut system = tools::system_prompt(tooling, workspace);
-    if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
-        system.push_str("\n\n");
-        system.push_str(custom.trim());
-    }
-    if let Some(note) = mode_note {
-        system.push_str("\n\n");
-        system.push_str(&note);
-    }
-    if tooling {
-        if let Some(listing) = skills::section(workspace) {
-            system.push_str("\n\n");
-            system.push_str(&listing);
-        }
-    }
+    let system = system_prompt(tooling, custom_prompt, mode_note.as_deref(), workspace);
 
     let mut call_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();

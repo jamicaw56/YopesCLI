@@ -272,61 +272,22 @@ async fn run() -> Result<()> {
             }
             event = receiver.recv() => {
                 let Some(event) = event else { break; };
-                let request_id = match &event {
-                    StreamEvent::Delta { request_id, .. }
-                    | StreamEvent::Reasoning { request_id, .. }
-                    | StreamEvent::ToolProgress { request_id, .. }
-                    | StreamEvent::Usage { request_id, .. }
-                    | StreamEvent::ToolCalls { request_id, .. }
-                    | StreamEvent::Retrying { request_id, .. }
-                    | StreamEvent::Done { request_id }
-                    | StreamEvent::Stalled { request_id, .. }
-                    | StreamEvent::OutputLimit { request_id }
-                    | StreamEvent::Error { request_id, .. } => *request_id,
-                };
+                let request_id = event.request_id();
                 // Text deltas arrive in bursts and can be drawn at the fixed
                 // cadence; lifecycle changes (usage, tool calls, completion)
                 // need an immediate frame.
-                let text_event = matches!(
-                    &event,
-                    StreamEvent::Delta { .. }
-                        | StreamEvent::Reasoning { .. }
-                        | StreamEvent::ToolProgress { .. }
-                );
-                let finished = matches!(
-                    event,
-                    StreamEvent::Done { .. }
-                        | StreamEvent::Error { .. }
-                        | StreamEvent::OutputLimit { .. }
-                        | StreamEvent::Stalled { .. }
-                );
+                let text_event = event.is_text();
                 // Route to the tab that owns the request: a background tab
                 // streams on while another is on screen, and its events must
                 // land in its own session.
                 let owner = app.tab_for_request(request_id);
-                if finished {
+                if event.is_final() {
                     active_tasks.remove(&request_id);
                 }
-                match owner {
-                    Some(owner) => app.with_tab(owner, |app| {
-                        let action = app.on_stream_event(event);
-                        dispatch(
-                            action,
-                            app,
-                            &channels,
-                            &mut active_tasks,
-                        );
-                    }),
-                    None => {
-                        let action = app.on_stream_event(event);
-                        dispatch(
-                            action,
-                            &mut app,
-                            &channels,
-                            &mut active_tasks,
-                        );
-                    }
-                }
+                app.with_owner(owner, |app| {
+                    let action = app.on_stream_event(event);
+                    dispatch(action, app, &channels, &mut active_tasks);
+                });
                 if text_event {
                     redraw_streamed = true;
                 } else {
@@ -338,26 +299,10 @@ async fn run() -> Result<()> {
                 // Tool results also route by owner, so a background tab's
                 // tool call finishes in its own session.
                 let owner = app.tab_for_tool(&result.call.id);
-                match owner {
-                    Some(owner) => app.with_tab(owner, |app| {
-                        let action = app.on_tool_result(result);
-                        dispatch(
-                            action,
-                            app,
-                            &channels,
-                            &mut active_tasks,
-                        );
-                    }),
-                    None => {
-                        let action = app.on_tool_result(result);
-                        dispatch(
-                            action,
-                            &mut app,
-                            &channels,
-                            &mut active_tasks,
-                        );
-                    }
-                }
+                app.with_owner(owner, |app| {
+                    let action = app.on_tool_result(result);
+                    dispatch(action, app, &channels, &mut active_tasks);
+                });
                 redraw_now = true;
             }
             result = catalog_receiver.recv() => {
@@ -444,16 +389,10 @@ async fn run() -> Result<()> {
                 // A command belongs to the session that started it, even when
                 // the user switched tabs while it ran.
                 let owner = app.tab_for_session(session_id);
-                match owner {
-                    Some(owner) => app.with_tab(owner, |app| {
-                        let action = app.on_user_command_result(result);
-                        dispatch(action, app, &channels, &mut active_tasks);
-                    }),
-                    None => {
-                        let action = app.on_user_command_result(result);
-                        dispatch(action, &mut app, &channels, &mut active_tasks);
-                    }
-                }
+                app.with_owner(owner, |app| {
+                    let action = app.on_user_command_result(result);
+                    dispatch(action, app, &channels, &mut active_tasks);
+                });
                 redraw_now = true;
             }
             title = title_receiver.recv() => {
@@ -461,12 +400,7 @@ async fn run() -> Result<()> {
                 // A background tab may have asked for the title: land it in
                 // the session that asked, whichever tab is on screen.
                 let owner = app.tab_for_session(session_id);
-                match owner {
-                    Some(owner) => app.with_tab(owner, |app| {
-                        app.on_session_title(session_id, title);
-                    }),
-                    None => app.on_session_title(session_id, title),
-                }
+                app.with_owner(owner, |app| app.on_session_title(session_id, title));
                 redraw_now = true;
             }
             notice = bash_receiver.recv() => {
@@ -474,10 +408,7 @@ async fn run() -> Result<()> {
                 // The notice routes to the session that started the job; a
                 // closed session falls back to the tab on screen.
                 let owner = app.tab_for_session(notice.owner);
-                match owner {
-                    Some(owner) => app.with_tab(owner, |app| app.on_bash_notice(notice)),
-                    None => app.on_bash_notice(notice),
-                }
+                app.with_owner(owner, |app| app.on_bash_notice(notice));
                 redraw_now = true;
             }
             request = talk_receiver.recv() => {
@@ -704,12 +635,7 @@ fn dispatch(
                     tools::run_user_command(&command, &workspace)
                 })
                 .await;
-                let result = match joined {
-                    Ok(Ok(output)) => Ok(output),
-                    Ok(Err(error)) => Err(format!("{error:#}")),
-                    Err(error) => Err(format!("command task failed: {error}")),
-                };
-                let _ = sender.send((session_id, result));
+                let _ = sender.send((session_id, flatten_joined(joined, "command")));
             });
         }
         Action::LoadCatalog => {
@@ -722,27 +648,14 @@ fn dispatch(
                     let _ = sender.send(Ok(cached));
                     return;
                 }
-                let mut result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
-                if let Ok(catalog) = &mut result {
-                    // A fresh fetch must not stomp the context presets the
-                    // user applied to models.
-                    catalog::merge_saved_context_windows(&config_path, catalog);
-                    let _ = catalog::save_cached(&config_path, catalog);
-                }
-                let _ = sender.send(result);
+                let _ = sender.send(fetch_and_cache_catalog(&config_path).await);
             });
         }
         Action::RefreshCatalog => {
             let sender = channels.catalog.clone();
             let config_path = app.config_path().to_path_buf();
             tokio::spawn(async move {
-                let mut result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
-                if let Ok(catalog) = &mut result {
-                    // Same as above: presets survive a refresh.
-                    catalog::merge_saved_context_windows(&config_path, catalog);
-                    let _ = catalog::save_cached(&config_path, catalog);
-                }
-                let _ = sender.send(result);
+                let _ = sender.send(fetch_and_cache_catalog(&config_path).await);
             });
         }
         Action::FetchCustomModels { url, token, auth } => {
@@ -778,6 +691,29 @@ fn dispatch(
                 }
             });
         }
+    }
+}
+
+/// Download the catalog and cache it next to the config. A fresh fetch must
+/// not stomp the context presets the user applied to models.
+async fn fetch_and_cache_catalog(config_path: &std::path::Path) -> FetchResult {
+    let mut result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
+    if let Ok(catalog) = &mut result {
+        catalog::merge_saved_context_windows(config_path, catalog);
+        let _ = catalog::save_cached(config_path, catalog);
+    }
+    result
+}
+
+/// Flatten a blocking-pool join into the string result a channel carries.
+fn flatten_joined(
+    joined: Result<Result<String>, tokio::task::JoinError>,
+    what: &str,
+) -> Result<String, String> {
+    match joined {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(format!("{error:#}")),
+        Err(error) => Err(format!("{what} task failed: {error}")),
     }
 }
 
@@ -823,11 +759,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     })
                 })
                 .await;
-                let result = match joined {
-                    Ok(Ok(output)) => Ok(output),
-                    Ok(Err(error)) => Err(format!("{error:#}")),
-                    Err(error) => Err(format!("tool task failed: {error}")),
-                };
+                let result = flatten_joined(joined, "tool");
                 let _ = sender.send(ToolEvent { call, result });
             });
             continue;

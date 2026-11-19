@@ -176,9 +176,74 @@ pub(super) struct OpenAiState {
     /// The provider ended the reply with `finish_reason: "length"`: it hit the
     /// output token cap, so the reply (and any tool call) is incomplete.
     pub(super) truncated: bool,
+    /// Inside an inline `<think>` block that some OpenAI-compatible proxies
+    /// put in `content` instead of a reasoning field.
+    in_think: bool,
+    /// Tail of the last chunk that may be the start of a split tag.
+    pending_tag: String,
+}
+
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+/// Length of the longest suffix of `text` that is a proper prefix of `tag`.
+fn partial_tag_len(text: &str, tag: &str) -> usize {
+    (1..tag.len())
+        .rev()
+        .find(|&len| text.ends_with(&tag[..len]))
+        .unwrap_or(0)
 }
 
 impl OpenAiState {
+    /// Emit a held partial tag as plain text once the stream ends.
+    fn flush_think(&mut self) -> Option<ParsedEvent> {
+        let text = std::mem::take(&mut self.pending_tag);
+        (!text.is_empty()).then(|| {
+            if self.in_think {
+                ParsedEvent::Reasoning(text)
+            } else {
+                ParsedEvent::Delta(text)
+            }
+        })
+    }
+
+    /// Split streamed content on inline `<think>` tags; tags may straddle chunks.
+    fn split_think(&mut self, chunk: &str) -> Vec<ParsedEvent> {
+        let mut text = std::mem::take(&mut self.pending_tag);
+        text.push_str(chunk);
+        let mut events = Vec::new();
+        let mut rest = text.as_str();
+        loop {
+            let tag = if self.in_think {
+                THINK_CLOSE
+            } else {
+                THINK_OPEN
+            };
+            let (before, found) = match rest.find(tag) {
+                Some(at) => (&rest[..at], Some(at + tag.len())),
+                None => {
+                    let keep = partial_tag_len(rest, tag);
+                    self.pending_tag = rest[rest.len() - keep..].to_owned();
+                    (&rest[..rest.len() - keep], None)
+                }
+            };
+            if !before.is_empty() {
+                events.push(if self.in_think {
+                    ParsedEvent::Reasoning(before.to_owned())
+                } else {
+                    ParsedEvent::Delta(before.to_owned())
+                });
+            }
+            match found {
+                Some(end) => {
+                    self.in_think = !self.in_think;
+                    rest = &rest[end..];
+                }
+                None => return events,
+            }
+        }
+    }
+
     fn record(&mut self, calls: Vec<OpenAiToolCall>) -> Vec<ParsedEvent> {
         for call in calls {
             let builder = self.calls.entry(call.index).or_default();
@@ -363,6 +428,8 @@ struct OpenAiChoice {
 struct OpenAiDelta {
     content: Option<String>,
     reasoning_content: Option<String>,
+    /// OpenRouter and several proxies name the field `reasoning`.
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OpenAiToolCall>>,
 }
@@ -386,21 +453,32 @@ struct OpenAiError {
     message: String,
 }
 
+/// One line of a server-sent event stream.
+enum SseLine<'a> {
+    /// Blank, a comment, or a non-data field such as `event:`.
+    Skip,
+    /// The `data: [DONE]` sentinel.
+    Done,
+    Data(&'a str),
+}
+
+fn sse_data(line: &str) -> SseLine<'_> {
+    match line.trim().strip_prefix("data:").map(str::trim) {
+        None => SseLine::Skip,
+        Some("[DONE]") => SseLine::Done,
+        Some(data) => SseLine::Data(data),
+    }
+}
+
 pub(super) fn parse_openai_line(
     line: &str,
     state: &mut OpenAiState,
 ) -> Result<(Vec<ParsedEvent>, bool)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') {
-        return Ok((Vec::new(), false));
-    }
-    let Some(data) = line.strip_prefix("data:") else {
-        return Ok((Vec::new(), false));
+    let data = match sse_data(line) {
+        SseLine::Skip => return Ok((Vec::new(), false)),
+        SseLine::Done => return Ok((state.flush_think().into_iter().collect(), true)),
+        SseLine::Data(data) => data,
     };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok((Vec::new(), true));
-    }
     let chunk: OpenAiChunk = serde_json::from_str(data).context("invalid OpenAI stream chunk")?;
     if let Some(error) = chunk.error {
         bail!("OpenAI stream error: {}", error.message);
@@ -417,11 +495,12 @@ pub(super) fn parse_openai_line(
     }
     for choice in chunk.choices {
         if let Some(text) = choice.delta.content.filter(|text| !text.is_empty()) {
-            events.push(ParsedEvent::Delta(text));
+            events.extend(state.split_think(&text));
         }
         if let Some(text) = choice
             .delta
             .reasoning_content
+            .or(choice.delta.reasoning)
             .filter(|text| !text.is_empty())
         {
             events.push(ParsedEvent::Reasoning(text));
@@ -436,6 +515,9 @@ pub(super) fn parse_openai_line(
             }
         }
     }
+    if done {
+        events.extend(state.flush_think());
+    }
     Ok((events, done))
 }
 
@@ -448,7 +530,11 @@ struct OllamaChunk {
 
 #[derive(Deserialize)]
 struct OllamaMessage {
+    #[serde(default)]
     content: String,
+    /// Reasoning from thinking models when the request set `think`.
+    #[serde(default)]
+    thinking: String,
 }
 
 pub(super) fn parse_ollama_line(line: &str) -> Result<(Vec<ParsedEvent>, bool)> {
@@ -463,12 +549,13 @@ pub(super) fn parse_ollama_line(line: &str) -> Result<(Vec<ParsedEvent>, bool)> 
         return Ok((Vec::new(), true));
     }
     let mut events = Vec::new();
-    if let Some(text) = chunk
-        .message
-        .map(|message| message.content)
-        .filter(|text| !text.is_empty())
-    {
-        events.push(ParsedEvent::Delta(text));
+    if let Some(message) = chunk.message {
+        if !message.thinking.is_empty() {
+            events.push(ParsedEvent::Reasoning(message.thinking));
+        }
+        if !message.content.is_empty() {
+            events.push(ParsedEvent::Delta(message.content));
+        }
     }
     Ok((events, false))
 }
@@ -494,6 +581,23 @@ struct AnthropicMessage {
 struct AnthropicUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    /// With prompt caching on, `input_tokens` counts only the uncached tail;
+    /// these two carry the rest of the prompt.
+    cache_read_input_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+}
+
+impl AnthropicUsage {
+    fn prompt_tokens(&self) -> u64 {
+        [
+            self.input_tokens,
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+        ]
+        .into_iter()
+        .flatten()
+        .sum()
+    }
 }
 
 #[derive(Deserialize)]
@@ -522,17 +626,11 @@ pub(super) fn parse_anthropic_line(
     line: &str,
     state: &mut OpenAiState,
 ) -> Result<(Vec<ParsedEvent>, bool)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
-        return Ok((Vec::new(), false));
-    }
-    let Some(data) = line.strip_prefix("data:") else {
-        return Ok((Vec::new(), false));
+    let data = match sse_data(line) {
+        SseLine::Skip => return Ok((Vec::new(), false)),
+        SseLine::Done => return Ok((Vec::new(), true)),
+        SseLine::Data(data) => data,
     };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok((Vec::new(), true));
-    }
     let chunk: AnthropicChunk =
         serde_json::from_str(data).context("invalid Anthropic stream chunk")?;
     if let Some(err) = chunk.error {
@@ -541,7 +639,8 @@ pub(super) fn parse_anthropic_line(
     let mut events = Vec::new();
 
     if let Some(usage) = chunk.message.and_then(|m| m.usage) {
-        if let Some(in_tokens) = usage.input_tokens.filter(|t| *t > 0) {
+        let in_tokens = usage.prompt_tokens();
+        if in_tokens > 0 {
             events.push(ParsedEvent::Usage {
                 prompt_tokens: in_tokens,
                 completion_tokens: 0,
@@ -657,17 +756,11 @@ pub(super) fn parse_gemini_line(
     line: &str,
     state: &mut OpenAiState,
 ) -> Result<(Vec<ParsedEvent>, bool)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
-        return Ok((Vec::new(), false));
-    }
-    let Some(data) = line.strip_prefix("data:") else {
-        return Ok((Vec::new(), false));
+    let data = match sse_data(line) {
+        SseLine::Skip => return Ok((Vec::new(), false)),
+        SseLine::Done => return Ok((Vec::new(), true)),
+        SseLine::Data(data) => data,
     };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok((Vec::new(), true));
-    }
     let chunk: GeminiChunk = serde_json::from_str(data).context("invalid Gemini stream chunk")?;
     if let Some(err) = chunk.error {
         bail!("Gemini stream error: {}", err.message);
@@ -817,6 +910,17 @@ mod tests {
     }
 
     #[test]
+    fn ollama_thinking_is_reasoning() {
+        assert_eq!(
+            parse_ollama_line(
+                r#"{"message":{"role":"assistant","content":"","thinking":"hmm"},"done":false}"#
+            )
+            .unwrap(),
+            (vec![ParsedEvent::Reasoning("hmm".to_owned())], false)
+        );
+    }
+
+    #[test]
     fn stream_errors_are_not_silently_ignored() {
         let mut state = OpenAiState::default();
         assert!(parse_openai_line(r#"data: {"error":{"message":"bad key"}}"#, &mut state).is_err());
@@ -869,6 +973,33 @@ mod tests {
                 },
                 ParsedEvent::Delta("So the".to_owned()),
                 ParsedEvent::Reasoning("Let me think...".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn reasoning_field_alias_is_reasoning() {
+        let mut state = OpenAiState::default();
+        let (events, _) = parse_openai_line(
+            r#"data: {"choices":[{"delta":{"reasoning":"hmm"}}]}"#,
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(events, vec![ParsedEvent::Reasoning("hmm".to_owned())]);
+    }
+
+    #[test]
+    fn inline_think_tags_split_across_chunks() {
+        let mut state = OpenAiState::default();
+        let mut events = Vec::new();
+        for chunk in ["<thi", "nk>plan</th", "ink>answer"] {
+            events.extend(state.split_think(chunk));
+        }
+        assert_eq!(
+            events,
+            vec![
+                ParsedEvent::Reasoning("plan".to_owned()),
+                ParsedEvent::Delta("answer".to_owned())
             ]
         );
     }

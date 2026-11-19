@@ -13,6 +13,7 @@ mod computer;
 mod definitions;
 mod files;
 mod ignore;
+mod patch;
 mod policy;
 mod preview;
 mod search;
@@ -65,7 +66,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 23] = [
+pub const TOOL_NAMES: [&str; 24] = [
     "list_dir",
     "read_file",
     "multi_read",
@@ -88,6 +89,7 @@ pub const TOOL_NAMES: [&str; 23] = [
     "delegate",
     "check_session",
     "talk_to",
+    "apply_patch",
     "computer_use",
 ];
 
@@ -156,6 +158,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         "write_file" => files::write_file(&call.function.arguments),
         "edit_file" => files::edit_file(&call.function.arguments),
         "multi_edit" => files::multi_edit(&call.function.arguments),
+        "apply_patch" => patch::apply_patch(&call.id, &call.function.arguments),
         "move_to" => files::move_to(&call.function.arguments),
         "run_command" => shell::run_command(&call.function.arguments),
         "bash_background" => shell::bash_background(&call.function.arguments),

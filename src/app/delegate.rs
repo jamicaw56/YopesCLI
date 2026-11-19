@@ -42,7 +42,8 @@ const TASK_EXCERPT: usize = 46;
 const LABEL_CHARS: usize = 46;
 /// The tools that change files: a round in which one of these runs
 /// successfully resets the write watchdog.
-pub(crate) const WRITING_TOOLS: [&str; 3] = ["write_file", "edit_file", "multi_edit"];
+pub(crate) const WRITING_TOOLS: [&str; 4] =
+    ["write_file", "edit_file", "multi_edit", "apply_patch"];
 /// Tool rounds a run may spend without one of `WRITING_TOOLS` landing
 /// before the one-time watchdog nudge asks it to produce an artifact: a run
 /// stuck in reconnaissance is told to stop exploring and write, and a task

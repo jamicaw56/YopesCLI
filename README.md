@@ -5,7 +5,7 @@ A better coding CLI, built with Rust, Ratatui, and Tokio. [Discord](https://disc
 ## Highlights
 
 - Streaming OpenAI-compatible providers, including custom endpoints.
-- Tool calling for reading, writing, editing, and running commands, with per-tool approval and a diff viewer.
+- Tool calling for reading, writing, editing, and running commands, with per-tool approval and a diff viewer. `apply_patch` takes a multi-file `*** Begin Patch` envelope (add, delete, update, rename) and applies it all or nothing.
 - A real delegate system: `delegate` hands a subtask to a subagent on the same provider. Runs stream live in a right-hand sidebar, stack in parallel, and every response is readable with `/agents`.
 - Image pasting: `Ctrl+V` and right-click attach clipboard images, file paths paste as attachments, and `read_image` sends screenshots to vision models.
 - Desktop control with `computer_use` (Windows): its own agent cursor, drawn into each capture as a highlighted arrow, with clicks, scrolls and drags posted to the window under the point so your system mouse never moves; typed text and key chords, plus `wait` steps and `focus_window` for slow apps and windows that are not in front, with a fresh screenshot attached after every call so a vision model sees the result. The result reports the frame origin and size in screen pixels, the desktop bounds and the agent pointer position, so a pixel in the image maps to the coordinate to click; `region` crops the capture to one part of the screen and `settle_ms` tunes the repaint wait. It asks before each call and is off in plan mode; `/set tools dangerous` drops every approval prompt, that one included.

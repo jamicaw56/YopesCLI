@@ -277,6 +277,18 @@ impl App {
 
     /// Run `f` with tab `index` swapped in as the active session, whichever
     /// tab the user is looking at. Background work lands this way.
+    /// `with_tab` for an owner lookup: no owner runs against the tab on screen.
+    pub(crate) fn with_owner<R>(
+        &mut self,
+        owner: Option<usize>,
+        f: impl FnOnce(&mut App) -> R,
+    ) -> R {
+        match owner {
+            Some(index) => self.with_tab(index, f),
+            None => f(self),
+        }
+    }
+
     pub(crate) fn with_tab<R>(&mut self, index: usize, f: impl FnOnce(&mut App) -> R) -> R {
         if index >= self.tabs.len() || index == self.tab {
             return f(self);

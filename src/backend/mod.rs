@@ -85,6 +85,42 @@ pub enum StreamEvent {
     },
 }
 
+impl StreamEvent {
+    pub fn request_id(&self) -> u64 {
+        match self {
+            Self::Delta { request_id, .. }
+            | Self::Reasoning { request_id, .. }
+            | Self::ToolProgress { request_id, .. }
+            | Self::Usage { request_id, .. }
+            | Self::ToolCalls { request_id, .. }
+            | Self::Retrying { request_id, .. }
+            | Self::Done { request_id }
+            | Self::Stalled { request_id, .. }
+            | Self::OutputLimit { request_id }
+            | Self::Error { request_id, .. } => *request_id,
+        }
+    }
+
+    /// Streamed text that can wait for the fixed redraw cadence.
+    pub fn is_text(&self) -> bool {
+        matches!(
+            self,
+            Self::Delta { .. } | Self::Reasoning { .. } | Self::ToolProgress { .. }
+        )
+    }
+
+    /// The request is over once one of these arrives.
+    pub fn is_final(&self) -> bool {
+        matches!(
+            self,
+            Self::Done { .. }
+                | Self::Error { .. }
+                | Self::OutputLimit { .. }
+                | Self::Stalled { .. }
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct Backend {
     provider: ProviderKind,
@@ -452,7 +488,7 @@ impl Backend {
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "model": self.model,
             "messages": request_messages(
                 messages,
@@ -464,6 +500,15 @@ impl Backend {
             )?,
             "stream": true,
         });
+        // Ollama only streams `message.thinking` when asked; a model without
+        // thinking support rejects the flag, so it follows the effort setting.
+        if self
+            .reasoning_effort
+            .as_deref()
+            .is_some_and(|effort| !effort.trim().is_empty())
+        {
+            request["think"] = serde_json::Value::Bool(true);
+        }
         let response = send_with_retry("Ollama", request_id, events, || {
             self.client
                 .post(format!("{}/api/chat", self.base_url))
@@ -499,11 +544,31 @@ impl Backend {
             "messages": payload_messages,
             "stream": true,
         });
+        // Prompt caching: breakpoints after the system prompt, the tool list
+        // and the newest message, so each turn rereads the stable prefix at
+        // the cached rate instead of paying for the whole history again.
+        let cached = serde_json::json!({"type": "ephemeral"});
         if let Some(sys) = system {
-            request["system"] = serde_json::Value::String(sys);
+            request["system"] = serde_json::json!([{
+                "type": "text",
+                "text": sys,
+                "cache_control": cached,
+            }]);
         }
         if tooling {
-            request["tools"] = anthropic_tools();
+            let mut tools = anthropic_tools();
+            if let Some(last) = tools.as_array_mut().and_then(|tools| tools.last_mut()) {
+                last["cache_control"] = cached.clone();
+            }
+            request["tools"] = tools;
+        }
+        if let Some(block) = request["messages"]
+            .as_array_mut()
+            .and_then(|messages| messages.last_mut())
+            .and_then(|message| message["content"].as_array_mut())
+            .and_then(|content| content.last_mut())
+        {
+            block["cache_control"] = cached;
         }
         if let Some(effort) = self
             .reasoning_effort
