@@ -516,7 +516,7 @@ mod tests {
     /// on the tab bar's row: the Progress title at the bottom shares a tab's
     /// column range, and a click to fold it there used to switch tabs.
     #[test]
-    fn a_tab_hit_only_fires_on_the_header_row() {
+    fn a_tab_hit_only_fires_on_the_tab_row() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut app = test_app();
         app.open_tab();
