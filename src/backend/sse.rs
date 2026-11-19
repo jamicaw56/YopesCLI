@@ -135,9 +135,74 @@ pub(super) struct OpenAiState {
     /// The provider ended the reply with `finish_reason: "length"`: it hit the
     /// output token cap, so the reply (and any tool call) is incomplete.
     pub(super) truncated: bool,
+    /// Inside an inline `<think>` block that some OpenAI-compatible proxies
+    /// put in `content` instead of a reasoning field.
+    in_think: bool,
+    /// Tail of the last chunk that may be the start of a split tag.
+    pending_tag: String,
+}
+
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+/// Length of the longest suffix of `text` that is a proper prefix of `tag`.
+fn partial_tag_len(text: &str, tag: &str) -> usize {
+    (1..tag.len())
+        .rev()
+        .find(|&len| text.ends_with(&tag[..len]))
+        .unwrap_or(0)
 }
 
 impl OpenAiState {
+    /// Emit a held partial tag as plain text once the stream ends.
+    fn flush_think(&mut self) -> Option<ParsedEvent> {
+        let text = std::mem::take(&mut self.pending_tag);
+        (!text.is_empty()).then(|| {
+            if self.in_think {
+                ParsedEvent::Reasoning(text)
+            } else {
+                ParsedEvent::Delta(text)
+            }
+        })
+    }
+
+    /// Split streamed content on inline `<think>` tags; tags may straddle chunks.
+    fn split_think(&mut self, chunk: &str) -> Vec<ParsedEvent> {
+        let mut text = std::mem::take(&mut self.pending_tag);
+        text.push_str(chunk);
+        let mut events = Vec::new();
+        let mut rest = text.as_str();
+        loop {
+            let tag = if self.in_think {
+                THINK_CLOSE
+            } else {
+                THINK_OPEN
+            };
+            let (before, found) = match rest.find(tag) {
+                Some(at) => (&rest[..at], Some(at + tag.len())),
+                None => {
+                    let keep = partial_tag_len(rest, tag);
+                    self.pending_tag = rest[rest.len() - keep..].to_owned();
+                    (&rest[..rest.len() - keep], None)
+                }
+            };
+            if !before.is_empty() {
+                events.push(if self.in_think {
+                    ParsedEvent::Reasoning(before.to_owned())
+                } else {
+                    ParsedEvent::Delta(before.to_owned())
+                });
+            }
+            match found {
+                Some(end) => {
+                    self.in_think = !self.in_think;
+                    rest = &rest[end..];
+                }
+                None => return events,
+            }
+        }
+    }
+
     fn record(&mut self, calls: Vec<OpenAiToolCall>) -> Vec<ParsedEvent> {
         for call in calls {
             let builder = self.calls.entry(call.index).or_default();
@@ -322,6 +387,8 @@ struct OpenAiChoice {
 struct OpenAiDelta {
     content: Option<String>,
     reasoning_content: Option<String>,
+    /// OpenRouter and several proxies name the field `reasoning`.
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OpenAiToolCall>>,
 }
@@ -358,7 +425,7 @@ pub(super) fn parse_openai_line(
     };
     let data = data.trim();
     if data == "[DONE]" {
-        return Ok((Vec::new(), true));
+        return Ok((state.flush_think().into_iter().collect(), true));
     }
     let chunk: OpenAiChunk = serde_json::from_str(data).context("invalid OpenAI stream chunk")?;
     if let Some(error) = chunk.error {
@@ -376,11 +443,12 @@ pub(super) fn parse_openai_line(
     }
     for choice in chunk.choices {
         if let Some(text) = choice.delta.content.filter(|text| !text.is_empty()) {
-            events.push(ParsedEvent::Delta(text));
+            events.extend(state.split_think(&text));
         }
         if let Some(text) = choice
             .delta
             .reasoning_content
+            .or(choice.delta.reasoning)
             .filter(|text| !text.is_empty())
         {
             events.push(ParsedEvent::Reasoning(text));
@@ -394,6 +462,9 @@ pub(super) fn parse_openai_line(
                 state.truncated = true;
             }
         }
+    }
+    if done {
+        events.extend(state.flush_think());
     }
     Ok((events, done))
 }
@@ -828,6 +899,33 @@ mod tests {
                 },
                 ParsedEvent::Delta("So the".to_owned()),
                 ParsedEvent::Reasoning("Let me think...".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn reasoning_field_alias_is_reasoning() {
+        let mut state = OpenAiState::default();
+        let (events, _) = parse_openai_line(
+            r#"data: {"choices":[{"delta":{"reasoning":"hmm"}}]}"#,
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(events, vec![ParsedEvent::Reasoning("hmm".to_owned())]);
+    }
+
+    #[test]
+    fn inline_think_tags_split_across_chunks() {
+        let mut state = OpenAiState::default();
+        let mut events = Vec::new();
+        for chunk in ["<thi", "nk>plan</th", "ink>answer"] {
+            events.extend(state.split_think(chunk));
+        }
+        assert_eq!(
+            events,
+            vec![
+                ParsedEvent::Reasoning("plan".to_owned()),
+                ParsedEvent::Delta("answer".to_owned())
             ]
         );
     }
