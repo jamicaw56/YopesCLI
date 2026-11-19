@@ -1013,6 +1013,7 @@ impl App {
             return;
         }
         self.markdown_cache.clear();
+        self.tool_frames.clear();
         self.session = Session::new();
         // Future saves land in a fresh file, so this one keeps its history.
         if let Some(dir) = &self.sessions_dir {

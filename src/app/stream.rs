@@ -117,6 +117,7 @@ impl App {
                 if let Some((split, summary, attempts)) = compacted {
                     self.active = None;
                     self.markdown_cache.clear();
+                    self.tool_frames.clear();
                     if summary.trim().is_empty() {
                         // An empty summary must not retry compaction: a
                         // provider that answers empty every time would loop

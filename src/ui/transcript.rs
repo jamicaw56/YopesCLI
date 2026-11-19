@@ -17,6 +17,32 @@ fn content_hash(content: &str) -> u64 {
 /// Wrapped row counts for one message's rendered lines, computed once when
 /// the markdown cache fills: the transcript walk reuses them instead of
 /// re-wrapping every character of the session on every frame.
+/// The key a framed tool result is cached under: the output, the call name,
+/// the expansion, whether a diff exists, and the diff view all shape the frame.
+fn tool_frame_key(
+    app: &App,
+    message: &Message,
+    width: u16,
+    call_name: Option<&str>,
+) -> crate::app::ToolFrameKey {
+    let call_id = message.tool_call_id.as_deref().unwrap_or_default();
+    crate::app::ToolFrameKey {
+        width,
+        content_len: message.content.len(),
+        content_hash: content_hash(&message.content),
+        name_hash: content_hash(call_name.unwrap_or_default()),
+        expanded: app.expanded.contains(call_id),
+        has_report: app.changes.contains_key(call_id),
+        report_files: app.changes.get(call_id).map_or(0, |report| report.diffs.len()),
+        image_rows: message
+            .images
+            .iter()
+            .map(|image| app.cached_image(&image.name).map_or(0, <[_]>::len))
+            .sum(),
+        diff_sides: app.diff_sides,
+    }
+}
+
 fn line_counts(lines: &[Line<'static>], width: u16) -> Vec<usize> {
     lines
         .iter()
@@ -195,15 +221,41 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         if message.role == Role::Tool {
             let start = slots.len();
-            let name = call_name.map(str::to_owned);
-            let framed =
-                tool_result_lines(app, message, inner.width, &mut rows, start, name.as_deref());
-            // The framed result is one shared block: its wrap rows are
-            // measured once here instead of every frame.
-            let counts = line_counts(&framed, inner.width);
+            let key = tool_frame_key(app, message, inner.width, call_name);
+            let frame = match app.tool_frames.get(&index) {
+                Some(frame) if frame.key == key => frame,
+                _ => {
+                    let name = call_name.map(str::to_owned);
+                    let mut frame_rows: Vec<(usize, String)> = Vec::new();
+                    let framed = tool_result_lines(
+                        app,
+                        message,
+                        inner.width,
+                        &mut frame_rows,
+                        0,
+                        name.as_deref(),
+                    );
+                    let counts = line_counts(&framed, inner.width);
+                    app.tool_frames.insert(
+                        index,
+                        crate::app::ToolFrame {
+                            key,
+                            rows: counts.iter().sum(),
+                            clicks: frame_rows.iter().map(|(row, _)| *row).collect(),
+                            lines: framed.into(),
+                        },
+                    );
+                    app.tool_frames.get(&index).expect("just inserted")
+                }
+            };
+            // The framed result is one shared block: its wrap rows are measured
+            // once when it is built, and click rows are rebased to this slot.
+            for offset in &frame.clicks {
+                rows.push((start + offset, message.tool_call_id.clone().unwrap_or_default()));
+            }
             slots.push(Slot::Block {
-                lines: framed.into(),
-                rows: counts.iter().sum(),
+                lines: frame.lines.clone(),
+                rows: frame.rows,
             });
             continue;
         }
@@ -754,7 +806,6 @@ mod tests {
     fn benchmark_draw_transcript() {
         use crate::session::{Message, Role, ToolCall};
         use ratatui::{Terminal, backend::TestBackend};
-        use std::time::Instant;
 
         let mut app = crate::app::test_app();
         // 240 messages: user + assistant pairs, the assistant carrying a
@@ -820,7 +871,7 @@ mod tests {
         let mut total = std::time::Duration::ZERO;
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..count {
-            let start = Instant::now();
+            let start = std::time::Instant::now();
             terminal
                 .draw(|frame| crate::ui::draw(frame, &mut app))
                 .unwrap();
@@ -836,6 +887,111 @@ mod tests {
         panic!(
             "[BENCHMARK] 360 msgs + 120 distant results: avg = {:.2} ms, worst = {:.2} ms",
             total.as_secs_f64() * 1000.0 / f64::from(count),
+            worst.as_secs_f64() * 1000.0
+        );
+    }
+
+    /// A long reply streams in, one frame per appended chunk: the completed
+    /// history must stay cached while only the newest message is laid out.
+    #[test]
+    fn benchmark_streaming_reply() {
+        use crate::session::{Message, Role};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        for i in 0..200 {
+            app.session
+                .messages
+                .push(Message::new(Role::User, format!("question {i}")));
+            app.session
+                .messages
+                .push(Message::new(Role::Assistant, "a short finished answer".repeat(5)));
+        }
+        app.session.messages.push(Message::new(Role::Assistant, String::new()));
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let chunk = "streamed words and more words ";
+        let mut total = std::time::Duration::ZERO;
+        let mut worst = std::time::Duration::ZERO;
+        for _ in 0..50 {
+            app.session.messages.last_mut().unwrap().content.push_str(chunk);
+            let start = std::time::Instant::now();
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
+            let elapsed = start.elapsed();
+            total += elapsed;
+            worst = worst.max(elapsed);
+        }
+        assert!(rendered_text(&terminal).contains("streamed words"));
+        if std::env::var("YOPES_BENCH").is_err() {
+            return;
+        }
+        panic!(
+            "[BENCHMARK] streaming 50 frames over 400 msgs: avg = {:.2} ms, worst = {:.2} ms",
+            total.as_secs_f64() * 1000.0 / 50.0,
+            worst.as_secs_f64() * 1000.0
+        );
+    }
+
+    /// Switching tabs redraws the target tab's whole history: its tool frames
+    /// and markdown must be served from the per-tab caches, not rebuilt.
+    #[test]
+    fn benchmark_tab_switch() {
+        use crate::session::{Message, Role, ToolCall};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.open_tab();
+        app.with_tab(0, |app| {
+            for i in 0..200 {
+                app.session
+                    .messages
+                    .push(Message::new(Role::User, format!("q {i}")));
+                app.session.messages.push(Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    reasoning: String::new(),
+                    tool_calls: Some(vec![ToolCall::new(
+                        &format!("call_{i}"),
+                        "todo_write",
+                        "{}",
+                    )]),
+                    tool_call_id: None,
+                    usage: None,
+                    images: Vec::new(),
+                    error: None,
+                });
+                app.session.messages.push(Message {
+                    role: Role::Tool,
+                    content: "Wrote 3 todos.".to_owned(),
+                    reasoning: String::new(),
+                    tool_calls: None,
+                    tool_call_id: Some(format!("call_{i}")),
+                    usage: None,
+                    images: Vec::new(),
+                    error: None,
+                });
+            }
+        });
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut total = std::time::Duration::ZERO;
+        let mut worst = std::time::Duration::ZERO;
+        for round in 0..20 {
+            app.select_tab(round % 2);
+            let start = std::time::Instant::now();
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
+            let elapsed = start.elapsed();
+            total += elapsed;
+            worst = worst.max(elapsed);
+        }
+        if std::env::var("YOPES_BENCH").is_err() {
+            return;
+        }
+        panic!(
+            "[BENCHMARK] tab switch 20 rounds, 600 msgs/tab: avg = {:.2} ms, worst = {:.2} ms",
+            total.as_secs_f64() * 1000.0 / 20.0,
             worst.as_secs_f64() * 1000.0
         );
     }

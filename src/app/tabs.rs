@@ -65,6 +65,7 @@ pub(crate) struct TabState {
     /// value carries the wrap row total next to the lines, so the transcript
     /// walk reuses it instead of re-wrapping every character every frame.
     pub(crate) markdown_cache: HashMap<usize, super::MarkdownBlock>,
+    pub(crate) tool_frames: HashMap<usize, super::ToolFrame>,
     pub(crate) working_dir: PathBuf,
     /// Footer notices belong to the tab that raised them: an error from one
     /// conversation must not sit over every other tab's view.
@@ -126,6 +127,7 @@ impl Default for TabState {
             spent_completion_tokens: 0,
             prompt_started: None,
             markdown_cache: HashMap::new(),
+            tool_frames: HashMap::new(),
             working_dir: PathBuf::from("."),
             notice: None,
             retry: None,
@@ -177,6 +179,7 @@ impl TabState {
             spent_completion_tokens: std::mem::take(&mut app.spent_completion_tokens),
             prompt_started: app.prompt_started.take(),
             markdown_cache: std::mem::take(&mut app.markdown_cache),
+            tool_frames: std::mem::take(&mut app.tool_frames),
             working_dir: std::mem::take(&mut app.working_dir),
             notice: app.notice.take(),
             retry: app.retry.take(),
@@ -225,6 +228,7 @@ impl TabState {
         app.spent_completion_tokens = self.spent_completion_tokens;
         app.prompt_started = self.prompt_started;
         app.markdown_cache = self.markdown_cache;
+        app.tool_frames = self.tool_frames;
         app.working_dir = self.working_dir;
         app.notice = self.notice;
         app.retry = self.retry;
