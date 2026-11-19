@@ -42,6 +42,9 @@ mod tabs;
 mod talk;
 mod turn;
 
+#[cfg(test)]
+mod orchestration_tests;
+
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
 pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, SET_KEYS, matching_commands};
 pub(crate) use delegate::{
@@ -221,6 +224,30 @@ impl SessionSaver {
 /// One rendered markdown block for a finished message: the width it was
 /// rendered at, the content hash it was rendered from, the shared lines, their
 /// total wrapped rows, and the content length it was rendered from.
+/// What a framed tool result depends on. A hit needs every field equal, so a
+/// change to the output, the expansion, the diff view or the width rebuilds it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToolFrameKey {
+    pub width: u16,
+    pub content_len: usize,
+    pub content_hash: u64,
+    pub name_hash: u64,
+    pub expanded: bool,
+    pub has_report: bool,
+    pub report_files: usize,
+    pub image_rows: usize,
+    pub diff_sides: bool,
+}
+
+/// A framed tool result, shared by every frame it is drawn in. `clicks` are
+/// the row offsets (from the frame's first line) that toggle expansion.
+pub(crate) struct ToolFrame {
+    pub key: ToolFrameKey,
+    pub lines: std::sync::Arc<[ratatui::text::Line<'static>]>,
+    pub rows: usize,
+    pub clicks: Vec<usize>,
+}
+
 pub(crate) type MarkdownBlock = (
     u16,
     u64,
@@ -303,6 +330,9 @@ pub struct App {
     /// Talk messages from other tabs waiting to land: parked while this tab
     /// is busy, delivered at the next idle point like the subagent reports.
     pub pending_talks: VecDeque<String>,
+    /// Runs the user cancelled here: their reports land silently, because a
+    /// cancellation must not be answered by a turn that claims success.
+    pub cancelling_runs: Vec<u64>,
     /// Diffs for write and edit calls, shown under their results.
     pub changes: HashMap<String, ChangeReport>,
     /// Tool results the user expanded to see the full output.
@@ -333,6 +363,8 @@ pub struct App {
     /// Cache of rendered markdown blocks for completed messages, with their
     /// wrap row total: see `MarkdownBlock`.
     pub(crate) markdown_cache: HashMap<usize, MarkdownBlock>,
+    /// Framed tool results per message index: see `ToolFrame`.
+    pub(crate) tool_frames: HashMap<usize, ToolFrame>,
     /// A message typed while subagents still stream, queued for the
     /// post-delegate continuation (see `TabState::queued_message`).
     pub queued_message: Option<String>,
@@ -443,6 +475,7 @@ impl App {
             running_delegates: Vec::new(),
             pending_reports: VecDeque::new(),
             pending_talks: VecDeque::new(),
+            cancelling_runs: Vec::new(),
             changes: HashMap::new(),
             expanded: HashSet::new(),
             output_rows: Vec::new(),
@@ -462,6 +495,7 @@ impl App {
             logos: Logos::new(crate::logos::cache_dir(&config_path)),
             pending_logos: Vec::new(),
             markdown_cache: HashMap::new(),
+            tool_frames: HashMap::new(),
             queued_message: None,
             queued_images: Vec::new(),
             tavily_api_key,
@@ -503,7 +537,7 @@ impl App {
     pub(crate) fn any_subagent_running(&self) -> bool {
         self.subagents
             .iter()
-            .any(|agent| agent.status == SubagentStatus::Running)
+            .any(|agent| agent.status() == SubagentStatus::Running)
     }
 
     pub fn tavily_key(&self) -> Option<&str> {

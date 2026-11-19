@@ -271,7 +271,7 @@ impl Backend {
         let request_id = u64::MAX;
         let (events, mut receiver) = mpsc::unbounded_channel();
         let messages = vec![Message::new(Role::User, task)];
-        self.stream(request_id, messages, false, Some(brief), workspace, events)
+        self.stream(request_id, messages, false, Some(brief.to_owned()), workspace, events)
             .await;
         let mut text = String::new();
         while let Some(event) = receiver.recv().await {
@@ -295,7 +295,7 @@ impl Backend {
         request_id: u64,
         messages: Vec<Message>,
         tools_enabled: bool,
-        mode_note: Option<&'static str>,
+        mode_note: Option<String>,
         workspace: PathBuf,
         events: mpsc::UnboundedSender<StreamEvent>,
     ) {
@@ -322,23 +322,23 @@ impl Backend {
             }
             ProviderKind::OpenAi | ProviderKind::Custom => {
                 self.stream_openai(
-                    request_id, &messages, tooling, mode_note, &workspace, &events,
+                    request_id, &messages, tooling, mode_note.clone(), &workspace, &events,
                 )
                 .await
             }
             ProviderKind::Ollama => {
-                self.stream_ollama(request_id, &messages, mode_note, &workspace, &events)
+                self.stream_ollama(request_id, &messages, mode_note.clone(), &workspace, &events)
                     .await
             }
             ProviderKind::Anthropic => {
                 self.stream_anthropic(
-                    request_id, &messages, tooling, mode_note, &workspace, &events,
+                    request_id, &messages, tooling, mode_note.clone(), &workspace, &events,
                 )
                 .await
             }
             ProviderKind::Gemini => {
                 self.stream_gemini(
-                    request_id, &messages, tooling, mode_note, &workspace, &events,
+                    request_id, &messages, tooling, mode_note.clone(), &workspace, &events,
                 )
                 .await
             }
@@ -375,7 +375,7 @@ impl Backend {
         request_id: u64,
         messages: &[Message],
         tooling: bool,
-        mode_note: Option<&'static str>,
+        mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
@@ -393,7 +393,7 @@ impl Backend {
                     ImageStyle::None
                 },
                 self.custom_prompt.as_deref(),
-                mode_note,
+                mode_note.clone(),
                 workspace,
             )?,
             "stream": true,
@@ -448,7 +448,7 @@ impl Backend {
         &self,
         request_id: u64,
         messages: &[Message],
-        mode_note: Option<&'static str>,
+        mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
@@ -459,7 +459,7 @@ impl Backend {
                 false,
                 ImageStyle::Ollama,
                 self.custom_prompt.as_deref(),
-                mode_note,
+                mode_note.clone(),
                 workspace,
             )?,
             "stream": true,
@@ -482,7 +482,7 @@ impl Backend {
         request_id: u64,
         messages: &[Message],
         tooling: bool,
-        mode_note: Option<&'static str>,
+        mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
@@ -490,7 +490,7 @@ impl Backend {
             messages,
             tooling,
             self.custom_prompt.as_deref(),
-            mode_note,
+            mode_note.clone(),
             workspace,
         )?;
         let mut request = serde_json::json!({
@@ -555,7 +555,7 @@ impl Backend {
         request_id: u64,
         messages: &[Message],
         tooling: bool,
-        mode_note: Option<&'static str>,
+        mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
@@ -563,7 +563,7 @@ impl Backend {
             messages,
             tooling,
             self.custom_prompt.as_deref(),
-            mode_note,
+            mode_note.clone(),
             workspace,
         )?;
         let mut request = serde_json::json!({

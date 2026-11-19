@@ -283,15 +283,16 @@ impl App {
             self.image_rows.clear();
             self.image_width = width;
         }
-        if self.image_rows.len() > 40 {
-            self.image_rows.clear();
-        }
+        // Keys are image names at one width (the width change above clears
+        // them), so the map is bounded by the images in the session. Only the
+        // images not yet rendered are looked up, with no per-frame key String
+        // for the ones already cached.
         let mut rows = std::mem::take(&mut self.image_rows);
         for message in &self.session.messages {
             for image in &message.images {
-                let key = format!("{}:{width}", image.name);
-                rows.entry(key)
-                    .or_insert_with(|| rendered_rows(image, width));
+                if !rows.contains_key(image.name.as_str()) {
+                    rows.insert(image.name.clone(), rendered_rows(image, width));
+                }
             }
         }
         self.image_rows = rows;
@@ -300,9 +301,7 @@ impl App {
     /// The cached half-block rows of one pasted image, if rendered for the
     /// current terminal width.
     pub(crate) fn cached_image(&self, name: &str) -> Option<&[Line<'static>]> {
-        self.image_rows
-            .get(&format!("{name}:{}", self.image_width))
-            .map(Vec::as_slice)
+        self.image_rows.get(name).map(Vec::as_slice)
     }
 }
 

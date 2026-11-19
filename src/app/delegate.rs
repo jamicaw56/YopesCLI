@@ -14,6 +14,7 @@
 use std::time::Instant;
 
 use super::*;
+use crate::delegation::{DelegationRecord, RunState, TaskKind};
 
 /// The subagent brief: appended to the system prompt for every run.
 pub(crate) const SUBAGENT_BRIEF: &str = "You are a subagent inside yopes, a terminal coding \
@@ -48,7 +49,9 @@ pub(crate) const WRITING_TOOLS: [&str; 3] = ["write_file", "edit_file", "multi_e
 /// that is read-only by nature may ignore the nudge and continue.
 pub(crate) const ZERO_WRITE_NUDGE_ROUNDS: usize = 8;
 
-/// The status of one subagent run.
+/// The status of one subagent run, as the sidebar, the transcript row and
+/// `/agents` show it. The lifecycle itself lives in `RunState`; this is the
+/// short form the UI draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SubagentStatus {
     Running,
@@ -63,6 +66,11 @@ pub(crate) struct Subagent {
     /// tool-call row back to its run's name and live status through it.
     pub(crate) call_id: String,
     pub(crate) task: String,
+    /// What the coordinator expects this run to produce.
+    pub(crate) kind: TaskKind,
+    /// The lifecycle state: pending, running, verifying, then one terminal
+    /// state. Only `verdict` moves it into a terminal state.
+    pub(crate) state: RunState,
     /// The name the model gave this task, shown instead of the task text.
     pub(crate) name: Option<String>,
     /// The response, streamed live while the run is in flight.
@@ -74,18 +82,33 @@ pub(crate) struct Subagent {
     pub(crate) started: Instant,
     /// Set once the run finished: how long it took, in milliseconds.
     pub(crate) elapsed_ms: u64,
-    pub(crate) status: SubagentStatus,
     /// (prompt, completion) tokens billed, when the provider reported them.
     pub(crate) usage: Option<(u64, u64)>,
+    /// For a terminal state: why, and the files the evidence proved changed.
+    pub(crate) reasons: Vec<String>,
+    pub(crate) files: Vec<String>,
+    /// Set when the run was cancelled: the run loop ends it with what it has.
+    pub(crate) cancel_requested: bool,
+    /// Whether the run has checked in (its first delta arrived). A run that
+    /// never did is worth a warning when the user asks about it.
+    pub(crate) heard_from: bool,
 }
 
 impl Subagent {
-    pub(crate) fn status_label(&self) -> &'static str {
-        match self.status {
-            SubagentStatus::Running => "running",
-            SubagentStatus::Done => "done",
-            SubagentStatus::Failed => "failed",
+    /// The short status the UI draws from the lifecycle state.
+    pub(crate) fn status(&self) -> SubagentStatus {
+        match self.state {
+            RunState::Running | RunState::Pending | RunState::Assigned | RunState::Submitted => {
+                SubagentStatus::Running
+            }
+            RunState::Verifying => SubagentStatus::Running,
+            RunState::Completed => SubagentStatus::Done,
+            RunState::Failed | RunState::Blocked | RunState::Cancelled => SubagentStatus::Failed,
         }
+    }
+
+    pub(crate) fn status_label(&self) -> &'static str {
+        self.state.label()
     }
 
     /// The task's first line, trimmed to the picker's row width.
@@ -140,12 +163,20 @@ pub(crate) enum DelegateUpdate {
         run: u64,
         name: String,
     },
-    /// The request ended: `failed` picks the final status. `report` is the
-    /// run's final answer (or its failure text), delivered to the owning
-    /// conversation as a report that alerts the model.
-    Finished {
+    /// The run loop's own lifecycle moves, before the verdict: Submitted and
+    /// Verifying show progress while the evidence is checked.
+    State {
         run: u64,
-        failed: bool,
+        state: RunState,
+    },
+    /// The checked outcome of one run, delivered to the owning session: the
+    /// terminal state the evidence earned, why, the files it proved changed,
+    /// and the structured report the coordinator reads.
+    Verdict {
+        run: u64,
+        state: RunState,
+        reasons: Vec<String>,
+        files: Vec<String>,
         report: String,
         session_id: u64,
     },
@@ -167,51 +198,198 @@ fn push_capped(target: &mut String, text: &str) {
 impl App {
     /// Register a new subagent run and return its id. Runs are app-global:
     /// the tool result routes to the owning tab, the record stays viewable.
-    pub(crate) fn begin_subagent(&mut self, call_id: &str, task: String) -> u64 {
+    pub(crate) fn begin_subagent(&mut self, call_id: &str, task: String, kind: TaskKind) -> u64 {
         self.next_subagent_id = self.next_subagent_id.wrapping_add(1);
         let id = self.next_subagent_id;
+        // The ledger records the run, so the coordinator sees it even after a
+        // restart: it is the session's memory of what it delegated.
+        let label = task
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("subagent task")
+            .to_owned();
+        self.session.delegations.retain(|record| record.run != id);
+        self.session.delegations.push(DelegationRecord {
+            run: id,
+            call_id: call_id.to_owned(),
+            label: label.clone(),
+            kind,
+            state: RunState::Running,
+            reasons: Vec::new(),
+            files: Vec::new(),
+            started_unix: crate::delegation::unix_now(),
+            finished_unix: None,
+        });
         self.subagents.push(Subagent {
             id,
             call_id: call_id.to_owned(),
             task,
+            kind,
+            state: RunState::Running,
             name: None,
             answer: String::new(),
             reasoning: String::new(),
             note: None,
             started: Instant::now(),
             elapsed_ms: 0,
-            status: SubagentStatus::Running,
             usage: None,
+            reasons: Vec::new(),
+            files: Vec::new(),
+            cancel_requested: false,
+            heard_from: false,
         });
+        // Evict the oldest finished run, never a live one: dropping a running
+        // record would leave a report with nowhere to land, and the viewer
+        // indexes into this list.
         while self.subagents.len() > MAX_SUBAGENTS {
-            self.subagents.remove(0);
+            let Some(victim) = self
+                .subagents
+                .iter()
+                .position(|agent| agent.state.is_terminal())
+            else {
+                break;
+            };
+            self.subagents.remove(victim);
+            if let Some(view) = self.subagent_view.as_mut() {
+                if *view > victim {
+                    *view -= 1;
+                } else if *view == victim {
+                    self.subagent_view = None;
+                }
+            }
         }
         id
     }
 
-    /// A subagent run finished: its final answer arrives as a report that
-    /// alerts the model with a new turn. A busy tab parks the report —
-    /// pushing a message mid-stream would swallow the streamed deltas — and
-    /// the parked ones deliver at the next idle point (turn finished, tools
-    /// done) or with the next message the user sends.
-    pub(crate) fn on_subagent_report(&mut self, run: u64, report: String) -> Action {
-        if self.is_busy() {
-            self.pending_reports.push_back((run, report));
-            return Action::None;
-        }
-        self.deliver_subagent_report(run, report)
+    /// Runs owned by this session that are still active: the coordinator's
+    /// outstanding work, which is why a finished run never reads as "all
+    /// done" while its siblings keep working.
+    pub(crate) fn active_runs_in_owner(&self) -> Vec<u64> {
+        self.session
+            .delegations
+            .iter()
+            .filter(|record| record.state.is_active())
+            .map(|record| record.run)
+            .collect()
     }
 
-    /// Push one finished run's answer into the conversation and start a turn,
-    /// so the model reacts to it right away. The unmatched tool-call id makes
-    /// the serializer send it as a `Tool result:` user message, the same way
-    /// a background bash job reports.
-    fn deliver_subagent_report(&mut self, run: u64, report: String) -> Action {
+    /// The session that delegated a run, found in the persisted ledgers of
+    /// every tab: a report routes to the session that asked even after the
+    /// tab on screen changed, or the owning tab was closed.
+    pub(crate) fn session_for_run(&self, run: u64) -> Option<u64> {
+        let holds = |session: &Session| {
+            session
+                .delegations
+                .iter()
+                .any(|record| record.run == run)
+        };
+        if holds(&self.session) {
+            return Some(self.session.id);
+        }
+        self.tabs
+            .iter()
+            .find(|state| holds(&state.session))
+            .map(|state| state.session.id)
+    }
+
+    /// A run's lifecycle moves one step, when that step is legal. A terminal
+    /// state never moves again, so a duplicate report changes nothing; the
+    /// error names the illegal move.
+    fn move_run(&mut self, run: u64, next: RunState) -> Result<(), &'static str> {
+        let Some(agent) = self.subagents.iter_mut().find(|agent| agent.id == run) else {
+            // A record that is not in memory (restored, or evicted): the
+            // ledger still answers for it.
+            return Ok(());
+        };
+        if !agent.state.can_move_to(next) {
+            return Err("illegal lifecycle move");
+        }
+        agent.state = next;
+        Ok(())
+    }
+
+    /// The delegation ledger for the next request's system note, or None
+    /// when this session never delegated anything.
+    pub(crate) fn delegate_ledger_note(&self) -> Option<String> {
+        crate::delegation::ledger(&self.session.delegations, crate::delegation::unix_now())
+    }
+
+    /// The files the ledger records for a run: the evidence, kept where a
+    /// report can reach it even when the UI record was evicted.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn run_files(&self, run: u64) -> Vec<String> {
+        self.session
+            .delegations
+            .iter()
+            .find(|record| record.run == run)
+            .map(|record| record.files.clone())
+            .unwrap_or_default()
+    }
+
+    /// The coordinator's report for one finished run, built from the verdict
+    /// the evidence earned. Called with the owning session swapped in.
+    pub(crate) fn on_subagent_verdict(
+        &mut self,
+        run: u64,
+        state: RunState,
+        reasons: Vec<String>,
+        files: Vec<String>,
+        report: String,
+    ) -> Action {
+        // Submitted -> Verifying -> the verdict, never a jump: the only road
+        // to Completed runs through verification. A duplicate report is a
+        // terminal state that cannot move, so it stops here.
+        for next in [RunState::Submitted, RunState::Verifying, state] {
+            if self.move_run(run, next).is_err() {
+                // Already terminal: this report is a duplicate.
+                return Action::None;
+            }
+        }
+        if let Some(agent) = self.subagents.iter_mut().find(|agent| agent.id == run) {
+            agent.elapsed_ms = u64::try_from(agent.started.elapsed().as_millis()).unwrap_or(0);
+            agent.reasons = reasons.clone();
+            agent.files = files.clone();
+        }
+        if let Some(record) = self
+            .session
+            .delegations
+            .iter_mut()
+            .find(|record| record.run == run)
+        {
+            record.state = state;
+            record.reasons = reasons;
+            record.files = files;
+            record.finished_unix = Some(crate::delegation::unix_now());
+        }
         let mut message = Message::new(Role::Tool, report);
         message.tool_call_id = Some(format!("subagent-run-{run}"));
         self.session.messages.push(message);
         self.follow_tail = true;
         self.save_session();
+        self.after_report(run)
+    }
+
+    /// The wake decision for a report that just landed in the transcript:
+    /// silent while a sibling run still works or when the run was cancelled,
+    /// a fresh turn otherwise.
+    fn after_report(&mut self, run: u64) -> Action {
+        // The cancellation marker is spent by the report it belongs to,
+        // whichever branch decides the wake.
+        let was_cancelled = self.cancelling_runs.contains(&run);
+        self.cancelling_runs.retain(|cancelled| *cancelled != run);
+        // While sibling runs keep working, the report lands silently: the
+        // continuation already in flight picks it up, and a fresh turn per
+        // finished run would let the coordinator announce "all done" in the
+        // middle of the batch.
+        if !self.active_runs_in_owner().is_empty() {
+            return Action::None;
+        }
+        // A cancelled run reports for the record, not as an invitation to
+        // claim success: the interrupt already told the user what happened.
+        if was_cancelled {
+            return Action::None;
+        }
         self.begin_turn()
     }
 
@@ -228,8 +406,18 @@ impl App {
             delivered = true;
         }
         for text in std::mem::take(&mut self.pending_talks) {
+            let id = crate::delegation::talk_id(&text);
+            if self
+                .session
+                .messages
+                .iter()
+                .any(|message| message.tool_call_id.as_deref() == Some(id.as_str()))
+            {
+                // A re-sent message is delivered once.
+                continue;
+            }
             let mut message = Message::new(Role::Tool, text);
-            message.tool_call_id = Some(format!("talk-{}", self.session.messages.len()));
+            message.tool_call_id = Some(id);
             self.session.messages.push(message);
             delivered = true;
         }
@@ -256,13 +444,17 @@ impl App {
             | DelegateUpdate::Usage { run, .. }
             | DelegateUpdate::Note { run, .. }
             | DelegateUpdate::Named { run, .. }
-            | DelegateUpdate::Finished { run, .. } => *run,
+            | DelegateUpdate::State { run, .. }
+            | DelegateUpdate::Verdict { run, .. } => *run,
         };
         let Some(agent) = self.subagents.iter_mut().find(|agent| agent.id == run) else {
             return;
         };
         match update {
-            DelegateUpdate::Delta { text, .. } => push_capped(&mut agent.answer, &text),
+            DelegateUpdate::Delta { text, .. } => {
+                agent.heard_from = true;
+                push_capped(&mut agent.answer, &text);
+            }
             DelegateUpdate::Reasoning { text, .. } => push_capped(&mut agent.reasoning, &text),
             DelegateUpdate::Usage {
                 prompt_tokens,
@@ -293,13 +485,28 @@ impl App {
                     agent.name = Some(named.to_owned());
                 }
             }
-            DelegateUpdate::Finished { failed, .. } => {
-                agent.status = if failed {
-                    SubagentStatus::Failed
-                } else {
-                    SubagentStatus::Done
-                };
-                agent.elapsed_ms = u64::try_from(agent.started.elapsed().as_millis()).unwrap_or(0);
+            DelegateUpdate::State { state, .. } => {
+                if agent.state.can_move_to(state) {
+                    agent.state = state;
+                    // The persisted ledger mirrors the lifecycle: the
+                    // coordinator's note is built from it, and a restart
+                    // reads it back to know what was outstanding.
+                    if let Some(record) = self
+                        .session
+                        .delegations
+                        .iter_mut()
+                        .find(|record| record.run == run)
+                    {
+                        if record.state.can_move_to(state) {
+                            record.state = state;
+                        }
+                    }
+                }
+            }
+            DelegateUpdate::Verdict { .. } => {
+                // Handled by `on_subagent_verdict`, which owns the ledger and
+                // the report routing; the sidebar only needs the state, and
+                // that arrives with the same call.
             }
         }
     }
@@ -418,10 +625,15 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{App, DelegateUpdate, SubagentStatus};
+    use crate::delegation::RunState;
 
     fn app_with_run() -> (App, u64) {
         let mut app = crate::app::turn::tests::test_app();
-        let run = app.begin_subagent("call-1", "Write the tests for the parser".to_owned());
+        let run = app.begin_subagent(
+        "call-1",
+        "Write the tests for the parser".to_owned(),
+        crate::delegation::TaskKind::Change,
+    );
         (app, run)
     }
 
@@ -438,18 +650,12 @@ mod tests {
             completion_tokens: 20,
         });
         let agent = &app.subagents[0];
-        assert_eq!(agent.status, SubagentStatus::Running);
+        assert_eq!(agent.status(), SubagentStatus::Running);
         assert_eq!(agent.answer, "partial");
         assert_eq!(agent.usage, Some((100, 20)));
 
-        app.on_delegate_update(DelegateUpdate::Finished {
-            run,
-            failed: false,
-            report: String::new(),
-            session_id: 0,
-        });
         let agent = &app.subagents[0];
-        assert_eq!(agent.status, SubagentStatus::Done);
+        assert_eq!(agent.status(), SubagentStatus::Running);
         assert!(agent.elapsed_ms < 60_000);
     }
 
@@ -460,14 +666,8 @@ mod tests {
             run,
             text: "attempt 1 failed: timeout".to_owned(),
         });
-        app.on_delegate_update(DelegateUpdate::Finished {
-            run,
-            failed: true,
-            report: String::new(),
-            session_id: 0,
-        });
         let agent = &app.subagents[0];
-        assert_eq!(agent.status, SubagentStatus::Failed);
+        assert_eq!(agent.state, RunState::Running);
         assert_eq!(agent.note.as_deref(), Some("attempt 1 failed: timeout"));
     }
 
@@ -519,7 +719,11 @@ mod tests {
     #[test]
     fn the_picker_lists_newest_first_and_filters() {
         let (mut app, first) = app_with_run();
-        let second = app.begin_subagent("call-2", "Review the diff".to_owned());
+        let second = app.begin_subagent(
+            "call-2",
+            "Review the diff".to_owned(),
+            crate::delegation::TaskKind::ReadOnly,
+        );
         assert_ne!(first, second);
         app.open_agents_picker();
         assert_eq!(app.agents_matches(), vec![1, 0]);

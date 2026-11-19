@@ -53,6 +53,41 @@ Worked (re-fired runs started writing on the first round):
 > (prior run's recon baked in: exact addresses, block line numbers, port
 > shapes, constants)
 
+## Verification, not trust
+
+A run's own "done" finishes nothing. Every delegated run moves through an
+explicit lifecycle — pending, assigned, running, submitted, verifying, then
+one terminal state (completed, failed, blocked or cancelled) — and
+`completed` is reachable only through `verifying`.
+
+The verdict is decided from evidence yopes observes itself, not from the
+subagent's words:
+
+- **Files.** The targets of each write, edit and multi-edit call are read
+  before the call and compared byte for byte after it. A write that leaves
+  the file identical counts as no evidence, and the failure says so.
+- **Commands.** Each `run_command` / `bash_background` result is read for its
+  exit code, and the git worktree around it is fingerprinted before and
+  after, so files a command changed are attributed to the run.
+- **Checks.** A failing `cargo test`, `npm test`, `pytest`, `go vet` and the
+  like fails a change task: green tests are part of done.
+- **Refusals.** Calls a subagent could not run because they need the user's
+  approval make the run read as blocked, not as an empty success.
+- **Cancellation and timeouts** never complete a run, and keep whatever
+  partial work it left visible in the report.
+
+State the deliverable in the call: `expect_files` names the files that must
+change (a run that skips one fails), `verify_command` is run after the run
+submits (a non-zero exit fails), and `timeout_minutes` bounds the run
+(default 45, max 240).
+
+The report the coordinator receives leads with the verdict and the evidence
+and ends with the subagent's own answer, labelled as a claim. The
+coordinator also carries a delegation ledger in its system prompt on every
+request, rebuilt from records persisted in the session, so the state of every
+run survives compaction, a tab switch and a restart. A run still active at
+restart is restored as interrupted rather than assumed finished.
+
 ## Runtime helpers
 
 - **Write watchdog.** A run that spends `ZERO_WRITE_NUDGE_ROUNDS` (8) tool

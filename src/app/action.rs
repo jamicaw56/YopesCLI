@@ -27,7 +27,7 @@ pub enum Action {
         messages: Vec<Message>,
         tools_enabled: bool,
         /// Mode instruction appended to the system prompt for this request.
-        mode_note: Option<&'static str>,
+        mode_note: Option<String>,
     },
     Cancel(u64),
     /// Kill the foreground commands one session owns: the Esc interrupt is

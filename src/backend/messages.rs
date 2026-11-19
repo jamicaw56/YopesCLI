@@ -13,7 +13,7 @@ pub(super) fn request_messages(
     tooling: bool,
     image_style: ImageStyle,
     custom_prompt: Option<&str>,
-    mode_note: Option<&'static str>,
+    mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<Vec<serde_json::Value>> {
     let mut request = Vec::with_capacity(messages.len() + 1);
@@ -35,7 +35,7 @@ pub(super) fn request_messages(
     }
     if let Some(note) = mode_note {
         system.push_str("\n\n");
-        system.push_str(note);
+        system.push_str(&note);
     }
     // Skills auto-load through read_file, so only tool-capable sessions get
     // the listing; slash invocation injects the content by itself.
@@ -227,7 +227,7 @@ pub(super) fn anthropic_request_payload(
     messages: &[Message],
     tooling: bool,
     custom_prompt: Option<&str>,
-    mode_note: Option<&'static str>,
+    mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<(Option<String>, Vec<serde_json::Value>)> {
     let mut system = tools::system_prompt(tooling, workspace);
@@ -237,7 +237,7 @@ pub(super) fn anthropic_request_payload(
     }
     if let Some(note) = mode_note {
         system.push_str("\n\n");
-        system.push_str(note);
+        system.push_str(&note);
     }
     if tooling {
         if let Some(listing) = skills::section(workspace) {
@@ -453,7 +453,7 @@ pub(super) fn gemini_request_payload(
     messages: &[Message],
     tooling: bool,
     custom_prompt: Option<&str>,
-    mode_note: Option<&'static str>,
+    mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<(Option<serde_json::Value>, Vec<serde_json::Value>)> {
     let mut system = tools::system_prompt(tooling, workspace);
@@ -463,7 +463,7 @@ pub(super) fn gemini_request_payload(
     }
     if let Some(note) = mode_note {
         system.push_str("\n\n");
-        system.push_str(note);
+        system.push_str(&note);
     }
     if tooling {
         if let Some(listing) = skills::section(workspace) {
@@ -724,7 +724,7 @@ mod tests {
             true,
             ImageStyle::None,
             None,
-            Some("PLAN MODE: propose only"),
+            Some("PLAN MODE: propose only".to_owned()),
             Path::new("."),
         )
         .unwrap();
@@ -748,7 +748,7 @@ mod tests {
             true,
             ImageStyle::None,
             Some(" Always answer in rhyme. "),
-            Some("PLAN MODE: propose only"),
+            Some("PLAN MODE: propose only".to_owned()),
             Path::new("."),
         )
         .unwrap();

@@ -13,7 +13,7 @@ fn computer_use_schema() -> Value {
         "type": "function",
         "function": {
             "name": "computer_use",
-            "description": "Drive the desktop on Windows: move the mouse, click, scroll, drag, type text, press keys, wait between steps, focus a window and crop the capture to a region, then see the result. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. The result reports the frame origin and size in screen pixels, the desktop bounds and the final cursor position: add the frame origin to a pixel you pick in the image to get the screen coordinate to click. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
+            "description": "Drive the desktop on Windows: point, click, scroll, drag, type text, press keys, wait between steps, focus a window and crop the capture to a region, then see the result. The agent has its own pointer: mouse steps post button messages to the window under the point, so the system cursor never moves and the person at the keyboard keeps their mouse. The agent's pointer is drawn into the capture as a highlighted cursor, with its hotspot on the point the call last aimed at. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. The result reports the frame origin and size in screen pixels, the desktop bounds and where the agent's pointer ended up: add the frame origin to a pixel you pick in the image to get the screen coordinate to click. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -579,13 +579,31 @@ pub fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "delegate",
-                "description": "Hand one self-contained subtask to a subagent running on the same provider and model. The call returns at once with a run id and the subagent works in the background: keep working, do not wait. Its final answer is delivered to this conversation automatically when it finishes. The subagent runs with the same tools you have (files, shell, web) in the same workspace, but it starts with an empty conversation, so the task must still carry every fact and instruction it needs. Several delegate calls in one turn run in parallel and stream live in the sidebar; the user can read every response with /agents. Use it for focused drafts, second opinions, or research recaps, and split large work into several delegate calls.",
+                "description": "Hand one self-contained subtask to a subagent running on the same provider and model. The call returns at once with a run id and the subagent works in the background: keep working, do not wait. The subagent runs with the same tools you have (files, shell, web) in the same workspace, but it starts with an empty conversation, so the task must still carry every fact and instruction it needs. Several delegate calls in one turn run in parallel and stream live in the sidebar; the user can read every response with /agents. A subagent saying it is done does not finish the run: yopes checks the files it actually changed and the commands it ran, and reports a verdict (completed, failed, blocked or cancelled) with that evidence. So state the deliverable: pass expect_files for the files the task must change, and verify_command for the check that proves it works.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "task": {
                             "type": "string",
                             "description": "Complete instructions for the subagent, including all context it needs."
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["change", "read_only"],
+                            "description": "What the task must produce. `change` (the default) must change at least one file; `read_only` must answer and should change nothing."
+                        },
+                        "expect_files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Files the task must change, relative to the workspace. A run that skips one is reported failed instead of completed."
+                        },
+                        "verify_command": {
+                            "type": "string",
+                            "description": "A command yopes runs after the subagent submits, e.g. `cargo test`. A non-zero exit fails the run."
+                        },
+                        "timeout_minutes": {
+                            "type": "integer",
+                            "description": "How long the run may work before it is stopped and judged on what it has. Default 45, maximum 240."
                         }
                     },
                     "required": ["task"]

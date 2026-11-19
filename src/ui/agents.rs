@@ -16,12 +16,17 @@ pub(super) const SIDEBAR_MIN_WIDTH: u16 = 90;
 /// truncates to the width the row has left: the sidebar never wraps, so a
 /// long name clips with an ellipsis instead of spilling past the border.
 fn agent_row(agent: &crate::app::Subagent, step: usize, width: u16) -> Line<'static> {
-    let (glyph, color) = match agent.status {
+    let (glyph, color) = match agent.status() {
         crate::app::SubagentStatus::Running => (spinner(step), accent()),
         crate::app::SubagentStatus::Done => ("✓", muted()),
         crate::app::SubagentStatus::Failed => ("✗", error()),
     };
-    let elapsed_ms = match agent.status {
+    let glyph = if agent.cancel_requested {
+        "⊘"
+    } else {
+        glyph
+    };
+    let elapsed_ms = match agent.status() {
         crate::app::SubagentStatus::Running => {
             u64::try_from(agent.started.elapsed().as_millis()).unwrap_or(0)
         }
@@ -55,13 +60,15 @@ pub(super) fn draw_agents_sidebar(frame: &mut Frame, app: &mut App, area: Rect) 
     // failed run stays visible until it is dealt with there.
     let mut rows: Vec<usize> = Vec::new();
     for (index, agent) in app.subagents.iter().enumerate() {
-        if agent.status == crate::app::SubagentStatus::Running {
+        if agent.status() == crate::app::SubagentStatus::Running {
             rows.push(index);
         }
     }
     let running = rows.len();
     for (index, agent) in app.subagents.iter().enumerate().rev() {
-        if agent.status == crate::app::SubagentStatus::Failed {
+        // Every run that did not complete needs the user's attention: a
+        // failure, a block, or a cancellation all read here.
+        if agent.status() == crate::app::SubagentStatus::Failed {
             rows.push(index);
         }
     }
@@ -131,7 +138,7 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = width.saturating_sub(4).max(8);
 
     let status = agent.status_label();
-    let elapsed_ms = match agent.status {
+    let elapsed_ms = match agent.status() {
         crate::app::SubagentStatus::Running => {
             u64::try_from(agent.started.elapsed().as_millis()).unwrap_or(0)
         }
@@ -150,7 +157,7 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(match agent.status {
+        .border_style(Style::default().fg(match agent.status() {
             crate::app::SubagentStatus::Running => accent(),
             crate::app::SubagentStatus::Done => muted(),
             crate::app::SubagentStatus::Failed => error(),
@@ -174,7 +181,41 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
     for line in wrapped_plain(&agent.task, usize::from(inner_width)) {
         lines.push(Line::styled(line, Style::default().fg(text())));
     }
-    lines.push(Line::raw(""));
+    // The verdict first: this is what yopes concluded from the evidence, and
+    // it outranks whatever the run says about itself below.
+    if !agent.state.is_active() {
+        lines.push(Line::styled(
+            "verdict",
+            Style::default().fg(muted()).add_modifier(Modifier::BOLD),
+        ));
+        let color = if agent.state == crate::delegation::RunState::Completed {
+            added()
+        } else {
+            error()
+        };
+        lines.push(Line::styled(
+            agent.state.label().to_uppercase(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        for reason in &agent.reasons {
+            lines.push(Line::styled(
+                format!("- {reason}"),
+                Style::default().fg(error()),
+            ));
+        }
+        if !agent.files.is_empty() {
+            lines.push(Line::styled(
+                format!("files changed: {}", agent.files.join(", ")),
+                Style::default().fg(added()),
+            ));
+        } else if agent.kind == crate::delegation::TaskKind::Change {
+            lines.push(Line::styled(
+                "files changed: none",
+                Style::default().fg(error()),
+            ));
+        }
+        lines.push(Line::raw(""));
+    }
     if let Some(note) = &agent.note {
         lines.push(Line::styled(
             format!("↻ {note}"),
@@ -196,7 +237,7 @@ pub(super) fn draw_agents_viewer(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(muted()).add_modifier(Modifier::BOLD),
         ));
         lines.extend(markdown_lines(&agent.answer, inner_width));
-    } else if agent.status == crate::app::SubagentStatus::Running {
+    } else if agent.status() == crate::app::SubagentStatus::Running {
         lines.push(Line::styled(
             caret(app.spinner),
             Style::default().fg(accent()),
@@ -266,7 +307,7 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
         } else {
             Style::default().fg(text())
         };
-        let (glyph, glyph_style) = match agent.status {
+        let (glyph, glyph_style) = match agent.status() {
             crate::app::SubagentStatus::Running => {
                 (spinner(app.spinner), Style::default().fg(accent()))
             }
@@ -276,6 +317,10 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
         let line = Line::from(vec![
             Span::styled(format!("{} ", glyph), glyph_style),
             Span::styled(agent.row_label(), style),
+            Span::styled(
+                format!(" · {}", agent.state.label()),
+                Style::default().fg(muted()),
+            ),
         ]);
         frame.render_widget(
             Paragraph::new(line),

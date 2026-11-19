@@ -487,6 +487,7 @@ impl App {
         self.approval = None;
         self.approved_tools.clear();
         self.markdown_cache.clear();
+        self.tool_frames.clear();
         self.prompt_started = None;
         self.pending_reports.clear();
         self.pending_talks.clear();

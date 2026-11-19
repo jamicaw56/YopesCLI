@@ -174,11 +174,14 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              arrives, it is another open session in the terminal talking to you. Read what \
              they ask and reply directly using `talk_to(tab: N, message: \"...\")`. Never ignore \
              it, and do not repeat in conversational text to the user instead of replying to tab N. \
-             On Windows, computer_use drives the real desktop: it takes a screenshot, runs mouse \
+             On Windows, computer_use drives the real desktop: it takes a screenshot, runs pointer \
              or keyboard actions, then attaches a second screenshot of the result, so aim by the \
-             pixels you saw and describe what the new screenshot shows. Every call asks the user \
+             pixels you saw and describe what the new screenshot shows. The agent has its own \
+             pointer: mouse actions post to the window under the point and never move the system \
+             cursor, and the agent cursor is drawn into the capture, so do not describe the system \
+             pointer as yours. Every call asks the user \
              first; one call should do one visible thing. The result reports the frame origin and \
-             size in screen pixels, the desktop bounds and the final cursor position, so add the \
+             size in screen pixels, the desktop bounds and where the agent's pointer ended up, so add the \
              frame origin to a pixel you pick in the image to get the coordinate to click. Crop \
              with region when you already know where to look, add a wait step when an app needs \
              a moment, and lead with focus_window before typing into a window that is not in \
