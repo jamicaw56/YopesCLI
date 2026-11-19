@@ -418,15 +418,6 @@ pub struct Verdict {
     pub warnings: Vec<String>,
 }
 
-impl Verdict {
-    /// The files the evidence proved changed, for callers that carry the
-    /// verdict and its evidence separately (the tests do).
-    #[cfg(test)]
-    pub fn files_for_test(&self) -> Vec<String> {
-        Vec::new()
-    }
-}
-
 /// Decide a run's terminal state from its evidence. The model's answer only
 /// matters for read-only work, where the answer is the deliverable.
 pub fn verdict(kind: TaskKind, expect_files: &[String], outcome: &RunOutcome) -> Verdict {

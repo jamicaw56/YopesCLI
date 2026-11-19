@@ -49,8 +49,42 @@ All notable changes to YopesCLI are recorded here. The format follows
   apart at a glance. The header's mode dot becomes a ◆ and the ask/off
   badges drop to dim.
 
+### Added
+
+- Delegated runs are verified instead of trusted. A subagent saying it is
+  done no longer finishes anything: every run moves pending → assigned →
+  running → submitted → verifying → one terminal state (completed, failed,
+  blocked, cancelled), and `completed` is reachable only through
+  verification. The verdict comes from evidence yopes observes itself —
+  byte-level file snapshots around each write, git worktree fingerprints
+  around each command, exit codes, and refused calls — so a claim with no
+  changes fails, a skipped `expect_files` path fails, and a red `cargo test`
+  fails. `delegate` gained `kind`, `expect_files`, `verify_command` and
+  `timeout_minutes` (default 45, max 240).
+- The coordinator carries a delegation ledger in its system prompt on every
+  request, rebuilt from records persisted in the session: outstanding runs,
+  failed runs and their reasons survive compaction, tab switches and a
+  restart. A run still active at restart is restored as interrupted instead
+  of being assumed finished. Reports are structured (verdict, reasons,
+  evidence, then the subagent's answer labelled as a claim) and a batch only
+  wakes the model once, after the last sibling finishes.
+
 ### Fixed
 
+- A truncated response body (`unexpected EOF during chunk size line`, a
+  connection reset mid-body) was a hard error that ended the turn. It is now
+  a resumable stall, so the existing resume ladder finishes the reply, and
+  the resume no longer leaves an empty assistant turn that makes a provider
+  reject the retry.
+- A duplicate delegation report, a duplicate parked report and a re-sent
+  talk message are each delivered once. A report whose owning session is
+  gone no longer lands in whichever tab happens to be on screen.
+- Esc now cancels the delegated runs the tab owns, and closing a tab stops
+  its runs instead of stranding them; a cancelled run reports as cancelled
+  and does not wake the model to announce success. A run task that panics
+  reports a failure instead of staying "running" forever.
+- Eviction drops the oldest finished run instead of a live one, and no
+  longer shifts the run the viewer has open.
 - `/provider connect` no longer names models.dev while it is not talking to
   models.dev: the loading row of a custom endpoint says which host it is
   fetching the model list from, and only the provider catalog names
@@ -166,6 +200,26 @@ All notable changes to YopesCLI are recorded here. The format follows
   instead of `/version`. `Ctrl+R` opens `/session rename` prefilled with the
   current title, and `/set` with no key lists every setting and its value.
 
+### Added
+
+- Delegated runs are verified instead of trusted. A subagent saying it is
+  done no longer finishes anything: every run moves pending → assigned →
+  running → submitted → verifying → one terminal state (completed, failed,
+  blocked, cancelled), and `completed` is reachable only through
+  verification. The verdict comes from evidence yopes observes itself —
+  byte-level file snapshots around each write, git worktree fingerprints
+  around each command, exit codes, and refused calls — so a claim with no
+  changes fails, a skipped `expect_files` path fails, and a red `cargo test`
+  fails. `delegate` gained `kind`, `expect_files`, `verify_command` and
+  `timeout_minutes` (default 45, max 240).
+- The coordinator carries a delegation ledger in its system prompt on every
+  request, rebuilt from records persisted in the session: outstanding runs,
+  failed runs and their reasons survive compaction, tab switches and a
+  restart. A run still active at restart is restored as interrupted instead
+  of being assumed finished. Reports are structured (verdict, reasons,
+  evidence, then the subagent's answer labelled as a claim) and a batch only
+  wakes the model once, after the last sibling finishes.
+
 ### Fixed
 
 - A reply that hit the provider's output token cap (`finish_reason: "length"`,
@@ -203,6 +257,26 @@ All notable changes to YopesCLI are recorded here. The format follows
 - Release builds are self-contained on Ubuntu runners: the Windows binary is
   cross-compiled with MinGW instead of running on the Windows hosted pool, so
   release creation no longer depends on Windows runner availability.
+
+### Added
+
+- Delegated runs are verified instead of trusted. A subagent saying it is
+  done no longer finishes anything: every run moves pending → assigned →
+  running → submitted → verifying → one terminal state (completed, failed,
+  blocked, cancelled), and `completed` is reachable only through
+  verification. The verdict comes from evidence yopes observes itself —
+  byte-level file snapshots around each write, git worktree fingerprints
+  around each command, exit codes, and refused calls — so a claim with no
+  changes fails, a skipped `expect_files` path fails, and a red `cargo test`
+  fails. `delegate` gained `kind`, `expect_files`, `verify_command` and
+  `timeout_minutes` (default 45, max 240).
+- The coordinator carries a delegation ledger in its system prompt on every
+  request, rebuilt from records persisted in the session: outstanding runs,
+  failed runs and their reasons survive compaction, tab switches and a
+  restart. A run still active at restart is restored as interrupted instead
+  of being assumed finished. Reports are structured (verdict, reasons,
+  evidence, then the subagent's answer labelled as a claim) and a batch only
+  wakes the model once, after the last sibling finishes.
 
 ### Fixed
 

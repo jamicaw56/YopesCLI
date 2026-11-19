@@ -416,10 +416,12 @@ async fn run() -> Result<()> {
                 app.on_delegate_update(update);
                 if let Some((run_id, state, reasons, files, report, session_id)) = verdict {
                     // The verdict lands in the session that delegated the
-                    // run. The run's owner comes from the persisted ledger,
-                    // so a closed or switched tab never reroutes it into
-                    // whichever conversation happens to be on screen.
-                    let owner = app.tab_for_session(session_id);
+                    // run. The ledger is the authority, so a switched tab
+                    // never reroutes a report into the conversation on
+                    // screen; the spawn-time id is the fallback for a run
+                    // the ledger no longer holds.
+                    let session = app.session_for_run(run_id).unwrap_or(session_id);
+                    let owner = app.tab_for_session(session);
                     match owner {
                         Some(owner) => app.with_tab(owner, |app| {
                             let action =

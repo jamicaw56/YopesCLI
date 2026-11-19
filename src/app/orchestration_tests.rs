@@ -214,8 +214,7 @@ mod tests {
         });
         assert_eq!(app.session.delegations[0].state, RunState::Submitted);
         assert!(app.subagents[0].state.is_active());
-        // Finished carries no verdict and changes nothing by itself.
-        app.on_delegate_update(DelegateUpdate::Finished { run });
+        // A submission is not a finish: the run stays active until a verdict.
         assert!(app.subagents[0].state.is_active());
         // A terminal state is not reachable in one jump.
         app.on_delegate_update(DelegateUpdate::State {

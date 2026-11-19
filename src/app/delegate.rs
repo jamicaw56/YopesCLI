@@ -169,11 +169,6 @@ pub(crate) enum DelegateUpdate {
         run: u64,
         state: RunState,
     },
-    /// The run loop's request ended. It carries no verdict: the state that
-    /// lands is only a request, and `verdict` decides the terminal one.
-    Finished {
-        run: u64,
-    },
     /// The checked outcome of one run, delivered to the owning session: the
     /// terminal state the evidence earned, why, the files it proved changed,
     /// and the structured report the coordinator reads.
@@ -322,6 +317,7 @@ impl App {
 
     /// The files the ledger records for a run: the evidence, kept where a
     /// report can reach it even when the UI record was evicted.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn run_files(&self, run: u64) -> Vec<String> {
         self.session
             .delegations
@@ -329,53 +325,6 @@ impl App {
             .find(|record| record.run == run)
             .map(|record| record.files.clone())
             .unwrap_or_default()
-    }
-
-    /// The label the ledger and the reports use for a run.
-    pub(crate) fn run_label(&self, run: u64) -> String {
-        self.subagents
-            .iter()
-            .find(|agent| agent.id == run)
-            .map(|agent| agent.row_label())
-            .or_else(|| {
-                self.session
-                    .delegations
-                    .iter()
-                    .find(|record| record.run == run)
-                    .map(|record| record.label.clone())
-            })
-            .unwrap_or_else(|| format!("run {run}"))
-    }
-
-    /// A subagent run finished: its final answer arrives as a report that
-    /// alerts the model with a new turn. A busy tab parks the report —
-    /// pushing a message mid-stream would swallow the streamed deltas — and
-    /// the parked ones deliver at the next idle point (turn finished, tools
-    /// done) or with the next message the user sends.
-    pub(crate) fn on_subagent_report(&mut self, run: u64, report: String) -> Action {
-        // A report for a run this session already closed is a duplicate; a
-        // second delivery would wake the coordinator with the same facts and
-        // invite a second "done" announcement.
-        if self
-            .session
-            .delegations
-            .iter()
-            .find(|record| record.run == run)
-            .is_some_and(|record| record.state.is_terminal())
-        {
-            return Action::None;
-        }
-        if self.is_busy() {
-            if !self
-                .pending_reports
-                .iter()
-                .any(|(parked, _)| *parked == run)
-            {
-                self.pending_reports.push_back((run, report));
-            }
-            return Action::None;
-        }
-        self.deliver_subagent_report(run, report)
     }
 
     /// The coordinator's report for one finished run, built from the verdict
@@ -413,19 +362,6 @@ impl App {
             record.files = files;
             record.finished_unix = Some(crate::delegation::unix_now());
         }
-        let mut message = Message::new(Role::Tool, report);
-        message.tool_call_id = Some(format!("subagent-run-{run}"));
-        self.session.messages.push(message);
-        self.follow_tail = true;
-        self.save_session();
-        self.after_report(run)
-    }
-
-    /// Push one finished run's report into the conversation, then decide
-    /// whether it wakes the model. The unmatched tool-call id makes the
-    /// serializer send it as a `Tool result:` user message, the same way a
-    /// background bash job reports.
-    fn deliver_subagent_report(&mut self, run: u64, report: String) -> Action {
         let mut message = Message::new(Role::Tool, report);
         message.tool_call_id = Some(format!("subagent-run-{run}"));
         self.session.messages.push(message);
@@ -509,7 +445,6 @@ impl App {
             | DelegateUpdate::Note { run, .. }
             | DelegateUpdate::Named { run, .. }
             | DelegateUpdate::State { run, .. }
-            | DelegateUpdate::Finished { run, .. }
             | DelegateUpdate::Verdict { run, .. } => *run,
         };
         let Some(agent) = self.subagents.iter_mut().find(|agent| agent.id == run) else {
@@ -549,10 +484,6 @@ impl App {
                 if !named.is_empty() {
                     agent.name = Some(named.to_owned());
                 }
-            }
-            DelegateUpdate::Finished { .. } => {
-                // Nothing terminal happens here: the verdict decides that.
-                agent.elapsed_ms = u64::try_from(agent.started.elapsed().as_millis()).unwrap_or(0);
             }
             DelegateUpdate::State { state, .. } => {
                 if agent.state.can_move_to(state) {
@@ -723,9 +654,6 @@ mod tests {
         assert_eq!(agent.answer, "partial");
         assert_eq!(agent.usage, Some((100, 20)));
 
-        app.on_delegate_update(DelegateUpdate::Finished { run });
-        // The loop ending the request does not finish the run: only a
-        // verdict does, and no verdict has landed yet.
         let agent = &app.subagents[0];
         assert_eq!(agent.status(), SubagentStatus::Running);
         assert!(agent.elapsed_ms < 60_000);
@@ -738,7 +666,6 @@ mod tests {
             run,
             text: "attempt 1 failed: timeout".to_owned(),
         });
-        app.on_delegate_update(DelegateUpdate::Finished { run });
         let agent = &app.subagents[0];
         assert_eq!(agent.state, RunState::Running);
         assert_eq!(agent.note.as_deref(), Some("attempt 1 failed: timeout"));
