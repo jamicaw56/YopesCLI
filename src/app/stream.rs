@@ -206,8 +206,14 @@ impl App {
                     .as_ref()
                     .and_then(|active| active.compacting.as_ref())
                     .map(|compaction| (compaction.split, compaction.attempts));
+                // The failed request stays behind as an empty placeholder, or
+                // as the partial text a later resume re-sends as history. Push
+                // the resume as a new message; leaving the placeholder first
+                // would send an assistant turn with no content and the
+                // provider would reject the whole retry.
                 self.active = None;
                 self.retry = None;
+                self.remove_empty_response();
                 self.resume_attempts = self.resume_attempts.saturating_add(1);
                 if self.resume_attempts > MAX_STREAM_RESUMES {
                     // Out of resumes: the stall is reported like any other
@@ -250,6 +256,19 @@ impl App {
                 });
                 if !partial {
                     self.remove_empty_response();
+                }
+                // The retry is a request of its own, but the partial assistant
+                // turn is already in the history and ends the last message
+                // before the new one. A provider rejects a trailing assistant
+                // turn for some models, so a silent resume note goes in as the
+                // user message the continuation needs.
+                if partial {
+                    let note = Message::new(
+                        Role::User,
+                        "The stream was cut short. Continue the answer from where it stopped, \
+                         without repeating what is already there.",
+                    );
+                    self.session.messages.push(note);
                 }
                 self.info(format!(
                     "The stream stalled: {message}. Continuing automatically \

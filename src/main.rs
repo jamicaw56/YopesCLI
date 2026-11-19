@@ -4,6 +4,7 @@ mod catalog;
 mod clipboard;
 mod config;
 mod credentials;
+mod delegation;
 mod diff;
 mod logos;
 mod models;
@@ -391,31 +392,46 @@ async fn run() -> Result<()> {
             }
             update = delegate_receiver.recv() => {
                 let Some(update) = update else { break; };
-                // Subagent deltas stream at the fixed cadence; a finished or
-                // failed run needs an immediate frame.
-                let finished = match &update {
-                    crate::app::DelegateUpdate::Finished { run, report, session_id, .. } => {
-                        Some((*run, report.clone(), *session_id))
-                    }
+                // Subagent deltas stream at the fixed cadence; a lifecycle
+                // move or a verdict needs an immediate frame.
+                let verdict = match &update {
+                    crate::app::DelegateUpdate::Verdict {
+                        run,
+                        state,
+                        reasons,
+                        files,
+                        report,
+                        session_id,
+                    } => Some((
+                        *run,
+                        *state,
+                        reasons.clone(),
+                        files.clone(),
+                        report.clone(),
+                        *session_id,
+                    )),
                     _ => None,
                 };
+                let state_move = matches!(&update, crate::app::DelegateUpdate::State { .. });
                 app.on_delegate_update(update);
-                if let Some((run_id, report, session_id)) = finished {
-                    // The finished run reports to the conversation that
-                    // delegated it: the answer joins that session and the
-                    // model is alerted with a fresh turn (parked while the
-                    // tab is busy).
+                if let Some((run_id, state, reasons, files, report, session_id)) = verdict {
+                    // The verdict lands in the session that delegated the
+                    // run. The run's owner comes from the persisted ledger,
+                    // so a closed or switched tab never reroutes it into
+                    // whichever conversation happens to be on screen.
                     let owner = app.tab_for_session(session_id);
                     match owner {
                         Some(owner) => app.with_tab(owner, |app| {
-                            let action = app.on_subagent_report(run_id, report);
+                            let action =
+                                app.on_subagent_verdict(run_id, state, reasons, files, report);
                             dispatch(action, app, &channels, &mut active_tasks);
                         }),
-                        None => {
-                            let action = app.on_subagent_report(run_id, report);
-                            dispatch(action, &mut app, &channels, &mut active_tasks);
-                        }
+                        None => app.info(format!(
+                            "Run {run_id} finished, but the session that delegated it is                              closed; its report is in the ledger of that session file."
+                        )),
                     }
+                    redraw_now = true;
+                } else if state_move {
                     redraw_now = true;
                 } else {
                     redraw_streamed = true;
@@ -827,7 +843,20 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 continue;
             }
         };
-        let run = app.begin_subagent(&call.id, task.clone());
+        let spec = match crate::delegation::DelegateSpec::from_call(&call, task.clone()) {
+            Ok(spec) => spec,
+            Err(message) => {
+                // A rejected call still answers, so the turn continues.
+                let _ = tools.send(ToolEvent {
+                    call,
+                    result: Err(message),
+                });
+                continue;
+            }
+        };
+        let kind = spec.kind;
+        let timeout = spec.timeout;
+        let run = app.begin_subagent(&call.id, task.clone(), kind);
         // The delegate answers immediately: the model regains control and
         // keeps working while the run streams in the sidebar. The run's
         // final answer is delivered as a report that alerts the model when
@@ -835,11 +864,13 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
         let _ = tools.send(ToolEvent {
             call,
             result: Ok(format!(
-                "Subagent run {run} started. It works in the background with the same \
-                 tools, streams in the sidebar (/agents), and its final answer is \
-                 delivered to this conversation automatically when it finishes — keep \
-                 working, do not wait for it. Address corrections or stops to it by \
-                 its run id."
+                "Subagent run {run} started (kind: {}). It works in the background with the \
+                 same tools, streams in the sidebar (/agents), and a verified report is \
+                 delivered to this conversation when it finishes — keep working, do not wait \
+                 for it. The run id addresses corrections and stops. A \"done\" from the \
+                 subagent is not completion: yopes checks the files it changed and the \
+                 commands it ran before reporting it finished.",
+                kind.label()
             )),
         });
         // The model names the task: the sidebar and the /agents rows show
@@ -864,6 +895,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
         let web_key = web_key.clone();
         let approved = approved_tools.clone();
         let root = workspace.clone();
+        // Sibling runs that will still be working after this one reports:
+        // their presence stops a finished report from reading as "all done".
+        let others_active: Vec<u64> = app.active_runs_in_owner();
         // The failover ladder: the same provider's other models first, then
         // other configured providers whose key the run can use without a
         // password. A subagent that keeps failing switches down this list
@@ -920,9 +954,19 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             // Corrections from the main agent join this conversation; the
             // stop flag ends the run cooperatively.
             let (correction_sender, mut correction_receiver) = mpsc::unbounded_channel::<String>();
-            let stop = crate::tools::register_subagent_run(run, correction_sender);
+            // Two flags: a user cancellation, and the main agent's own stop.
+            let (stop, cancelled) = crate::tools::register_subagent_run(run, correction_sender);
+            // The deadline: a run that hangs holds the coordinator's work
+            // hostage, so it ends with whatever it has and is judged on it.
+            let started = std::time::Instant::now();
+            let deadline = tokio::time::Instant::now() + timeout;
+            // What the run actually did, observed here instead of taken from
+            // its answer: the verdict is decided from this at the end.
+            let mut evidence = crate::delegation::Evidence::default();
+            let mut timed_out = false;
             let tools_enabled = mode != Mode::Chat && tools_mode.advertised();
-            let mut messages = vec![Message::new(Role::User, task)];
+            let task = spec.task.clone();
+            let mut messages = vec![Message::new(Role::User, task.clone())];
             let mut answer = String::new();
             let mut reasoning = String::new();
             let mut failed = false;
@@ -958,7 +1002,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                 u64::MAX,
                                 messages,
                                 tools_enabled,
-                                Some(crate::app::SUBAGENT_BRIEF),
+                                Some(crate::app::SUBAGENT_BRIEF.to_owned()),
                                 workspace,
                                 events,
                             )
@@ -967,8 +1011,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 };
                 let mut round_text = String::new();
                 let mut requested: Vec<ToolCall> = Vec::new();
-                while let Some(event) = receiver.recv().await {
-                    match event {
+                loop {
+                    match crate::delegation::next_before(&mut receiver, deadline).await {
+                        crate::delegation::Next::Item(event) => match event {
                         StreamEvent::Delta { text, .. } => {
                             answer.push_str(&text);
                             round_text.push_str(&text);
@@ -1022,9 +1067,20 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         }
                         StreamEvent::Done { .. } => break,
                         _ => {}
+                    },
+                        crate::delegation::Next::Closed => break,
+                        crate::delegation::Next::TimedOut => {
+                            timed_out = true;
+                            break;
+                        }
                     }
                 }
                 let _ = streamer.await;
+                if timed_out {
+                    // The deadline passed: the run ends here with what it has
+                    // and is judged on its evidence, not on a claim.
+                    break;
+                }
                 if failed {
                     // Auto-continue: a stream-level failure retries the round
                     // a few times before the run gives up, the same way the
@@ -1090,10 +1146,22 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     }
                     break;
                 }
+                if timed_out {
+                    // A deadline that passed mid-round ends the run with what
+                    // it has; the verdict names the timeout.
+                    break;
+                }
                 // Corrections sent mid-round join the conversation before the
                 // next request, so the model sees them with the tool results.
                 while let Ok(correction) = correction_receiver.try_recv() {
                     messages.push(Message::new(Role::User, correction));
+                }
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                        run,
+                        text: "cancelled by the user — answering with what it has".to_owned(),
+                    });
+                    break;
                 }
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
@@ -1108,6 +1176,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 // The assistant turn that asked for the calls, then one tool
                 // result per call, keeps the next request valid for every
                 // provider.
+                evidence.rounds += 1;
                 let mut asked = Message::new(Role::Assistant, std::mem::take(&mut round_text));
                 asked.tool_calls = Some(requested.clone());
                 messages.push(asked);
@@ -1140,6 +1209,13 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     };
                     let result = match blocked {
                         Some(message) => {
+                            // A refusal for lack of approval is what makes a
+                            // run read as blocked instead of simply empty.
+                            if needs {
+                                evidence
+                                    .blocked
+                                    .push(requested_call.function.name.clone());
+                            }
                             let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                                 run,
                                 text: format!("⚠ {} — {}", requested_call.function.name, message),
@@ -1158,6 +1234,22 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                             let task_call = requested_call.clone();
                             let web_key = web_key.clone();
                             let root = workspace.clone();
+                            // What the call is about to do, read before it
+                            // runs: the targets of a file write, and the
+                            // worktree state around a command.
+                            let writes_files = crate::app::WRITING_TOOLS
+                                .contains(&requested_call.function.name.as_str());
+                            let is_command = matches!(
+                                requested_call.function.name.as_str(),
+                                "run_command" | "bash_background"
+                            );
+                            let snapshot = writes_files.then(|| {
+                                crate::delegation::snapshot_targets(&requested_call, &root)
+                            });
+                            let before_files = is_command
+                                .then(|| crate::delegation::fingerprint(&root))
+                                .flatten();
+                            let after_root = root.clone();
                             let joined = tokio::task::spawn_blocking(move || {
                                 // A subagent's commands belong to the session
                                 // that delegated the work: an interrupt from
@@ -1181,6 +1273,42 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                 {
                                     workspace = target;
                                 }
+                            }
+                            // The evidence, observed rather than claimed.
+                            if let Some(snapshot) = snapshot {
+                                let (changes, unchanged) = crate::delegation::compare(snapshot);
+                                if changes.is_empty() && result.is_ok() {
+                                    // A write call that left the bytes alone:
+                                    // the coordinator's "it was updated" is
+                                    // worth nothing, and the run must not be
+                                    // credited for it.
+                                    evidence.noop_writes += 1;
+                                }
+                                let _ = unchanged;
+                                for change in changes {
+                                    evidence.record_change(change);
+                                }
+                            }
+                            if is_command {
+                                let command = crate::tools::command_text(&requested_call)
+                                    .unwrap_or_default();
+                                evidence
+                                    .commands
+                                    .push(crate::delegation::CommandRecord::from_result(
+                                        &command, &result,
+                                    ));
+                                match (before_files, crate::delegation::fingerprint(&after_root)) {
+                                    (Some(before), Some(after)) => {
+                                        for change in before.changed_since(&after) {
+                                            evidence.record_change(change);
+                                        }
+                                    }
+                                    (None, _) => evidence.unobserved_commands += 1,
+                                    _ => {}
+                                }
+                            }
+                            if result.is_err() {
+                                evidence.tool_errors += 1;
                             }
                             if result.is_ok()
                                 && crate::app::WRITING_TOOLS
@@ -1272,30 +1400,77 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     })
                 });
             // A failure reads as an error so the model can retry or report.
-            let report = if failed {
-                format!(
-                    "Error: {}",
-                    if failure.is_empty() {
-                        "the subagent returned no content".to_owned()
+            // The run submitted: from here on it is checked, not trusted.
+            let _ = delegate_sender.send(crate::app::DelegateUpdate::State {
+                run,
+                state: crate::delegation::RunState::Submitted,
+            });
+            // The verify command runs here, in the run's own workspace, so
+            // the coordinator gets a result it did not have to ask for.
+            let mut verify = None;
+            let mut verify_skipped = None;
+            match &spec.verify_command {
+                Some(command) => {
+                    let args = serde_json::json!({ "command": command }).to_string();
+                    let call = ToolCall::new("verify", "run_command", args);
+                    let root = workspace.clone();
+                    let joined = tokio::task::spawn_blocking(move || {
+                        tools::execute(&call, None, &root)
+                    })
+                    .await;
+                    let result = match joined {
+                        Ok(Ok(output)) => Ok(output),
+                        Ok(Err(error)) => Err(format!("{error:#}")),
+                        Err(join) => Err(format!("tool task failed: {join}")),
+                    };
+                    verify = Some(crate::delegation::CommandRecord::from_result(
+                        command, &result,
+                    ));
+                }
+                None => {
+                    verify_skipped = Some(
+                        "no verify_command was given, so nothing beyond the evidence was run"
+                            .to_owned(),
+                    );
+                }
+            }
+            let answered = if answer.trim().is_empty() {
+                fallback_text.unwrap_or_default()
+            } else {
+                answer.clone()
+            };
+            let outcome = crate::delegation::RunOutcome {
+                evidence: evidence.clone(),
+                answer: answered,
+                cancelled: cancelled.load(std::sync::atomic::Ordering::Relaxed),
+                timed_out: timed_out.then_some(timeout),
+                failure: if failed && !timed_out {
+                    Some(if failure.is_empty() {
+                        "the run failed without a message".to_owned()
                     } else {
                         failure
-                    }
-                )
-            } else if !answer.trim().is_empty() {
-                // The run id rides with the answer, so the main agent can
-                // address corrections and stops at this run.
-                format!("[subagent run {run}] {}", answer.trim())
-            } else if let Some(text) = fallback_text {
-                format!(
-                    "[subagent run {run}] worked but never wrote a final answer; what it did:\n\n{text}"
-                )
-            } else {
-                "Error: the subagent returned no content".to_owned()
+                    })
+                } else {
+                    None
+                },
+                verify,
+                verify_skipped,
             };
-            let _ = delegate_sender.send(crate::app::DelegateUpdate::Finished {
+            let verdict = crate::delegation::verdict(kind, &spec.expect_files, &outcome);
+            let _ = delegate_sender.send(crate::app::DelegateUpdate::Verdict {
                 run,
-                failed,
-                report,
+                state: verdict.state,
+                reasons: verdict.reasons.clone(),
+                files: outcome.evidence.changed_paths(),
+                report: crate::delegation::report(
+                    run,
+                    &spec.task,
+                    kind,
+                    &verdict,
+                    &outcome,
+                    started.elapsed(),
+                    &others_active,
+                ),
                 session_id,
             });
         });

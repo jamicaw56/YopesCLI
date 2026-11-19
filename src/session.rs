@@ -169,6 +169,10 @@ pub struct Session {
     /// session, so naming fires once per run instead of every turn.
     #[serde(skip)]
     pub auto_named: bool,
+    /// Delegated runs this session started: the coordinator's ledger, so the
+    /// state of every run survives a restart and is never assumed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegations: Vec<crate::delegation::DelegationRecord>,
 }
 
 impl Default for Session {
@@ -200,6 +204,7 @@ impl Session {
             summary: None,
             tasks: Vec::new(),
             auto_named: false,
+            delegations: Vec::new(),
         }
     }
 
@@ -227,6 +232,10 @@ impl Session {
             );
         }
         session.repair_messages();
+        // No run outlives the process that drove it: one the file remembers
+        // as active was interrupted, and the ledger says so instead of the
+        // coordinator assuming it will still report.
+        crate::delegation::restore(&mut session.delegations);
         Ok(session)
     }
 

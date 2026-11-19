@@ -331,7 +331,20 @@ impl App {
         self.next_request_id = self.next_request_id.wrapping_add(1);
         let request_id = self.next_request_id;
         let tools_enabled = self.mode != Mode::Chat && self.tools_mode.advertised();
-        let mode_note = self.mode.instruction(self.tools_mode);
+        // The system note: the mode's instruction, then the delegation
+        // ledger. The ledger is rebuilt here from the session's records, so
+        // every request carries the true state of every delegated run, even
+        // after compaction dropped the messages that mentioned them.
+        let mut notes: Vec<String> = Vec::new();
+        if let Some(instruction) = self.mode.instruction(self.tools_mode) {
+            notes.push(instruction.to_owned());
+        }
+        if let Some(ledger) = self.delegate_ledger_note() {
+            notes.push(ledger);
+        }
+        let mode_note = (!notes.is_empty()).then(|| notes.join("
+
+"));
         let prompt_chars = tools::system_prompt(tools_enabled, self.working_dir())
             .chars()
             .count()
@@ -339,7 +352,9 @@ impl App {
                 .backend
                 .system_prompt()
                 .map_or(0, |prompt| prompt.chars().count() + 2)
-            + mode_note.map_or(0, |note| note.chars().count() + 2)
+            + mode_note
+                .as_ref()
+                .map_or(0, |note| note.chars().count() + 2)
             + messages
                 .iter()
                 .map(|message| {
@@ -786,11 +801,38 @@ impl App {
         if self.user_command_running {
             self.user_command_running = false;
         }
-        self.info("Interrupted. Running commands were stopped.");
+        // The delegated runs this session started stop too: an interrupt that
+        // leaves them burning tokens in the background is not an interrupt.
+        // They end with what they have and report as cancelled.
+        let cancelled = self.cancel_owned_runs();
+        self.info(if cancelled > 0 {
+            format!("Interrupted. Running commands were stopped and {cancelled} agent run(s) cancelled.")
+        } else {
+            "Interrupted. Running commands were stopped.".to_owned()
+        });
         self.save_session();
         // The kill goes through the event loop: the registry is keyed by
         // session id, so only this tab's commands die.
         Action::KillCommands(self.session.id)
+    }
+
+    /// Ask every active run this session owns to stop, and flag them so the
+    /// UI shows what happened before the reports land. Returns how many.
+    pub(crate) fn cancel_owned_runs(&mut self) -> usize {
+        let runs = self.active_runs_in_owner();
+        if runs.is_empty() {
+            return 0;
+        }
+        for run in &runs {
+            if let Some(agent) = self.subagents.iter_mut().find(|agent| agent.id == *run) {
+                agent.cancel_requested = true;
+            }
+        }
+        let cancelled = tools::cancel_runs(&runs);
+        // Those runs report as cancelled rather than as a fresh turn: the
+        // interrupt must not be answered by the model announcing success.
+        self.cancelling_runs.extend(runs);
+        cancelled
     }
 
     /// Forget the key stored for one endpoint, resetting the session when it is

@@ -352,6 +352,9 @@ impl App {
                 self.info("Finish the current turn before closing this tab.");
                 return;
             }
+            // The runs it owns die with it: nothing would route their reports
+            // once the session is gone, and they would keep spending tokens.
+            self.cancel_owned_runs();
             self.save_session();
             self.stash();
             self.tabs.remove(index);
@@ -363,7 +366,10 @@ impl App {
             self.info("That tab is busy; finish its turn before closing it.");
             return;
         }
-        self.with_tab(index, App::save_session);
+        self.with_tab(index, |app| {
+            app.cancel_owned_runs();
+            app.save_session()
+        });
         self.tabs.remove(index);
         if self.tab > index {
             self.tab -= 1;

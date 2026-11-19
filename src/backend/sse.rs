@@ -38,6 +38,35 @@ impl std::error::Error for Stalled {}
 /// connection quietly truncated the reply and the turn looked finished.
 const STREAM_CUT_SHORT: &str = "the provider closed the stream before the response finished";
 
+/// Whether a transport-level failure means the body was cut short rather
+/// than the provider refusing the request: a dropped connection, a reset, a
+/// proxy that closed mid-body (the `unexpected EOF during chunk size line`
+/// reqwest reports), or a body read that failed halfway.
+///
+/// These arrive from the body stream itself, before any completion marker, so
+/// they are stalls worth resuming: treating them as hard errors ended turns
+/// that a retry would have finished.
+fn transport_failure(error: &anyhow::Error) -> bool {
+    if let Some(io) = error.downcast_ref::<std::io::Error>() {
+        return !matches!(io.kind(), std::io::ErrorKind::InvalidData);
+    }
+    if let Some(request) = error.downcast_ref::<reqwest::Error>() {
+        return request.is_body() || request.is_decode() || request.is_timeout();
+    }
+    // A decode error wraps the io error that caused it; the message names it
+    // even when the concrete type was boxed away.
+    let text = format!("{error:#}").to_ascii_lowercase();
+    const CUT_SHORT: [&str; 6] = [
+        "unexpected eof",
+        "error reading a body from connection",
+        "connection reset",
+        "connection closed",
+        "incomplete message",
+        "body write aborted",
+    ];
+    CUT_SHORT.iter().any(|phrase| text.contains(phrase))
+}
+
 pub(super) async fn consume_lines<F>(response: Response, mut on_line: F) -> Result<()>
 where
     F: FnMut(&str) -> Result<bool>,
@@ -46,7 +75,19 @@ where
     let mut buffer = Vec::new();
     loop {
         let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
-            Ok(Some(chunk)) => chunk?,
+            Ok(Some(Ok(chunk))) => chunk,
+            // The body read failed halfway: the same cut-short reply a
+            // closed stream gives, so the turn resumes instead of dying.
+            Ok(Some(Err(error))) => {
+                let error = anyhow::Error::new(error);
+                if transport_failure(&error) {
+                    return Err(Stalled(format!(
+                        "the response body was cut short mid-stream: {error}"
+                    ))
+                    .into());
+                }
+                return Err(error.context("reading the response stream"));
+            }
             // The stream ended: flush a last line that had no trailing
             // newline, then report the cut-short reply below.
             Ok(None) => break,
@@ -683,7 +724,7 @@ pub(super) fn parse_gemini_line(
 mod tests {
     use super::{
         OpenAiState, ParsedEvent, parse_anthropic_line, parse_gemini_line, parse_ollama_line,
-        parse_openai_line, progress_detail,
+        parse_openai_line, progress_detail, transport_failure,
     };
     use crate::backend::retry::response_error_detail;
 
@@ -1024,4 +1065,30 @@ mod tests {
         assert_eq!(calls[0].function.name, "list_dir");
         assert!(calls[0].function.arguments.contains(r#""path":".""#));
     }
+    /// The truncated-body error the user kept hitting must be a resumable
+    /// stall, not a hard failure: a proxy or provider that closes mid-body
+    /// cut the reply short, and the resume ladder finishes it.
+    #[test]
+    fn a_cut_short_body_is_a_stall_and_a_rejection_is_not() {
+        let cut = anyhow::anyhow!(
+            "error decoding response body: error reading a body from connection:              unexpected EOF during chunk size line"
+        );
+        assert!(transport_failure(&cut), "{cut:#}");
+        let reset = anyhow::anyhow!("connection reset by peer");
+        assert!(transport_failure(&reset));
+        let io = anyhow::Error::new(std::io::Error::other("unexpected end of file"));
+        assert!(transport_failure(&io));
+
+        // A provider refusing the request is a real error, reported as one.
+        let rejected = anyhow::anyhow!(
+            "OpenAI-compatible API returned 401: invalid api key"
+        );
+        assert!(!transport_failure(&rejected), "{rejected:#}");
+        let bad_json = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        ));
+        assert!(!transport_failure(&bad_json));
+    }
+
 }

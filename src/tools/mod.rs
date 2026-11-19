@@ -40,7 +40,7 @@ pub(crate) use shell::kill_spawned_commands;
 pub(crate) use shell::poll_bash_jobs;
 
 mod subagents;
-pub(crate) use subagents::{register_subagent_run, unregister_subagent_run};
+pub(crate) use subagents::{cancel_runs, register_subagent_run, unregister_subagent_run};
 
 pub(crate) use talk::{TalkRequest, install as install_talk};
 

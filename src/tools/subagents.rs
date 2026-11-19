@@ -19,7 +19,11 @@ use super::parse;
 /// One running subagent: where corrections land and how it is asked to stop.
 struct SubagentRun {
     corrections: mpsc::UnboundedSender<String>,
+    /// The main agent's own stop request.
     stop: Arc<AtomicBool>,
+    /// The user's cancellation (Esc, or the tab closing): the run ends with
+    /// what it has and reports as cancelled, not stopped.
+    cancelled: Arc<AtomicBool>,
 }
 
 static SUBAGENT_RUNS: OnceLock<Mutex<HashMap<u64, SubagentRun>>> = OnceLock::new();
@@ -31,20 +35,23 @@ fn runs() -> MutexGuard<'static, HashMap<u64, SubagentRun>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Register one running subagent: returns the stop flag its task watches.
+/// Register one running subagent: returns the stop flag its task watches,
+/// and the cancel flag the user's Esc and a closing tab set.
 pub(crate) fn register_subagent_run(
     id: u64,
     corrections: mpsc::UnboundedSender<String>,
-) -> Arc<AtomicBool> {
+) -> (Arc<AtomicBool>, Arc<AtomicBool>) {
     let stop = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(AtomicBool::new(false));
     runs().insert(
         id,
         SubagentRun {
             corrections,
             stop: stop.clone(),
+            cancelled: cancelled.clone(),
         },
     );
-    stop
+    (stop, cancelled)
 }
 
 /// Forget one finished subagent: corrections and stops answer so from here.
@@ -101,4 +108,22 @@ pub(super) fn subagent_stop(arguments: &str) -> Result<String> {
         "Stop requested for subagent {}; it answers with what it has.",
         args.run
     ))
+}
+
+/// Cancel the given runs: each ends with what it has and reports as
+/// cancelled. Runs that already finished answer so and are skipped, so a
+/// second Esc is harmless. Returns how many were signalled.
+///
+/// Nothing here waits: a signalled run reports through the delegate channel
+/// like any other, and the report routes to the session that owns it.
+pub(crate) fn cancel_runs(runs_to_stop: &[u64]) -> usize {
+    let mut running = runs();
+    let mut cancelled = 0;
+    for id in runs_to_stop {
+        if let Some(run) = running.get_mut(id) {
+            run.cancelled.store(true, Ordering::Relaxed);
+            cancelled += 1;
+        }
+    }
+    cancelled
 }

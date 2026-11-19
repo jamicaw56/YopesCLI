@@ -373,7 +373,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 // model-given name instead of the raw task text.
                 if call.function.name == "delegate" {
                     if let Some(agent) = app.subagent_for_call(&call.id) {
-                        let (glyph, color) = match agent.status {
+                        let (glyph, color) = match agent.status() {
                             crate::app::SubagentStatus::Running => (spinner(app.spinner), accent()),
                             crate::app::SubagentStatus::Done => ("✓", muted()),
                             crate::app::SubagentStatus::Failed => ("✗", error()),
@@ -383,7 +383,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                             Style::default().fg(color),
                         ));
                         spans.push(Span::styled(
-                            format!("  subagent · {}", agent.row_label()),
+                            format!(
+                                "  subagent · {} · {}",
+                                agent.row_label(),
+                                agent.state.label()
+                            ),
                             Style::default().fg(muted()),
                         ));
                         slots.push(Slot::Line(Line::from(spans)));

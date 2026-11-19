@@ -42,6 +42,9 @@ mod tabs;
 mod talk;
 mod turn;
 
+#[cfg(test)]
+mod orchestration_tests;
+
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
 pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, SET_KEYS, matching_commands};
 pub(crate) use delegate::{
@@ -303,6 +306,9 @@ pub struct App {
     /// Talk messages from other tabs waiting to land: parked while this tab
     /// is busy, delivered at the next idle point like the subagent reports.
     pub pending_talks: VecDeque<String>,
+    /// Runs the user cancelled here: their reports land silently, because a
+    /// cancellation must not be answered by a turn that claims success.
+    pub cancelling_runs: Vec<u64>,
     /// Diffs for write and edit calls, shown under their results.
     pub changes: HashMap<String, ChangeReport>,
     /// Tool results the user expanded to see the full output.
@@ -443,6 +449,7 @@ impl App {
             running_delegates: Vec::new(),
             pending_reports: VecDeque::new(),
             pending_talks: VecDeque::new(),
+            cancelling_runs: Vec::new(),
             changes: HashMap::new(),
             expanded: HashSet::new(),
             output_rows: Vec::new(),
@@ -503,7 +510,7 @@ impl App {
     pub(crate) fn any_subagent_running(&self) -> bool {
         self.subagents
             .iter()
-            .any(|agent| agent.status == SubagentStatus::Running)
+            .any(|agent| agent.status() == SubagentStatus::Running)
     }
 
     pub fn tavily_key(&self) -> Option<&str> {
