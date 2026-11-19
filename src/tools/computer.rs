@@ -28,8 +28,12 @@ struct ComputerUseArgs {
     screen: u32,
 }
 
+/// The fields are read by the Windows script builder and by the tests. A
+/// non-test Linux build has neither, so the enum is allowed to keep them:
+/// they are what `serde` deserializes the model's arguments into.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 enum Step {
     /// Move the pointer, in screen pixels.
     Move { x: i32, y: i32 },
