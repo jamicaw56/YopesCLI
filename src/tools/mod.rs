@@ -9,6 +9,7 @@
 //! (search, fetch) and `todo`. `ignore` holds the `.yopesignore` filter the
 //! filesystem walkers apply.
 
+mod computer;
 mod definitions;
 mod files;
 mod ignore;
@@ -27,6 +28,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) use computer::screenshot_path;
 pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets, move_target};
 pub(crate) use ignore::Ignore;
@@ -63,7 +65,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 22] = [
+pub const TOOL_NAMES: [&str; 23] = [
     "list_dir",
     "read_file",
     "multi_read",
@@ -86,6 +88,7 @@ pub const TOOL_NAMES: [&str; 22] = [
     "delegate",
     "check_session",
     "talk_to",
+    "computer_use",
 ];
 
 #[derive(Debug)]
@@ -169,6 +172,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         // calls send a request there and answer with what happened.
         "check_session" => talk::check_session(),
         "talk_to" => talk::talk_to(&call.function.arguments),
+        "computer_use" => computer::computer_use(&call.function.arguments),
         // Handled by the session loop: the subagent needs the backend.
         "delegate" => bail!("delegate cannot run outside the session loop"),
         other => bail!("unknown tool `{other}`"),

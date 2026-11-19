@@ -35,6 +35,10 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         help_row("/", "open command palette"),
         help_row("tab", "cycle mode: build · plan · chat / complete command"),
         help_row("shift+tab", "cycle permission: on · yolo · ask"),
+        help_row(
+            "set tools",
+            "permission mode; `dangerous` drops every approval prompt",
+        ),
         help_row("↑ ↓", "palette, conversation, or diff"),
         help_row("esc", "stop streaming / interrupt tools / close"),
         help_row("enter", "run the pending tool"),

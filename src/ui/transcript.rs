@@ -350,20 +350,6 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
         }
-        // Pasted screenshots show up as pixel art directly under the text.
-        for image in &message.images {
-            match app.cached_image(&image.name) {
-                Some(rows) => {
-                    for line in rows {
-                        slots.push(Slot::Line(line.clone()));
-                    }
-                }
-                None => slots.push(Slot::Line(Line::styled(
-                    format!(" {}", image.name),
-                    Style::default().fg(muted()),
-                ))),
-            }
-        }
         // Stats belong under a finished answer, not under a tool-call turn.
         if let Some(usage) = message.usage {
             if (!message.content.is_empty() || !message.reasoning.is_empty()) && !has_calls {

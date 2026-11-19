@@ -345,11 +345,36 @@ pub(super) fn anthropic_request_payload(
                     }));
                     continue;
                 }
-                let tool_result_block = serde_json::json!({
-                    "type": "tool_result",
-                    "tool_use_id": call_id,
-                    "content": message.content,
-                });
+                // A screenshot a tool took (read_image, computer_use) rides in
+                // the tool result itself: text block first, then one image
+                // block per attachment.
+                let tool_result_block = if message.images.is_empty() {
+                    serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": message.content,
+                    })
+                } else {
+                    let mut blocks = vec![serde_json::json!({
+                        "type": "text",
+                        "text": message.content,
+                    })];
+                    for image in &message.images {
+                        blocks.push(serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image.data,
+                            }
+                        }));
+                    }
+                    serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": blocks,
+                    })
+                };
                 if let Some(last) = anthropic_messages
                     .last_mut()
                     .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
@@ -560,18 +585,29 @@ pub(super) fn gemini_request_payload(
                         }
                     }
                 });
+                // Gemini carries a tool's screenshot as a sibling inline part
+                // in the same user turn.
+                let mut parts = vec![part];
+                for image in &message.images {
+                    parts.push(serde_json::json!({
+                        "inlineData": {
+                            "mimeType": "image/png",
+                            "data": image.data,
+                        }
+                    }));
+                }
                 if let Some(last) = contents
                     .last_mut()
                     .filter(|c| c.get("role").and_then(|r| r.as_str()) == Some("user"))
                 {
                     if let Some(arr) = last.get_mut("parts").and_then(|p| p.as_array_mut()) {
-                        arr.push(part);
+                        arr.extend(parts);
                         continue;
                     }
                 }
                 contents.push(serde_json::json!({
                     "role": "user",
-                    "parts": [part],
+                    "parts": parts,
                 }));
             }
         }
@@ -752,6 +788,7 @@ mod tests {
         message.images.push(ImageAttachment {
             name: "shot.png".to_owned(),
             data: "aWNvbg==".to_owned(),
+            thumbnail: false,
         });
         let messages = vec![message];
 
@@ -819,6 +856,7 @@ mod tests {
         tool.images = vec![ImageAttachment {
             name: "shot.png".to_owned(),
             data: "aWNvbg==".to_owned(),
+            thumbnail: false,
         }];
         let messages = vec![
             Message::new(Role::User, "what is in shot.png?"),
@@ -873,6 +911,7 @@ mod tests {
         first.images = vec![ImageAttachment {
             name: "a.png".to_owned(),
             data: "aW1hZ2U=".to_owned(),
+            thumbnail: false,
         }];
         let messages = vec![
             Message::new(Role::User, "look at a.png and b.txt"),

@@ -61,6 +61,15 @@ pub(crate) use connect::state::{
 pub use format::{format_bytes, format_cost, format_duration_ms, format_tokens};
 pub use mode::{Mode, ToolsMode};
 
+/// The screenshot a tool result points at, for the model to see.
+///
+/// `read_image` names its file in the arguments and `computer_use` in its
+/// result text; both resolve against the scoped workspace, so the caller sets
+/// that scope first.
+pub(crate) fn tool_result_attachment(call: &ToolCall, content: &str) -> Option<ImageAttachment> {
+    images::tool_image_attachment(call, content)
+}
+
 use tabs::TabState;
 
 /// Fraction of the model context window where the compaction chance begins.

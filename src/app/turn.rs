@@ -514,14 +514,14 @@ impl App {
         let value = value.trim().to_ascii_lowercase();
         if value.is_empty() {
             self.info(format!(
-                "Tools: {} — {} · /set tools on|yolo|ask|off",
+                "Tools: {} — {} · /set tools on|yolo|ask|off|dangerous",
                 self.tools_mode.label(),
                 self.tools_mode.detail()
             ));
             return;
         }
         let Some(mode) = ToolsMode::parse(&value) else {
-            self.error("Usage: /set tools on|yolo|ask|off");
+            self.error("Usage: /set tools on|yolo|ask|off|dangerous");
             return;
         };
         self.tools_mode = mode;
@@ -542,6 +542,14 @@ impl App {
             mode.label(),
             mode.detail()
         ));
+        if mode == ToolsMode::Dangerous {
+            // Approval is off for everything, so name what that means before
+            // the first automated click or command lands.
+            self.info(
+                "Dangerous: no tool asks for approval, computer_use included. \
+                 /set tools on restores the prompts; Shift+Tab leaves this mode.",
+            );
+        }
     }
 
     /// `/set theme [name]`: the color theme, saved to the config.
@@ -1306,6 +1314,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn dangerous_mode_skips_every_approval_including_desktop_control() {
+        let mut app = test_app();
+        app.command("/set tools dangerous");
+        assert_eq!(app.tools_mode, ToolsMode::Dangerous);
+        // The one call that always asks in every other mode runs unattended.
+        let desktop = ToolCall::new(
+            "call-cu",
+            "computer_use",
+            r#"{"action":"open the menu","actions":[{"type":"click","x":4,"y":5}]}"#,
+        );
+        assert!(tools::requires_approval(&desktop));
+        assert!(!app.tools_mode.needs_approval(&desktop, &HashSet::new()));
+        // Turning it off is one command away and restores the prompt.
+        app.command("/set tools on");
+        assert!(app.tools_mode.needs_approval(&desktop, &HashSet::new()));
+    }
+
+    #[test]
     fn model_end_sse_shows_elapsed_time_since_prompt() {
         let mut app = test_app();
         app.input.set("hello assistant");
@@ -1452,6 +1478,7 @@ pub(crate) mod tests {
         first.images = vec![crate::session::ImageAttachment {
             name: "shot.png".to_owned(),
             data: "not-base64".to_owned(),
+            thumbnail: false,
         }];
         app.session.messages.push(first);
         app.session

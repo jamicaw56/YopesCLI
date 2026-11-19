@@ -37,6 +37,12 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         ToolsMode::Off => {
             title_spans.push(Span::styled(" [OFF]", Style::default().fg(dim())));
         }
+        ToolsMode::Dangerous => {
+            title_spans.push(Span::styled(
+                " [DANGER]",
+                Style::default().fg(error()).add_modifier(Modifier::BOLD),
+            ));
+        }
         ToolsMode::On => {}
     }
     title_spans.push(Span::styled("  ", Style::default()));

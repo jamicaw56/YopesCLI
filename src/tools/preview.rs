@@ -96,6 +96,22 @@ pub fn preview(call: &ToolCall) -> String {
                 .map_or(0, Vec::len);
             format!("{items} items")
         }
+        "computer_use" => {
+            let action = clip(&string("action"), 120);
+            let steps = arguments
+                .as_ref()
+                .and_then(|value| value.get("actions"))
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            if steps == 0 {
+                format!("screenshot · {action}")
+            } else {
+                format!(
+                    "{steps} step{} · {action}",
+                    if steps == 1 { "" } else { "s" }
+                )
+            }
+        }
         _ => clip(call.function.arguments.trim(), 160),
     }
 }

@@ -422,9 +422,12 @@ impl App {
             }
             Err(error) => format!("Error: {error}"),
         };
-        let images = if event.call.function.name == "read_image" {
+        let images = if matches!(
+            event.call.function.name.as_str(),
+            "read_image" | "computer_use"
+        ) {
             tools::scoped_workspace(&self.working_dir, || {
-                images::tool_image_attachment(&event.call)
+                images::tool_image_attachment(&event.call, &content)
             })
             .into_iter()
             .collect()

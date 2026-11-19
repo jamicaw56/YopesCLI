@@ -8,6 +8,7 @@ A better coding CLI, built with Rust, Ratatui, and Tokio. [Discord](https://disc
 - Tool calling for reading, writing, editing, and running commands, with per-tool approval and a diff viewer.
 - A real delegate system: `delegate` hands a subtask to a subagent on the same provider. Runs stream live in a right-hand sidebar, stack in parallel, and every response is readable with `/agents`.
 - Image pasting: `Ctrl+V` and right-click attach clipboard images, file paths paste as attachments, and `read_image` sends screenshots to vision models.
+- Desktop control with `computer_use` (Windows): mouse moves, clicks, scrolls, drags, typed text and key chords, with a fresh screenshot attached after every call so a vision model sees the result. It asks before each call and is off in plan mode; `/set tools dangerous` drops every approval prompt, that one included.
 - A quiet interface with a popout command palette and nine built-in themes, each with a two-accent color system (`/set theme`).
 - Provider and model discovery from [models.dev](https://models.dev) plus custom endpoints with `/provider`.
 - One-command self-updates with `yopes update`.

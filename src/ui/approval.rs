@@ -227,6 +227,40 @@ pub(super) fn tool_result_lines(
             body.extend(diff_lines.into_iter().take(remaining));
         }
     }
+    // A screenshot a tool took (read_image, computer_use) is drawn inside the
+    // frame as pixel art, capped while folded so a desktop capture cannot push
+    // the conversation off screen. Read-only tools only: a pasted image rides
+    // on a user message and the transcript draws that.
+    for image in message.images.iter().filter(|image| {
+        image.thumbnail || {
+            matches!(
+                call_name,
+                Some("read_image") | Some("computer_use") | Some("multi_read")
+            )
+        }
+    }) {
+        let rows_shown = match app.cached_image(&image.name) {
+            Some(rows) => rows,
+            None => {
+                body.push(Line::styled(
+                    format!(" {}", image.name),
+                    Style::default().fg(muted()),
+                ));
+                continue;
+            }
+        };
+        let visible = if expanded {
+            rows_shown
+        } else if image.thumbnail {
+            &rows_shown[..rows_shown.len().min(4)]
+        } else {
+            rows_shown
+        };
+        body.extend(visible.iter().cloned());
+        if visible.len() < rows_shown.len() {
+            cut = true;
+        }
+    }
     if body.is_empty() {
         body.push(Line::styled(" ", Style::default().fg(muted())));
     }

@@ -5,8 +5,110 @@
 
 use serde_json::{Value, json};
 
+/// The `computer_use` schema. It lives in its own literal because the
+/// serde_json macro has a fixed recursion budget, and this one item is as
+/// deep as the rest of the tool list put together.
+fn computer_use_schema() -> Value {
+    json!(        {
+        "type": "function",
+        "function": {
+            "name": "computer_use",
+            "description": "Drive the desktop on Windows: move the mouse, click, scroll, drag, type text and press keys, then see the result. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "What this call is trying to do, in one line. Shown to the user in the approval prompt and kept in the result."
+                    },
+                    "screen": {
+                        "type": "integer",
+                        "description": "Display to capture, 0-based, for multi-monitor desktops. Defaults to 0."
+                    },
+                    "actions": {
+                        "type": "array",
+                        "description": "Steps to run in order, at most 32. Leave empty to only take a screenshot and look.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "move",
+                                        "click",
+                                        "double_click",
+                                        "scroll",
+                                        "drag",
+                                        "type",
+                                        "key"
+                                    ],
+                                    "description": "The step kind."
+                                },
+                                "x": {
+                                    "type": "integer",
+                                    "description": "Screen pixel x for move, click or scroll."
+                                },
+                                "y": {
+                                    "type": "integer",
+                                    "description": "Screen pixel y for move, click or scroll."
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "middle"],
+                                    "description": "Mouse button for click or drag. Defaults to left."
+                                },
+                                "count": {
+                                    "type": "integer",
+                                    "description": "Clicks to send at one spot, 1 to 3. Defaults to 1."
+                                },
+                                "amount": {
+                                    "type": "integer",
+                                    "description": "Scroll notches: positive scrolls up, negative down, -10 to 10."
+                                },
+                                "from_x": {
+                                    "type": "integer",
+                                    "description": "Drag start x."
+                                },
+                                "from_y": {
+                                    "type": "integer",
+                                    "description": "Drag start y."
+                                },
+                                "to_x": {
+                                    "type": "integer",
+                                    "description": "Drag end x."
+                                },
+                                "to_y": {
+                                    "type": "integer",
+                                    "description": "Drag end y."
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": "Text to type into whatever holds focus."
+                                },
+                                "keys": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "description": "Named keys to press, such as ENTER, TAB, ESC or F5."
+                                },
+                                "chord": {
+                                    "type": "string",
+                                    "description": "A key chord such as ctrl+s, ctrl+shift+t or alt+tab."
+                                }
+                            },
+                            "required": ["type"]
+                        }
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    })
+}
+
 pub fn definitions() -> Value {
-    json!([
+    let mut value = json!([
         {
             "type": "function",
             "function": {
@@ -485,5 +587,11 @@ pub fn definitions() -> Value {
                 }
             }
         }
-    ])
+    ]);
+    // One schema per literal: the macro expands each item itself, so adding
+    // the deepest tool here would exhaust the recursion limit.
+    if let Some(items) = value.as_array_mut() {
+        items.push(computer_use_schema());
+    }
+    value
 }

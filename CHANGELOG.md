@@ -49,6 +49,22 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- A `dangerous` permission mode (`/set tools dangerous`): every tool call runs
+  unattended, `computer_use` included, so no approval prompt ever appears.
+  It is deliberately outside the Shift+Tab cycle - a mode that hands the model
+  the mouse and keyboard takes a typed command, not a key next to the one
+  people press all day. The header shows `[DANGER]`, the build-mode note warns
+  the model to take the least destructive action, and `/set tools on` or one
+  Shift+Tab restores the prompts.
+- A `computer_use` tool: drive the real desktop on Windows. One call runs a
+  list of mouse and keyboard actions (move, click, double-click, scroll, drag,
+  type text, press named keys or chords such as `ctrl+s`), then attaches a
+  fresh screenshot of the result to the tool message, so a vision-capable
+  model sees what its click did and can aim the next one. Coordinates are
+  screen pixels, `screen` picks a display on multi-monitor desktops, the tool
+  is denied in plan mode, every call asks for approval unless the user allows
+  it with `a`, yolo or dangerous mode, and screenshots land in the temp root. The captured frame shows in the
+  transcript as a capped pixel-art thumbnail.
 - A `.yopesignore` file at the workspace root filters the filesystem walks:
   `glob`, `grep`, `list_dir` and `multi_read` with `all: true` skip whatever it
   names, so build output and vendored trees stop eating the context. The format

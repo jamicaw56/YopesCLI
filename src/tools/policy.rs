@@ -28,6 +28,12 @@ pub fn requires_approval(call: &ToolCall) -> bool {
         // delegate call does.
         return true;
     }
+    if call.function.name == "computer_use" {
+        // Mouse and keyboard input reaches everything the user could touch,
+        // so this one asks by default. Only an explicit "always allow" (the
+        // `a` key), yolo, or dangerous mode gets past it.
+        return true;
+    }
     if matches!(
         call.function.name.as_str(),
         "run_command" | "bash_background"
@@ -168,6 +174,10 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              arrives, it is another open session in the terminal talking to you. Read what \
              they ask and reply directly using `talk_to(tab: N, message: \"...\")`. Never ignore \
              it, and do not repeat in conversational text to the user instead of replying to tab N. \
+             On Windows, computer_use drives the real desktop: it takes a screenshot, runs mouse \
+             or keyboard actions, then attaches a second screenshot of the result, so aim by the \
+             pixels you saw and describe what the new screenshot shows. Every call asks the user \
+             first; one call should do one visible thing. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \

@@ -61,11 +61,18 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Read the pixels of a `read_image` result. The tool's text result cannot
-/// carry binary data, so the app attaches the PNG to the tool message itself.
-pub(super) fn tool_image_attachment(call: &ToolCall) -> Option<ImageAttachment> {
-    let value: serde_json::Value = serde_json::from_str(&call.function.arguments).ok()?;
-    let path = value.get("path")?.as_str()?.trim();
+/// Read the pixels of a `read_image` or `computer_use` result. The tool's text
+/// result cannot carry binary data, so the app attaches the PNG to the tool
+/// message itself.
+pub(super) fn tool_image_attachment(call: &ToolCall, content: &str) -> Option<ImageAttachment> {
+    let path = if call.function.name == "computer_use" {
+        // The result names the screenshot it wrote after the actions.
+        crate::tools::screenshot_path(content)?
+    } else {
+        let value: serde_json::Value = serde_json::from_str(&call.function.arguments).ok()?;
+        value.get("path")?.as_str()?.trim().to_owned()
+    };
+    let path = path.trim();
     if path.is_empty() {
         return None;
     }
@@ -95,15 +102,39 @@ pub(super) fn tool_image_attachment(call: &ToolCall) -> Option<ImageAttachment> 
         || "image.png".to_owned(),
         |name| name.to_string_lossy().into_owned(),
     );
+    // A full desktop screenshot would eat a whole terminal of transcript, so
+    // it arrives as a small pixel-art thumbnail (still the full image to the
+    // model). Expansion reveals the rest of the rows.
+    let thumbnail = call.function.name == "computer_use";
     Some(ImageAttachment {
         name,
         data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        thumbnail,
     })
+}
+
+/// The rows of one attachment.
+fn rendered_rows(image: &ImageAttachment, width: u16) -> Vec<Line<'static>> {
+    let unreadable = || {
+        vec![Line::styled(
+            " (image could not be shown)",
+            Style::default().fg(Color::DarkGray),
+        )]
+    };
+    let Some(rendered) = base64::engine::general_purpose::STANDARD
+        .decode(image.data.trim())
+        .ok()
+        .and_then(|bytes| image::load_from_memory(&bytes).ok())
+    else {
+        return unreadable();
+    };
+    build_rows(&rendered.into_rgba8(), width, image.thumbnail)
 }
 
 /// Half-block pixel art of a pasted image: each TUI row shows two pixel
 /// lines at once, through `▄` glyphs with per-span foreground and background.
-pub(super) fn build_image_rows(encoded: &str, cols: u16) -> Vec<Line<'static>> {
+#[cfg(test)]
+fn build_image_rows(encoded: &str, cols: u16) -> Vec<Line<'static>> {
     let unreadable = || {
         Line::styled(
             " (image could not be shown)",
@@ -118,12 +149,27 @@ pub(super) fn build_image_rows(encoded: &str, cols: u16) -> Vec<Line<'static>> {
         Ok(image) => image.into_rgba8(),
         Err(_) => return vec![unreadable()],
     };
+    build_rows(&rendered, cols, false)
+}
+
+/// Half-block rows of decoded pixels. A thumbnail caps the height so a
+/// desktop screenshot does not flood the transcript.
+pub(super) fn build_rows(
+    rendered: &image::RgbaImage,
+    cols: u16,
+    thumbnail: bool,
+) -> Vec<Line<'static>> {
     let cols = usize::from(cols).max(1);
     let (width, height) = (rendered.width().max(1), rendered.height().max(1));
     // Cells are twice as wide as tall, and one `▄` carries two pixel rows,
     // so two pixels per cell in both directions keep the aspect square.
     let row_pairs = ((u64::from(height) * cols as u64) / u64::from(width) / 2).clamp(1, 18) as u32;
-    let scaled = image::imageops::thumbnail(&rendered, (cols * 2) as u32, row_pairs * 2);
+    let row_pairs = if thumbnail {
+        row_pairs.min(6)
+    } else {
+        row_pairs
+    };
+    let scaled = image::imageops::thumbnail(rendered, (cols * 2) as u32, row_pairs * 2);
     let row_pairs = scaled.height().div_ceil(2);
     let mut rows = Vec::with_capacity(row_pairs as usize);
     for pair in 0..row_pairs {
@@ -177,6 +223,7 @@ impl App {
         self.attachments.push(ImageAttachment {
             name: attachment.clone(),
             data,
+            thumbnail: false,
         });
         self.image_paths
             .insert(placeholder.clone(), PastedImage { path, attachment });
@@ -244,7 +291,7 @@ impl App {
             for image in &message.images {
                 let key = format!("{}:{width}", image.name);
                 rows.entry(key)
-                    .or_insert_with(|| build_image_rows(&image.data, width));
+                    .or_insert_with(|| rendered_rows(image, width));
             }
         }
         self.image_rows = rows;
@@ -261,7 +308,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::build_image_rows;
+    use super::{build_image_rows, tool_image_attachment};
+    use crate::session::ToolCall;
     use base64::Engine as _;
 
     fn tiny_png() -> Vec<u8> {
@@ -278,6 +326,26 @@ mod tests {
         let path = std::env::temp_dir().join(name);
         std::fs::write(&path, tiny_png()).unwrap();
         path
+    }
+
+    #[test]
+    fn a_computer_use_result_attaches_its_screenshot() {
+        let path = std::env::temp_dir().join(format!("yopes-cu-shot-{}.png", std::process::id()));
+        std::fs::write(&path, tiny_png()).unwrap();
+        let call = ToolCall::new("call_cu", "computer_use", r#"{"action":"look"}"#);
+        let content = format!(
+            "Action: look
+Actions run: none
+After: {}",
+            path.display()
+        );
+        let attachment = tool_image_attachment(&call, &content).expect("the screenshot attaches");
+        // A desktop capture is a thumbnail: the transcript caps its rows.
+        assert!(attachment.thumbnail);
+        assert!(attachment.name.ends_with(".png"), "{}", attachment.name);
+        // No After line means nothing to attach, and no guessing.
+        assert!(tool_image_attachment(&call, "Error: no desktop").is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

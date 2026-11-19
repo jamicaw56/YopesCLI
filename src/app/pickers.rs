@@ -681,6 +681,7 @@ impl App {
             self.attachments.push(ImageAttachment {
                 name: attachment.clone(),
                 data: image.data.clone(),
+                thumbnail: image.thumbnail,
             });
             self.image_paths.insert(
                 placeholder.clone(),

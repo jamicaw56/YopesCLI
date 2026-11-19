@@ -1195,7 +1195,24 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                         Ok(output) => output.clone(),
                         Err(error) => format!("Error: {error}"),
                     };
-                    messages.push(Message::tool_result(requested_call.id.clone(), content));
+                    let images = match &result {
+                        Ok(output)
+                            if matches!(
+                                requested_call.function.name.as_str(),
+                                "read_image" | "computer_use"
+                            ) =>
+                        {
+                            crate::tools::scoped_workspace(&workspace, || {
+                                crate::app::tool_result_attachment(&requested_call, output)
+                            })
+                            .into_iter()
+                            .collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    let mut message = Message::tool_result(requested_call.id.clone(), content);
+                    message.images = images;
+                    messages.push(message);
                 }
                 // The write watchdog: a run that keeps reading without ever
                 // changing a file is stuck in reconnaissance. Ask it once to

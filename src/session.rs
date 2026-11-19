@@ -77,6 +77,10 @@ pub struct ImageAttachment {
     pub name: String,
     /// base64 of the PNG file.
     pub data: String,
+    /// Draw as a short pixel-art thumbnail instead of the whole image: a
+    /// desktop screenshot is tall enough to push the conversation off screen.
+    #[serde(default)]
+    pub thumbnail: bool,
 }
 
 /// What one reply cost and how long it took.
