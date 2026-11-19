@@ -3,9 +3,11 @@ use super::*;
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
 
-    // No product branding in the working view: the mode dot, the permission
-    // badge and the session tabs are what need the space.
-    let mut title_spans = vec![
+    // The header carries the mode and the passive provider line. The
+    // permission badge and the session tabs live in the footer's right side,
+    // next to the context load, so the tab bar sits where the eye already
+    // reads state and every clickable target shares one row.
+    let title_spans = vec![
         Span::styled(
             "◆",
             Style::default()
@@ -18,178 +20,26 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
                 .fg(app.mode.color())
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled("  ", Style::default()),
     ];
-    match app.tools_mode {
-        ToolsMode::Auto => {
-            title_spans.push(Span::styled(
-                " [YOLO]",
-                Style::default().fg(warning()).add_modifier(Modifier::BOLD),
-            ));
-        }
-        ToolsMode::Ask => {
-            title_spans.push(Span::styled(" [ASK]", Style::default().fg(dim())));
-        }
-        ToolsMode::Off => {
-            title_spans.push(Span::styled(" [OFF]", Style::default().fg(dim())));
-        }
-        ToolsMode::Dangerous => {
-            title_spans.push(Span::styled(
-                " [DANGER]",
-                Style::default().fg(error()).add_modifier(Modifier::BOLD),
-            ));
-        }
-        ToolsMode::On => {}
-    }
-    title_spans.push(Span::styled("  ", Style::default()));
-
-    // The tab row is the interactive element and wins the space fight: its
-    // need is computed first, and the passive right side (provider, model,
-    // spend, context load) takes only what the tabs do not use.
-    let count = app.tab_count();
-    let markers: Vec<String> = (0..count)
-        .map(|index| {
-            if app.tab_streaming(index) {
-                format!("{} ", spinner(app.spinner))
-            } else if app.tab_busy(index) {
-                "! ".to_owned()
-            } else {
-                String::new()
-            }
-        })
-        .collect();
-    let tab_width = |index: usize, label: &str| -> u16 {
-        let sep_w: u16 = if index > 0 { 3 } else { 0 };
-        let marker_w: u16 = if markers[index].is_empty() { 0 } else { 2 };
-        sep_w + marker_w + UnicodeWidthStr::width(label) as u16 + 2 // " ×"
-    };
-    let active = app.tab_index();
-    let labels: Vec<String> = (0..count)
-        .map(|index| format!("{} {}", index + 1, app.tab_title(index)))
-        .collect();
-    let full: u16 = (0..count)
-        .map(|index| tab_width(index, &labels[index]))
-        .sum();
-    // The smallest useful form is the tab number alone.
-    let smallest: u16 = (0..count).map(|index| tab_width(index, "9")).sum();
     let title_w = title_spans
         .iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum::<usize>() as u16;
-    // The `+` button's columns are reserved up front, so a full row of tabs
-    // never overflows into a "+N" count the budget promised to keep.
-    let plus_w: u16 = 3; // " +"
-    let tabs_full = full.saturating_add(plus_w);
-    let tabs_min = smallest.saturating_add(plus_w);
     let available = inner.width.saturating_sub(title_w);
-    let right_budget = if tabs_full <= available {
-        available - tabs_full
-    } else {
-        available.saturating_sub(tabs_min)
-    }
-    .min(inner.width / 2);
     let right = header_right(
         app.backend.provider_label(),
         app.backend.model(),
         &app.spent_cost(),
-        right_budget as usize,
+        available as usize,
     );
-    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(right_budget);
+    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(available);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(4), Constraint::Length(right_width)])
         .split(inner);
 
-    // Session tabs: a turning ring while a tab streams, `!` when it wants a
-    // decision. Click or Alt+1..9 to switch; the active one is accent + bold.
-    app.tab_hits.clear();
-    app.tab_close_hits.clear();
-    app.tab_new_hit = None;
-    let tab_row = area.y;
-    let mut x = inner.x + title_w;
-    let end_x = columns[0].x + columns[0].width;
-    // Full labels first; when they do not fit, every label shrinks to an
-    // equal share so the whole stack stays visible — a tab never poofs just
-    // because the terminal is small. The active tab earns twice the share:
-    // its title is the one worth reading on a cramped row.
-    let mut budget: Option<usize> = None;
-    if tabs_full > end_x.saturating_sub(x) {
-        let shareable = end_x.saturating_sub(x).saturating_sub(plus_w);
-        if count > 0 && shareable >= smallest {
-            budget = Some(usize::from((shareable - smallest) / count as u16) + 1);
-        }
-    }
-    let mut overflow = 0usize;
-    for index in 0..count {
-        let sep_w: u16 = if index > 0 { 3 } else { 0 };
-        let marker = markers[index].clone();
-        let marker_w: u16 = if marker.is_empty() { 0 } else { 2 };
-        let close_w: u16 = 2; // " ×"
-        let label = match budget {
-            Some(share) => {
-                // The active tab earns twice the share: its title is the one
-                // worth reading on a cramped row.
-                let cells = if index == active {
-                    share.saturating_mul(2)
-                } else {
-                    share
-                };
-                truncate(&labels[index], cells)
-            }
-            None => labels[index].clone(),
-        };
-        let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
-        if x.saturating_add(sep_w + marker_w + label_w + close_w) > end_x {
-            overflow = count - index;
-            break;
-        }
-        if index > 0 {
-            title_spans.push(Span::styled(" │ ", Style::default().fg(dim())));
-            x = x.saturating_add(sep_w);
-        }
-        if !marker.is_empty() {
-            let marker_style = if app.tab_busy(index) && !app.tab_streaming(index) {
-                Style::default().fg(warning()).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(accent())
-            };
-            title_spans.push(Span::styled(marker, marker_style));
-            x = x.saturating_add(marker_w);
-        }
-        let style = if index == active {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(muted())
-        };
-        title_spans.push(Span::styled(label, style));
-        x = x.saturating_add(label_w);
-        let start = x.saturating_sub(label_w + marker_w);
-        app.tab_hits.push((start, x, tab_row, index));
-        // `×` after each label: mouse users close that tab without switching.
-        title_spans.push(Span::styled(" ×", Style::default().fg(dim())));
-        x = x.saturating_add(close_w);
-        let close_start = x.saturating_sub(close_w);
-        app.tab_close_hits.push((close_start, x, tab_row, index));
-    }
-    if overflow > 0 {
-        // Hidden tabs are never silent: the marker counts what did not fit,
-        // and Alt+1..9 still reaches every one of them.
-        title_spans.push(Span::styled(
-            format!(" +{overflow}"),
-            Style::default().fg(dim()),
-        ));
-    }
-    // `+` after the last tab: opens one. A click past the limit is told so.
-    if x.saturating_add(plus_w) <= end_x {
-        title_spans.push(Span::styled(
-            " +",
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
-        ));
-        x = x.saturating_add(plus_w);
-        app.tab_new_hit = Some((x.saturating_sub(plus_w - 1), x, tab_row));
-    }
-    let title = Line::from(title_spans);
-    frame.render_widget(Paragraph::new(title), columns[0]);
-
+    frame.render_widget(Paragraph::new(Line::from(title_spans)), columns[0]);
     if right_width > 0 {
         frame.render_widget(
             Paragraph::new(right)
@@ -197,6 +47,24 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
                 .style(Style::default().fg(muted())),
             columns[1],
         );
+    }
+}
+
+/// The permission badge: the word and the color the footer shows for the
+/// current `/set tools` mode.
+fn permission_badge(mode: ToolsMode) -> (&'static str, Style) {
+    match mode {
+        ToolsMode::On => ("[ON]", Style::default().fg(dim())),
+        ToolsMode::Ask => ("[ASK]", Style::default().fg(dim())),
+        ToolsMode::Off => ("[OFF]", Style::default().fg(dim())),
+        ToolsMode::Auto => (
+            "[YOLO]",
+            Style::default().fg(warning()).add_modifier(Modifier::BOLD),
+        ),
+        ToolsMode::Dangerous => (
+            "[DANGER]",
+            Style::default().fg(error()).add_modifier(Modifier::BOLD),
+        ),
     }
 }
 
@@ -516,39 +384,161 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
 
 pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
-    let count = app.session.messages.len();
     let context = app.context_tokens();
     let window = app
         .model_context_window()
         .map(|w| w.max(context))
         .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
     let ctx = context_label(context, window);
-    // The right side is the context load, then the message count to its left.
-    // On a narrow terminal, or while a notice or a turn speaks on the left,
-    // the message count steps aside but the context load stays: it is the one
-    // number worth a row.
-    let quiet = app.notice.is_none() && !app.is_streaming();
-    let messages = if count == 1 {
-        "1 message".to_owned()
-    } else {
-        format!("{count} messages")
+    let (badge, badge_style) = permission_badge(app.tools_mode);
+    let badge_w = UnicodeWidthStr::width(badge) as u16;
+    let gap: u16 = 3; // " · " between the three groups
+    let sep_w: u16 = 3; // " │ " between two tabs
+    let close_w: u16 = 2; // " ×" after each tab label
+    let plus_w: u16 = 3; // " +" opens a tab
+
+    let tab_count = app.tab_count();
+    let markers: Vec<String> = (0..tab_count)
+        .map(|index| {
+            if app.tab_streaming(index) {
+                format!("{} ", spinner(app.spinner))
+            } else if app.tab_busy(index) {
+                "! ".to_owned()
+            } else {
+                String::new()
+            }
+        })
+        .collect();
+    let labels: Vec<String> = (0..tab_count)
+        .map(|index| format!("{} {}", index + 1, app.tab_title(index)))
+        .collect();
+    let marker_w = |index: usize| UnicodeWidthStr::width(markers[index].as_str()) as u16;
+    let tab_w = |index: usize, label: &str| -> u16 {
+        marker_w(index) + UnicodeWidthStr::width(label) as u16 + close_w
     };
-    let right = if ctx.is_empty() {
-        if inner.width >= 60 && count > 0 && quiet {
-            messages
+    let seps = sep_w * tab_count.saturating_sub(1) as u16;
+    let full: u16 = (0..tab_count).map(|index| tab_w(index, &labels[index])).sum::<u16>() + seps;
+    let smallest: u16 = (0..tab_count).map(|index| tab_w(index, "9")).sum::<u16>() + seps;
+
+    // The badge and the tabs never drop; the context load is the segment that
+    // yields on a narrow terminal, and the tab labels shrink before any tab
+    // disappears from the row.
+    let ctx_w = UnicodeWidthStr::width(ctx.as_str()) as u16;
+    let ctx_cost = if ctx.is_empty() { 0 } else { gap + ctx_w };
+    let room = inner.width.saturating_sub(badge_w + gap + plus_w);
+    let keep_ctx = ctx_cost > 0 && full + ctx_cost <= room;
+    let budget = room.saturating_sub(if keep_ctx { ctx_cost } else { 0 });
+    // The active tab earns twice the share, so its title stays readable.
+    let active = app.tab_index();
+    let mut labels = labels;
+    if full > budget {
+        let shareable = budget.saturating_sub(smallest);
+        let per_tab = if tab_count > 0 {
+            usize::from(shareable / tab_count as u16)
         } else {
-            String::new()
+            0
+        };
+        for (index, label) in labels.iter_mut().enumerate() {
+            let cells = if index == active {
+                per_tab.saturating_mul(2)
+            } else {
+                per_tab
+            };
+            *label = truncate(label, cells.max(1));
         }
-    } else if inner.width >= 60 && count > 0 && quiet {
-        format!("{messages} · {ctx}")
+    }
+
+    // Fit the tabs left to right, dropping the last ones when even the shrunk
+    // labels do not fit: a `+N` count names what went. The widths add up to the
+    // right column, so the hit-boxes below land on real screen columns.
+    let mut shown = tab_count;
+    let mut used = 0u16;
+    for index in 0..tab_count {
+        let sep = if index > 0 { sep_w } else { 0 };
+        let w = sep + tab_w(index, &labels[index]);
+        if used + w > budget {
+            shown = index;
+            break;
+        }
+        used += w;
+    }
+    let overflow = tab_count - shown;
+    if overflow == 0 {
+        used += plus_w;
     } else {
-        ctx
-    };
-    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(inner.width);
+        // The `+N` marker takes the columns the dropped tabs would have used.
+        used += UnicodeWidthStr::width(format!(" +{overflow}").as_str()) as u16;
+    }
+    if keep_ctx {
+        used += ctx_cost;
+    }
+    let right_width = (badge_w + gap + used).min(inner.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(8), Constraint::Length(right_width)])
+        .constraints([Constraint::Min(0), Constraint::Length(right_width)])
         .split(inner);
+
+    // Session tabs: a turning ring while a tab streams, `!` when it wants a
+    // decision. Click or Alt+1..9 to switch; the active one is accent + bold.
+    app.tab_hits.clear();
+    app.tab_close_hits.clear();
+    app.tab_new_hit = None;
+    let row = area.y;
+    let mut spans = vec![
+        Span::styled(badge, badge_style),
+        Span::styled(" · ", Style::default().fg(dim())),
+    ];
+    let mut cursor = columns[1].x + badge_w + gap;
+    for index in 0..shown {
+        if index > 0 {
+            spans.push(Span::styled(" │ ", Style::default().fg(dim())));
+            cursor += sep_w;
+        }
+        if !markers[index].is_empty() {
+            let marker_style = if app.tab_busy(index) && !app.tab_streaming(index) {
+                Style::default().fg(warning()).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(accent())
+            };
+            spans.push(Span::styled(markers[index].clone(), marker_style));
+            cursor += marker_w(index);
+        }
+        let style = if index == active {
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(muted())
+        };
+        let label_w = UnicodeWidthStr::width(labels[index].as_str()) as u16;
+        spans.push(Span::styled(labels[index].clone(), style));
+        app.tab_hits.push((cursor, cursor + label_w, row, index));
+        cursor += label_w;
+        // `×` after each label: mouse users close that tab without switching.
+        spans.push(Span::styled(" ×", Style::default().fg(dim())));
+        app.tab_close_hits.push((cursor, cursor + close_w, row, index));
+        cursor += close_w;
+    }
+    if shown == tab_count {
+        spans.push(Span::styled(
+            " +",
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
+        ));
+        let start = cursor;
+        cursor += plus_w;
+        app.tab_new_hit = Some((start + 1, start + plus_w, row));
+    } else if overflow > 0 {
+        // Hidden tabs are never silent: the count says what did not fit, and
+        // Alt+1..9 still reaches every one of them.
+        let count = format!(" +{overflow}");
+        spans.push(Span::styled(count.clone(), Style::default().fg(dim())));
+        cursor += UnicodeWidthStr::width(count.as_str()) as u16;
+    }
+    if keep_ctx {
+        spans.push(Span::styled(" · ", Style::default().fg(dim())));
+        spans.push(Span::styled(ctx, Style::default().fg(muted())));
+        cursor += gap;
+    }
+    let _ = cursor;
+    frame.render_widget(Paragraph::new(Line::from(spans)), columns[1]);
 
     let (text, color) = if app.approval.is_some() {
         (
@@ -626,24 +616,15 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
             },
         )
     } else {
-        // The idle row stays quiet: the mode and the permission badge already
-        // sit in the header, and the shortcut hints live in F1 help. A notice
-        // or an in-flight turn still speaks here.
+        // The idle row stays quiet: the mode dot and the permission badge
+        // already sit in the header and the footer, and the shortcut hints
+        // live in F1 help. A notice or an in-flight turn still speaks here.
         (String::new(), muted())
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().fg(color)),
         columns[0],
     );
-
-    if right_width > 0 {
-        frame.render_widget(
-            Paragraph::new(right)
-                .alignment(Alignment::Right)
-                .style(Style::default().fg(muted())),
-            columns[1],
-        );
-    }
 }
 
 #[cfg(test)]
@@ -688,20 +669,83 @@ mod tests {
         terminal
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
-        let row: String = (0..120)
-            .map(|column| {
-                terminal.backend().buffer()[(column, 0)]
-                    .symbol()
-                    .to_string()
-            })
-            .collect();
+        let row = screen_row(&terminal, 23);
         for index in 1..=9u16 {
             assert!(
                 row.contains(&index.to_string()),
-                "tab {index} is missing from the header: {row}"
+                "tab {index} is missing from the footer: {row}"
             );
         }
         // Every tab keeps a click hit-box, so switching still reaches all of them.
         assert_eq!(app.tab_hits.len(), 9);
+        // The permission badge shares the row, and the context load sits at
+        // its right end.
+        assert!(row.contains("[ON]"), "the badge is missing: {row}");
+    }
+
+    /// The context load closes the footer row: with messages in the session it
+    /// is the rightmost segment, after the badge and the tabs.
+    #[test]
+    fn the_context_load_closes_the_footer_row() {
+        use crate::session::{Message, Role};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.open_tab();
+        // A few hundred characters estimate to a non-zero context load, and
+        // the new tab is the active one, so the message goes in after it.
+        app.session
+            .messages
+            .push(Message::new(Role::User, "hi".repeat(200)));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let footer = screen_row(&terminal, 23);
+        let trimmed = footer.trim_end();
+        assert!(
+            trimmed.ends_with("ctx") || trimmed.contains("ctx "),
+            "the context load is missing from the footer: {footer}"
+        );
+        // Order: badge, then tabs, then the context load.
+        let badge = footer.find("[ON]").expect("badge");
+        let tabs = footer.find(" │ ").expect("tabs");
+        let ctx = footer.find("ctx ").expect("context load");
+        assert!(badge < tabs && tabs < ctx, "wrong order: {footer}");
+    }
+
+    fn screen_row(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, row: u16) -> String {
+        let width = terminal.backend().buffer().area.width;
+        (0..width)
+            .map(|column| {
+                terminal.backend().buffer()[(column, row)]
+                    .symbol()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The header keeps only the mode dot and the provider line: the
+    /// permission badge and the tabs moved to the footer.
+    #[test]
+    fn the_header_holds_no_badge_and_no_tabs() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.open_tab();
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let header = screen_row(&terminal, 0);
+        let footer = screen_row(&terminal, 23);
+        assert!(!header.contains("[ON]"), "badge in header: {header}");
+        assert!(
+            !header.contains(" │ "),
+            "tab separator in header: {header}"
+        );
+        assert!(header.contains("build"), "mode dot in header: {header}");
+        assert!(footer.contains("[ON]"), "no badge in footer: {footer}");
+        assert!(footer.contains(" │ "), "no tabs in footer: {footer}");
     }
 }
