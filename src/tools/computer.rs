@@ -17,6 +17,7 @@
 //! one PowerShell script, so the binary links no platform libraries. Everywhere
 //! else the tool answers with a plain error instead of pretending it worked.
 
+use anyhow::Context;
 use serde::Deserialize;
 
 use super::{parse, truncate_output};

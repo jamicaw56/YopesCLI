@@ -13,7 +13,7 @@ use crate::{skills, tools};
 fn system_prompt(
     tooling: bool,
     custom_prompt: Option<&str>,
-    mode_note: Option<String>,
+    mode_note: Option<&str>,
     workspace: &Path,
 ) -> String {
     let mut system = tools::system_prompt(tooling, workspace);
@@ -43,7 +43,7 @@ pub(super) fn request_messages(
     tooling: bool,
     image_style: ImageStyle,
     custom_prompt: Option<&str>,
-    mode_note: Option<&'static str>,
+    mode_note: Option<&str>,
     workspace: &Path,
 ) -> Result<Vec<serde_json::Value>> {
     let mut request = Vec::with_capacity(messages.len() + 1);
@@ -708,7 +708,7 @@ mod tests {
             true,
             ImageStyle::None,
             None,
-            Some("PLAN MODE: propose only".to_owned()),
+            Some("PLAN MODE: propose only"),
             Path::new("."),
         )
         .unwrap();
@@ -732,7 +732,7 @@ mod tests {
             true,
             ImageStyle::None,
             Some(" Always answer in rhyme. "),
-            Some("PLAN MODE: propose only".to_owned()),
+            Some("PLAN MODE: propose only"),
             Path::new("."),
         )
         .unwrap();

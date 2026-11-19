@@ -429,7 +429,7 @@ impl Backend {
                     ImageStyle::None
                 },
                 self.custom_prompt.as_deref(),
-                mode_note.clone(),
+                mode_note.as_deref(),
                 workspace,
             )?,
             "stream": true,
@@ -495,7 +495,7 @@ impl Backend {
                 false,
                 ImageStyle::Ollama,
                 self.custom_prompt.as_deref(),
-                mode_note.clone(),
+                mode_note.as_deref(),
                 workspace,
             )?,
             "stream": true,
