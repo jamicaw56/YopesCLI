@@ -8,6 +8,13 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `computer_use` drives the desktop with its own agent pointer. Mouse steps no
+  longer move the system cursor: they post button messages to the window under
+  the point, so the person at the keyboard keeps their mouse while the agent
+  works. The agent's pointer is drawn into each capture as a highlighted black
+  arrow on a soft halo, and the result's `Cursor:` line names it instead of the
+  system pointer.
+
 - `/settings` opens a popup with every `/set` key as a row, so a setting can
   be changed with the arrow keys instead of memorising a command: `↑↓` picks
   the row, `←→` steps the value and saves it, `esc` closes. The rows drive the

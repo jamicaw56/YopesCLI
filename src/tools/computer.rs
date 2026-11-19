@@ -1,17 +1,21 @@
 //! `computer_use`: drive the desktop and show the model what happened.
 //!
-//! A call takes one screenshot, then runs its `actions` in order: mouse moves,
-//! clicks, scrolls, drags, typed text, key presses, key chords, waits and
-//! window focus changes. A second screenshot after the actions is written to
-//! the temp root, where the app attaches it to the tool message so a vision
+//! A call takes one screenshot, then runs its `actions` in order: pointer
+//! moves, clicks, scrolls, drags, typed text, key presses, key chords, waits
+//! and window focus changes. A second screenshot after the actions is written
+//! to the temp root, where the app attaches it to the tool message so a vision
 //! model sees the result. The result also names where the captured frame sits
 //! on the desktop and where the pointer ended up, so the next call can aim.
 //!
+//! The agent has a pointer of its own. Mouse steps never move the system
+//! cursor: they post button messages to the window under the point, and the
+//! agent's pointer is drawn into the capture with a highlighted cursor, so the
+//! person at the keyboard keeps their mouse for themselves.
+//!
 //! Windows only. The Windows implementation drives the desktop through
-//! `System.Windows.Forms` (mouse and typing) and `System.Drawing` (screen
-//! capture) from one PowerShell script, so the binary links no platform
-//! libraries. Everywhere else the tool answers with a plain error instead of
-//! pretending it worked.
+//! `System.Windows.Forms` (typing) and `System.Drawing` (screen capture) from
+//! one PowerShell script, so the binary links no platform libraries. Everywhere
+//! else the tool answers with a plain error instead of pretending it worked.
 
 use serde::Deserialize;
 
@@ -187,6 +191,17 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
         std::thread::sleep(std::time::Duration::from_millis(settle));
     }
     let after = screenshot(args.screen, args.region)?;
+    // The agent's pointer is where this call left it, or where the user's
+    // cursor sits when the agent has not aimed yet, and it is drawn into the
+    // capture so the model sees its own pointer rather than a system cursor
+    // that never moved.
+    let pointer = pointer_target(&args.actions)
+        .or_else(remembered_pointer)
+        .or(before.cursor);
+    let marked = pointer.is_some_and(|at| {
+        remember_pointer(at);
+        draw_agent_cursor(&after.path, after.origin, after.size, at).unwrap_or(false)
+    });
 
     let mut report = String::new();
     report.push_str("Action: ");
@@ -203,10 +218,143 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
     // frame sits in screen pixels, how big the desktop is, and where the
     // pointer ended up after the steps.
     report.push_str(&before.describe());
-    report.push_str(&after.cursor_line());
+    report.push_str(&cursor_line(pointer, marked));
     report.push_str("After: ");
     report.push_str(&after.path.display().to_string());
     Ok(truncate_output(report))
+}
+
+/// The line naming the agent's pointer, and that it is the agent's alone.
+fn cursor_line(pointer: Option<(i32, i32)>, marked: bool) -> String {
+    let Some((x, y)) = pointer else {
+        return String::new();
+    };
+    let drawn = if marked {
+        ", drawn in the capture as the agent cursor"
+    } else {
+        ""
+    };
+    format!("Cursor: ({x}, {y}){drawn}; the system pointer never moves\n")
+}
+
+/// Where the call leaves the agent's pointer, if any step aims it.
+fn pointer_target(steps: &[Step]) -> Option<(i32, i32)> {
+    steps.iter().rev().find_map(|step| match step {
+        Step::Move { x, y }
+        | Step::Click { x, y, .. }
+        | Step::DoubleClick { x, y }
+        | Step::Scroll { x, y, .. } => Some((*x, *y)),
+        Step::Drag { to_x, to_y, .. } => Some((*to_x, *to_y)),
+        _ => None,
+    })
+}
+
+/// The file the agent's pointer survives between calls in: a call that only
+/// looks still shows where the agent last aimed.
+fn pointer_path() -> std::path::PathBuf {
+    crate::temp::temp_root().join("yopes-agent-pointer")
+}
+
+fn remembered_pointer() -> Option<(i32, i32)> {
+    let text = std::fs::read_to_string(pointer_path()).ok()?;
+    let mut parts = text.split_whitespace();
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn remember_pointer(at: (i32, i32)) {
+    let _ = std::fs::write(pointer_path(), format!("{} {}", at.0, at.1));
+}
+
+/// Draw the agent's own cursor into a capture, at `pointer` in screen pixels:
+/// a highlighted black arrow on a soft light halo, where the hotspot sits on
+/// the point the call acted on. `false` when the pointer is outside the frame
+/// or the icon cannot be drawn, which leaves the capture untouched.
+fn draw_agent_cursor(
+    path: &std::path::Path,
+    origin: (i32, i32),
+    size: (u32, u32),
+    pointer: (i32, i32),
+) -> anyhow::Result<bool> {
+    let (left, top) = (pointer.0 - origin.0, pointer.1 - origin.1);
+    let (width, height) = size;
+    if left < 0 || top < 0 || left as u32 >= width || top as u32 >= height {
+        return Ok(false);
+    }
+    let capture = image::open(path)?.to_rgba8();
+    if capture.width() != width || capture.height() != height {
+        return Ok(false);
+    }
+    let Some(mut pixmap) = tiny_skia::Pixmap::from_vec(
+        premultiplied(&capture),
+        tiny_skia::IntSize::from_wh(width, height).context("sizing the cursor bitmap")?,
+    ) else {
+        return Ok(false);
+    };
+    let Some(arrow) = cursor_shape() else {
+        return Ok(false);
+    };
+    // The halo marks the pointer as the agent's, and the white outline keeps
+    // the black arrow readable over a dark app.
+    let mut halo_paint = tiny_skia::Paint::default();
+    halo_paint.anti_alias = true;
+    halo_paint.set_color_rgba8(255, 255, 255, 96);
+    let halo = tiny_skia::PathBuilder::from_circle(1.0, 1.0, 11.0).context("building the halo")?;
+    let mut fill = tiny_skia::Paint::default();
+    fill.anti_alias = true;
+    fill.set_color_rgba8(12, 12, 12, 255);
+    let mut outline = tiny_skia::Paint::default();
+    outline.anti_alias = true;
+    outline.set_color_rgba8(255, 255, 255, 235);
+    let stroke = tiny_skia::Stroke {
+        width: 1.5,
+        ..tiny_skia::Stroke::default()
+    };
+    let transform = tiny_skia::Transform::from_translate(left as f32, top as f32);
+    let rule = tiny_skia::FillRule::Winding;
+    pixmap.fill_path(&halo, &halo_paint, rule, transform, None);
+    pixmap.fill_path(&arrow, &fill, rule, transform, None);
+    pixmap.stroke_path(&arrow, &outline, &stroke, transform, None);
+    image::RgbaImage::from_raw(width, height, straight_alpha(&pixmap))
+        .context("rebuilding the capture")?
+        .save_with_format(path, image::ImageFormat::Png)?;
+    Ok(true)
+}
+
+/// The arrow itself, in icon pixels with the hotspot at (1, 1).
+fn cursor_shape() -> Option<tiny_skia::Path> {
+    let mut builder = tiny_skia::PathBuilder::new();
+    builder.move_to(1.0, 1.0);
+    builder.line_to(1.0, 17.5);
+    builder.line_to(5.2, 13.4);
+    builder.line_to(8.0, 19.6);
+    builder.line_to(10.7, 18.4);
+    builder.line_to(7.9, 12.4);
+    builder.line_to(13.2, 12.4);
+    builder.close();
+    builder.finish()
+}
+
+/// tiny-skia paints premultiplied, and a PNG carries straight alpha.
+fn premultiplied(image: &image::RgbaImage) -> Vec<u8> {
+    let mut data = Vec::with_capacity(image.as_raw().len());
+    for pixel in image.pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let alpha = u16::from(alpha);
+        for channel in [red, green, blue] {
+            data.push(u8::try_from(u16::from(channel) * alpha / 255).unwrap_or(0));
+        }
+        data.push(u8::try_from(alpha).unwrap_or(0));
+    }
+    data
+}
+
+fn straight_alpha(pixmap: &tiny_skia::Pixmap) -> Vec<u8> {
+    let mut data = Vec::with_capacity(pixmap.data().len());
+    for pixel in pixmap.pixels() {
+        let color = pixel.demultiply();
+        data.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
+    }
+    data
 }
 
 fn joined_actions(ran: &[String]) -> String {
@@ -309,6 +457,8 @@ struct Shot {
     origin: (i32, i32),
     size: (u32, u32),
     desktop: (i32, i32, u32, u32),
+    /// Where the system pointer sits: only the agent pointer's starting point
+    /// the first time it aims.
     cursor: Option<(i32, i32)>,
 }
 
@@ -333,13 +483,6 @@ impl Shot {
         format!(
             "Frame: ({x}, {y}) {width}x{height} screen pixels\nDesktop: ({dx}, {dy}) {dw}x{dh}\n"
         )
-    }
-
-    fn cursor_line(&self) -> String {
-        match self.cursor {
-            Some((x, y)) => format!("Cursor: ({x}, {y})\n"),
-            None => String::new(),
-        }
     }
 }
 
@@ -488,15 +631,84 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
          using System;\n\
          using System.Runtime.InteropServices;\n\
          public static class YopesInput {\n\
-           [DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x, int y);\n\
-           [DllImport(\"user32.dll\")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);\n\
-           public const uint LeftDown = 0x0002;\n\
-           public const uint LeftUp = 0x0004;\n\
-           public const uint RightDown = 0x0008;\n\
-           public const uint RightUp = 0x0010;\n\
-           public const uint MiddleDown = 0x0020;\n\
-           public const uint MiddleUp = 0x0040;\n\
-           public const uint Wheel = 0x0800;\n\
+           [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }\n\
+           [DllImport(\"user32.dll\")] static extern IntPtr WindowFromPoint(POINT point);\n\
+           [DllImport(\"user32.dll\")] static extern IntPtr GetAncestor(IntPtr window, uint flags);\n\
+           [DllImport(\"user32.dll\")] static extern bool IsWindowVisible(IntPtr window);\n\
+           [DllImport(\"user32.dll\")] static extern bool ScreenToClient(IntPtr window, ref POINT point);\n\
+           [DllImport(\"user32.dll\")] static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);\n\
+           [DllImport(\"user32.dll\")] static extern bool SetForegroundWindow(IntPtr window);\n\
+           public const uint Move = 0x0200;\n\
+           public const uint LeftDown = 0x0201;\n\
+           public const uint LeftUp = 0x0202;\n\
+           public const uint RightDown = 0x0204;\n\
+           public const uint RightUp = 0x0205;\n\
+           public const uint MiddleDown = 0x0207;\n\
+           public const uint MiddleUp = 0x0208;\n\
+           public const uint Wheel = 0x020A;\n\
+           // The deepest visible window under a screen point, zero when none.\n\
+           static IntPtr At(int x, int y) {\n\
+             POINT point; point.X = x; point.Y = y;\n\
+             IntPtr window = WindowFromPoint(point);\n\
+             if (window == IntPtr.Zero) return IntPtr.Zero;\n\
+             IntPtr root = GetAncestor(window, 2);\n\
+             if (root == IntPtr.Zero || !IsWindowVisible(root)) return IntPtr.Zero;\n\
+             return window;\n\
+           }\n\
+           // The point in that window's client coordinates, packed for lParam.\n\
+           static IntPtr Packed(IntPtr window, int x, int y) {\n\
+             POINT point; point.X = x; point.Y = y;\n\
+             ScreenToClient(window, ref point);\n\
+             return (IntPtr)((point.Y << 16) | (point.X & 0xFFFF));\n\
+           }\n\
+           // The MK_ flag that belongs in wParam while a button is held.\n\
+           static IntPtr Held(uint down) {\n\
+             if (down == RightDown) return (IntPtr)2;\n\
+             if (down == MiddleDown) return (IntPtr)16;\n\
+             return (IntPtr)1;\n\
+           }\n\
+           public static bool Hover(int x, int y) {\n\
+             IntPtr window = At(x, y);\n\
+             if (window == IntPtr.Zero) return false;\n\
+             return PostMessage(window, Move, IntPtr.Zero, Packed(window, x, y));\n\
+           }\n\
+           public static bool Click(int x, int y, uint down, uint up, int count) {\n\
+             IntPtr window = At(x, y);\n\
+             if (window == IntPtr.Zero) return false;\n\
+             SetForegroundWindow(GetAncestor(window, 2));\n\
+             System.Threading.Thread.Sleep(60);\n\
+             IntPtr at = Packed(window, x, y);\n\
+             PostMessage(window, Move, IntPtr.Zero, at);\n\
+             for (int i = 0; i < count; i++) {\n\
+               PostMessage(window, down, Held(down), at);\n\
+               System.Threading.Thread.Sleep(30);\n\
+               PostMessage(window, up, IntPtr.Zero, at);\n\
+               System.Threading.Thread.Sleep(90);\n\
+             }\n\
+             return true;\n\
+           }\n\
+           public static bool Scroll(int x, int y, int delta) {\n\
+             IntPtr window = At(x, y);\n\
+             if (window == IntPtr.Zero) return false;\n\
+             return PostMessage(window, Wheel, (IntPtr)(delta << 16), (IntPtr)((y << 16) | (x & 0xFFFF)));\n\
+           }\n\
+           public static bool Drag(int fromX, int fromY, int toX, int toY, uint down, uint up) {\n\
+             IntPtr window = At(fromX, fromY);\n\
+             if (window == IntPtr.Zero) return false;\n\
+             SetForegroundWindow(GetAncestor(window, 2));\n\
+             System.Threading.Thread.Sleep(80);\n\
+             PostMessage(window, Move, IntPtr.Zero, Packed(window, fromX, fromY));\n\
+             System.Threading.Thread.Sleep(60);\n\
+             PostMessage(window, down, Held(down), Packed(window, fromX, fromY));\n\
+             System.Threading.Thread.Sleep(80);\n\
+             for (int step = 1; step <= 4; step++) {\n\
+               PostMessage(window, Move, Held(down), Packed(window, fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4));\n\
+               System.Threading.Thread.Sleep(40);\n\
+             }\n\
+             PostMessage(window, up, IntPtr.Zero, Packed(window, toX, toY));\n\
+             System.Threading.Thread.Sleep(120);\n\
+             return true;\n\
+           }\n\
          }\n\
          '@;\n\
          Add-Type @'\n\
@@ -519,7 +731,7 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
         match step {
             Step::Move { x, y } => {
                 script.push_str(&format!(
-                    "[void][YopesInput]::SetCursorPos({x}, {y}); Start-Sleep -Milliseconds 60;\n"
+                    "if (-not [YopesInput]::Hover({x}, {y})) {{ [Console]::Error.Write('nothing to point at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 60;\n"
                 ));
             }
             Step::Click {
@@ -528,27 +740,21 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
                 button,
                 count,
             } => {
-                let (down, up) = click_flags(*button);
+                let (down, up) = click_messages(*button);
                 let count = (*count).clamp(1, 3);
                 script.push_str(&format!(
-                    "[void][YopesInput]::SetCursorPos({x}, {y}); Start-Sleep -Milliseconds 60;\n"
-                ));
-                script.push_str(&format!(
-                    "for ($i = 0; $i -lt {count}; $i++) {{ [YopesInput]::mouse_event([YopesInput]::{down}, 0, 0, 0, [UIntPtr]::Zero); [YopesInput]::mouse_event([YopesInput]::{up}, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 90 }}\n"
+                    "if (-not [YopesInput]::Click({x}, {y}, [YopesInput]::{down}, [YopesInput]::{up}, {count})) {{ [Console]::Error.Write('nothing to click at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 60;\n"
                 ));
             }
             Step::DoubleClick { x, y } => {
                 script.push_str(&format!(
-                    "[void][YopesInput]::SetCursorPos({x}, {y}); Start-Sleep -Milliseconds 60;\n\
-                     for ($i = 0; $i -lt 2; $i++) {{ [YopesInput]::mouse_event([YopesInput]::LeftDown, 0, 0, 0, [UIntPtr]::Zero); [YopesInput]::mouse_event([YopesInput]::LeftUp, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 90 }}\n"
+                    "if (-not [YopesInput]::Click({x}, {y}, [YopesInput]::LeftDown, [YopesInput]::LeftUp, 2)) {{ [Console]::Error.Write('nothing to click at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 60;\n"
                 ));
             }
             Step::Scroll { x, y, amount } => {
                 let delta = (*amount).clamp(-10, 10) * 120;
                 script.push_str(&format!(
-                    "[void][YopesInput]::SetCursorPos({x}, {y}); Start-Sleep -Milliseconds 60;\n\
-                     [YopesInput]::mouse_event([YopesInput]::Wheel, 0, 0, {delta}, [UIntPtr]::Zero);\n\
-                     Start-Sleep -Milliseconds 120;\n"
+                    "if (-not [YopesInput]::Scroll({x}, {y}, {delta})) {{ [Console]::Error.Write('nothing to scroll at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 120;\n"
                 ));
             }
             Step::Drag {
@@ -558,12 +764,9 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
                 to_y,
                 button,
             } => {
-                let (down, up) = click_flags(*button);
+                let (down, up) = click_messages(*button);
                 script.push_str(&format!(
-                    "[void][YopesInput]::SetCursorPos({from_x}, {from_y}); Start-Sleep -Milliseconds 80;\n\
-                     [YopesInput]::mouse_event([YopesInput]::{down}, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 80;\n\
-                     [void][YopesInput]::SetCursorPos({to_x}, {to_y}); Start-Sleep -Milliseconds 80;\n\
-                     [YopesInput]::mouse_event([YopesInput]::{up}, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 120;\n"
+                    "if (-not [YopesInput]::Drag({from_x}, {from_y}, {to_x}, {to_y}, [YopesInput]::{down}, [YopesInput]::{up})) {{ [Console]::Error.Write('nothing to drag at ({from_x}, {from_y})'); exit 5 }};\nStart-Sleep -Milliseconds 120;\n"
                 ));
             }
             Step::Type { text } => {
@@ -602,7 +805,7 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
 }
 
 #[cfg(any(windows, test))]
-fn click_flags(button: Button) -> (&'static str, &'static str) {
+fn click_messages(button: Button) -> (&'static str, &'static str) {
     match button {
         Button::Left => ("LeftDown", "LeftUp"),
         Button::Right => ("RightDown", "RightUp"),
@@ -745,8 +948,8 @@ fn wrap_modified(key: &str, literal: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SETTLE_MS, MAX_STEPS, MAX_WAIT_MS, describe, key_name, screenshot_path,
-        send_keys_literal, windows_script,
+        DEFAULT_SETTLE_MS, MAX_STEPS, MAX_WAIT_MS, cursor_line, describe, key_name, pointer_target,
+        screenshot_path, send_keys_literal, windows_script,
     };
 
     #[test]
@@ -819,9 +1022,83 @@ mod tests {
             },
         ];
         let script = windows_script(&steps).unwrap();
-        assert!(script.contains("SetCursorPos(5, 6)"), "{script}");
+        // The agent's pointer is its own: no step moves the system cursor.
+        assert!(!script.contains("SetCursorPos"), "{script}");
+        assert!(!script.contains("mouse_event"), "{script}");
+        assert!(script.contains("[YopesInput]::Hover(5, 6)"), "{script}");
         assert!(script.contains("SendWait('it{'}s')"), "{script}");
         assert!(script.ends_with("exit 0;\n"), "{script}");
+    }
+
+    #[test]
+    fn the_script_posts_clicks_buttons_and_scrolls_to_the_window() {
+        let parsed: super::ComputerUseArgs = serde_json::from_str(
+            r#"{"action":"x","actions":[
+            {"type":"click","x":3,"y":4,"button":"right","count":2},
+            {"type":"double_click","x":5,"y":6},
+            {"type":"scroll","x":7,"y":8,"amount":-3},
+            {"type":"drag","from_x":1,"from_y":2,"to_x":3,"to_y":4}
+        ]}"#,
+        )
+        .unwrap();
+        let script = windows_script(&parsed.actions).unwrap();
+        assert!(
+            script.contains("Click(3, 4, [YopesInput]::RightDown, [YopesInput]::RightUp, 2)"),
+            "{script}"
+        );
+        assert!(
+            script.contains("Click(5, 6, [YopesInput]::LeftDown, [YopesInput]::LeftUp, 2)"),
+            "{script}"
+        );
+        assert!(script.contains("Scroll(7, 8, -360)"), "{script}");
+        assert!(
+            script.contains("Drag(1, 2, 3, 4, [YopesInput]::LeftDown, [YopesInput]::LeftUp)"),
+            "{script}"
+        );
+        // A point with no window under it fails the call instead of silently
+        // acting nowhere.
+        assert!(
+            script.contains("nothing to click at (3, 4)"),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn the_agent_pointer_follows_the_last_mouse_step() {
+        let steps = vec![
+            super::Step::Move { x: 5, y: 6 },
+            super::Step::Type {
+                text: "x".to_owned(),
+            },
+            super::Step::Drag {
+                from_x: 1,
+                from_y: 2,
+                to_x: 30,
+                to_y: 40,
+                button: super::Button::Left,
+            },
+            super::Step::Wait { ms: 10 },
+        ];
+        assert_eq!(pointer_target(&steps), Some((30, 40)));
+        assert_eq!(pointer_target(&steps[1..2]), None);
+    }
+
+    #[test]
+    fn the_agent_cursor_is_drawn_on_its_pointer() {
+        let path = crate::temp::unique_path("yopes-cursor-selftest", "png");
+        image::RgbaImage::from_pixel(60, 60, image::Rgba([240, 240, 240, 255]))
+            .save(&path)
+            .unwrap();
+        // A pointer outside the captured frame has no pixel to sit on.
+        assert!(!super::draw_agent_cursor(&path, (0, 0), (60, 60), (200, 10)).unwrap());
+        // The frame origin is subtracted, so screen pixels land where they should.
+        assert!(super::draw_agent_cursor(&path, (100, 100), (60, 60), (120, 120)).unwrap());
+        let drawn = image::open(&path).unwrap().to_rgba8();
+        let dark = drawn.get_pixel(26, 26).0;
+        assert!(dark[..3].iter().all(|channel| *channel < 60), "{dark:?}");
+        // Everything outside the icon is left exactly as captured.
+        assert_eq!(drawn.get_pixel(55, 55).0, [240, 240, 240, 255]);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -914,10 +1191,15 @@ mod tests {
             desktop: (-1920, 0, 3840, 1080),
             cursor: Some((640, 480)),
         };
-        let report = format!("{}{}", shot.describe(), shot.cursor_line());
+        let report = format!("{}{}", shot.describe(), cursor_line(Some((640, 480)), true));
         assert!(report.contains("Frame: (100, 200) 800x600"), "{report}");
         assert!(report.contains("Desktop: (-1920, 0) 3840x1080"), "{report}");
         assert!(report.contains("Cursor: (640, 480)"), "{report}");
+        // The line says whose pointer it is, and that the marker was drawn.
+        assert!(report.contains("agent cursor"), "{report}");
+        assert!(report.contains("system pointer never moves"), "{report}");
+        // An unknown pointer says nothing rather than guessing (0, 0).
+        assert_eq!(cursor_line(None, false), "");
         // A click target survives the report: the path stays the last line.
         assert_eq!(
             screenshot_path(&format!("{report}After: C:\\Temp\\a.png")),
