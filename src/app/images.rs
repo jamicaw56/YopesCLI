@@ -334,9 +334,7 @@ mod tests {
         std::fs::write(&path, tiny_png()).unwrap();
         let call = ToolCall::new("call_cu", "computer_use", r#"{"action":"look"}"#);
         let content = format!(
-            "Action: look
-Actions run: none
-After: {}",
+            "Action: look\nActions run: none\nFrame: (0, 0) 1920x1080 screen pixels\nDesktop: (0, 0) 1920x1080\nCursor: (10, 20)\nAfter: {}",
             path.display()
         );
         let attachment = tool_image_attachment(&call, &content).expect("the screenshot attaches");

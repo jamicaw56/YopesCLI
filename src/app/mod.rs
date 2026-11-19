@@ -78,8 +78,8 @@ use tabs::TabState;
 const COMPACT_CHANCE_FRAC: u64 = 5; // chance starts at ~4/5 of window
 /// Fraction of the model context window kept intact after compaction.
 const COMPACTION_KEEP_FRAC: u64 = 8; // keep ~1/8 of window
-/// Default context window (128K) when no specific model context size is known.
-pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
+/// Default context window (256K) when no specific model context size is known.
+pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 256_000;
 /// How many compaction requests one turn may run before the full history is
 /// sent regardless. Without a cap a provider that answers empty, or a summary
 /// that never shrinks the load, loops the turn forever.

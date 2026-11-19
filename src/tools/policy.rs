@@ -177,7 +177,12 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              On Windows, computer_use drives the real desktop: it takes a screenshot, runs mouse \
              or keyboard actions, then attaches a second screenshot of the result, so aim by the \
              pixels you saw and describe what the new screenshot shows. Every call asks the user \
-             first; one call should do one visible thing. \
+             first; one call should do one visible thing. The result reports the frame origin and \
+             size in screen pixels, the desktop bounds and the final cursor position, so add the \
+             frame origin to a pixel you pick in the image to get the coordinate to click. Crop \
+             with region when you already know where to look, add a wait step when an app needs \
+             a moment, and lead with focus_window before typing into a window that is not in \
+             front. \
              Format user-facing replies with Markdown by default: use ## headings for sections, \
              bullets or numbered lists for multiple items, **bold** for key terms, and fenced \
              code blocks with a language tag for code or commands. Use inline code for paths, \

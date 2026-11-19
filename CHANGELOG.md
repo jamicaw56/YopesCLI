@@ -6,6 +6,15 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `/settings` opens a popup with every `/set` key as a row, so a setting can
+  be changed with the arrow keys instead of memorising a command: `↑↓` picks
+  the row, `←→` steps the value and saves it, `esc` closes. The rows drive the
+  same setters the typed command does, so both paths agree. The permission
+  row cycles on · yolo · ask · off and leaves `dangerous` out, which stays
+  reachable by `/set tools dangerous` only.
+
 ### Changed
 
 - A full visual redesign around a two-accent theme system. Every palette
@@ -42,6 +51,13 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- `/provider connect` no longer names models.dev while it is not talking to
+  models.dev: the loading row of a custom endpoint says which host it is
+  fetching the model list from, and only the provider catalog names
+  models.dev.
+- The default context window is 256K instead of 128K: a model with no known
+  limit is assumed to hold 256K tokens, which raises both the compaction point
+  and the point where auto-compaction starts.
 - Session ids no longer collide when two tabs are created inside the same
   millisecond (a fast `alt+t`, or test processes starting together). The id
   folds a per-process counter and the process id into the wall clock, which
@@ -65,6 +81,17 @@ All notable changes to YopesCLI are recorded here. The format follows
   is denied in plan mode, every call asks for approval unless the user allows
   it with `a`, yolo or dangerous mode, and screenshots land in the temp root. The captured frame shows in the
   transcript as a capped pixel-art thumbnail.
+- `computer_use` now aims by numbers as well as by eye: the result reports the
+  captured frame's origin and size in screen pixels, the desktop bounds and
+  the final cursor position, so a pixel picked in the image plus the frame
+  origin is the coordinate to click. A `region` crops the capture to one
+  rectangle (far easier for a vision model to read than a whole 4K desktop),
+  `settle_ms` sets how long the desktop gets to repaint before the second
+  screenshot, and two new steps joined the list: `wait` pauses between two
+  clicks for an app that needs a moment, and `focus_window` brings a window
+  whose title contains a given string to the front before the keys start
+  typing into it. Waits are capped at 10 s per step, and a capture whose
+  geometry cannot be read is refused instead of guessed at.
 - A `.yopesignore` file at the workspace root filters the filesystem walks:
   `glob`, `grep`, `list_dir` and `multi_read` with `all: true` skip whatever it
   names, so build output and vendored trees stop eating the context. The format

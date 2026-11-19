@@ -13,7 +13,7 @@ fn computer_use_schema() -> Value {
         "type": "function",
         "function": {
             "name": "computer_use",
-            "description": "Drive the desktop on Windows: move the mouse, click, scroll, drag, type text and press keys, then see the result. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
+            "description": "Drive the desktop on Windows: move the mouse, click, scroll, drag, type text, press keys, wait between steps, focus a window and crop the capture to a region, then see the result. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. The result reports the frame origin and size in screen pixels, the desktop bounds and the final cursor position: add the frame origin to a pixel you pick in the image to get the screen coordinate to click. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -24,6 +24,33 @@ fn computer_use_schema() -> Value {
                     "screen": {
                         "type": "integer",
                         "description": "Display to capture, 0-based, for multi-monitor desktops. Defaults to 0."
+                    },
+                    "region": {
+                        "type": "object",
+                        "description": "Capture only this rectangle of the screen, in screen pixels. A cropped frame is far easier to read than a whole 4K desktop, and the reported frame origin tells you how to map an image pixel back to a screen coordinate. Takes precedence over screen.",
+                        "properties": {
+                            "x": {
+                                "type": "integer",
+                                "description": "Left edge of the crop, in screen pixels."
+                            },
+                            "y": {
+                                "type": "integer",
+                                "description": "Top edge of the crop, in screen pixels."
+                            },
+                            "width": {
+                                "type": "integer",
+                                "description": "Crop width in pixels, above zero."
+                            },
+                            "height": {
+                                "type": "integer",
+                                "description": "Crop height in pixels, above zero."
+                            }
+                        },
+                        "required": ["x", "y", "width", "height"]
+                    },
+                    "settle_ms": {
+                        "type": "integer",
+                        "description": "How long to let the desktop repaint after the actions before the second screenshot, in milliseconds. Defaults to 350, capped at 10000. Raise it for a slow app; use a wait step when the delay belongs between two clicks."
                     },
                     "actions": {
                         "type": "array",
@@ -40,7 +67,9 @@ fn computer_use_schema() -> Value {
                                         "scroll",
                                         "drag",
                                         "type",
-                                        "key"
+                                        "key",
+                                        "wait",
+                                        "focus_window"
                                     ],
                                     "description": "The step kind."
                                 },
@@ -95,6 +124,14 @@ fn computer_use_schema() -> Value {
                                 "chord": {
                                     "type": "string",
                                     "description": "A key chord such as ctrl+s, ctrl+shift+t or alt+tab."
+                                },
+                                "ms": {
+                                    "type": "integer",
+                                    "description": "Wait steps: how long to pause in milliseconds. Defaults to 500, capped at 10000."
+                                },
+                                "title": {
+                                    "type": "string",
+                                    "description": "Part of the window title to bring to the front (focus_window steps). Matching is case-insensitive on the main window title."
                                 }
                             },
                             "required": ["type"]

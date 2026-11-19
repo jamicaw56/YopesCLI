@@ -1,9 +1,11 @@
 //! `computer_use`: drive the desktop and show the model what happened.
 //!
 //! A call takes one screenshot, then runs its `actions` in order: mouse moves,
-//! clicks, scrolls, drags, typed text, key presses and key chords. A second
-//! screenshot after the actions is written to the temp root, where the app
-//! attaches it to the tool message so a vision model sees the result.
+//! clicks, scrolls, drags, typed text, key presses, key chords, waits and
+//! window focus changes. A second screenshot after the actions is written to
+//! the temp root, where the app attaches it to the tool message so a vision
+//! model sees the result. The result also names where the captured frame sits
+//! on the desktop and where the pointer ended up, so the next call can aim.
 //!
 //! Windows only. The Windows implementation drives the desktop through
 //! `System.Windows.Forms` (mouse and typing) and `System.Drawing` (screen
@@ -26,6 +28,25 @@ struct ComputerUseArgs {
     /// The screen to capture, for multi-monitor desktops: 0 is the primary.
     #[serde(default)]
     screen: u32,
+    /// Capture only part of the screen, in screen pixels. A vision model
+    /// reads a small region far better than a whole 4K desktop, and the crop
+    /// is what the click coordinates are relative to as well.
+    #[serde(default)]
+    region: Option<Region>,
+    /// How long to let the desktop paint after the actions, in milliseconds.
+    /// Defaults to 350; raise it for slow apps, and use a `wait` step when
+    /// the delay belongs between two clicks.
+    #[serde(default)]
+    settle_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+struct Region {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
 }
 
 /// The fields are read by the Windows script builder and by the tests. A
@@ -75,6 +96,14 @@ enum Step {
         #[serde(default)]
         chord: String,
     },
+    /// Pause between two steps, for an app that needs a moment to open.
+    Wait {
+        #[serde(default = "default_wait_ms")]
+        ms: u64,
+    },
+    /// Bring the window whose title contains this text to the front, so the
+    /// keys that follow land in it instead of wherever focus was.
+    FocusWindow { title: String },
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -90,11 +119,20 @@ const fn one_click() -> u8 {
     1
 }
 
+const fn default_wait_ms() -> u64 {
+    500
+}
+
 /// The most steps one call may carry: a runaway plan must not hold the
 /// pointer for minutes.
 const MAX_STEPS: usize = 32;
 /// The longest text one `type` step may send.
 const MAX_TYPE_CHARS: usize = 4_000;
+/// The longest one `wait` step may pause, or one call may settle after its
+/// actions.
+const MAX_WAIT_MS: u64 = 10_000;
+/// How long the desktop gets to repaint after the actions, by default.
+const DEFAULT_SETTLE_MS: u64 = 350;
 
 pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
     let args: ComputerUseArgs = parse(arguments)?;
@@ -106,30 +144,49 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
         );
     }
     for step in &args.actions {
-        if let Step::Type { text } = step {
-            let chars = text.chars().count();
-            if chars > MAX_TYPE_CHARS {
-                anyhow::bail!(
-                    "one type action may send at most {MAX_TYPE_CHARS} characters (got {chars})"
-                );
+        match step {
+            Step::Type { text } => {
+                let chars = text.chars().count();
+                if chars > MAX_TYPE_CHARS {
+                    anyhow::bail!(
+                        "one type action may send at most {MAX_TYPE_CHARS} characters (got {chars})"
+                    );
+                }
             }
+            Step::Wait { ms } if *ms > MAX_WAIT_MS => {
+                anyhow::bail!("one wait action may pause at most {MAX_WAIT_MS} ms (got {ms})");
+            }
+            Step::FocusWindow { title } if title.trim().is_empty() => {
+                anyhow::bail!("a focus_window action needs a title to look for");
+            }
+            _ => {}
         }
+    }
+    if args
+        .region
+        .is_some_and(|region| region.width == 0 || region.height == 0)
+    {
+        anyhow::bail!("region needs a width and a height above zero");
     }
     if args.actions.is_empty() && intent.is_empty() {
         anyhow::bail!("computer_use needs an action: describe it, or list the actions to run");
     }
+    let settle = args.settle_ms.unwrap_or(DEFAULT_SETTLE_MS).min(MAX_WAIT_MS);
 
     // The "before" capture proves the desktop answered; the model receives
     // only the state after the actions, one screenshot per call.
-    let _before = screenshot(args.screen)?;
+    let before = screenshot(args.screen, args.region)?;
+    // A wait step writes into the same PowerShell run as the clicks around
+    // it, so one call can wait for a window to open instead of the model
+    // guessing a settle time from outside.
     let ran = run_actions(&args.actions)?;
     // The pointer and focus moved, so give the desktop a moment to paint the
     // result before the second capture; the wait is what makes the model see
     // the new state instead of the old one.
-    if !args.actions.is_empty() {
-        std::thread::sleep(std::time::Duration::from_millis(350));
+    if !args.actions.is_empty() && settle > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(settle));
     }
-    let after = screenshot(args.screen)?;
+    let after = screenshot(args.screen, args.region)?;
 
     let mut report = String::new();
     report.push_str("Action: ");
@@ -142,8 +199,13 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
     report.push_str("Actions run: ");
     report.push_str(&joined_actions(&ran));
     report.push('\n');
+    // The geometry is what makes the next call aimable: where the captured
+    // frame sits in screen pixels, how big the desktop is, and where the
+    // pointer ended up after the steps.
+    report.push_str(&before.describe());
+    report.push_str(&after.cursor_line());
     report.push_str("After: ");
-    report.push_str(&after.display().to_string());
+    report.push_str(&after.path.display().to_string());
     Ok(truncate_output(report))
 }
 
@@ -188,6 +250,8 @@ fn describe(step: &Step) -> String {
         Step::Type { text } => format!("type {} characters", text.chars().count()),
         Step::Key { chord, .. } if !chord.is_empty() => format!("press {chord}"),
         Step::Key { keys, .. } => format!("press {}", keys.join("+")),
+        Step::Wait { ms } => format!("wait {ms} ms"),
+        Step::FocusWindow { title } => format!("focus window `{title}`"),
     }
 }
 
@@ -237,29 +301,95 @@ fn run_actions(steps: &[Step]) -> anyhow::Result<Vec<String>> {
     anyhow::bail!("computer_use is only implemented on Windows")
 }
 
-/// Capture `screen` to a PNG in the temp root and return its path.
+/// One captured PNG and the geometry it came from. On a plain non-Windows
+/// build nothing constructs it, so its fields are allowed to sit unread.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+struct Shot {
+    path: std::path::PathBuf,
+    origin: (i32, i32),
+    size: (u32, u32),
+    desktop: (i32, i32, u32, u32),
+    cursor: Option<(i32, i32)>,
+}
+
+/// What the capture script reports: the frame's origin and size, the whole
+/// desktop's bounds, and where the pointer sits.
+#[cfg(any(windows, test))]
+struct Geometry {
+    origin: (i32, i32),
+    size: (u32, u32),
+    desktop: (i32, i32, u32, u32),
+    cursor: Option<(i32, i32)>,
+}
+
+impl Shot {
+    /// The geometry lines of the report. A pixel picked in the image plus the
+    /// frame origin gives a screen coordinate, and the desktop bounds tell
+    /// the model how much room the frame sits in.
+    fn describe(&self) -> String {
+        let (x, y) = self.origin;
+        let (width, height) = self.size;
+        let (dx, dy, dw, dh) = self.desktop;
+        format!(
+            "Frame: ({x}, {y}) {width}x{height} screen pixels\nDesktop: ({dx}, {dy}) {dw}x{dh}\n"
+        )
+    }
+
+    fn cursor_line(&self) -> String {
+        match self.cursor {
+            Some((x, y)) => format!("Cursor: ({x}, {y})\n"),
+            None => String::new(),
+        }
+    }
+}
+
+/// Capture `screen`, cropped to `region` when one is given, to a PNG in the
+/// temp root, and report where that frame sits on the desktop.
 #[cfg(windows)]
-fn screenshot(screen: u32) -> anyhow::Result<std::path::PathBuf> {
+fn screenshot(screen: u32, region: Option<Region>) -> anyhow::Result<Shot> {
     let path = crate::temp::unique_path("yopes-screen", "png");
     let quoted = ps_quote(&path.display().to_string());
+    let (region_x, region_y, region_w, region_h) = match region {
+        Some(region) => (
+            region.x,
+            region.y,
+            i64::from(region.width),
+            i64::from(region.height),
+        ),
+        None => (0, 0, 0, 0),
+    };
     // VirtualScreen covers every monitor; a per-screen capture selects one
-    // display's bounds so multi-monitor desktops can be addressed by index.
+    // display's bounds so multi-monitor desktops can be addressed by index,
+    // and a `region` crops further. The script prints one `geometry` line
+    // holding the desktop bounds, the frame's origin and size, and the
+    // cursor, so the model can turn an image pixel into a screen pixel
+    // without a second call.
     let script = format!(
         r#"Add-Type -AssemblyName System.Windows.Forms;
 Add-Type -AssemblyName System.Drawing;
-$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen;
+$desktop = [System.Windows.Forms.SystemInformation]::VirtualScreen;
+$bounds = $desktop;
 $index = {screen};
 if ($index -gt 0) {{
   $screens = [System.Windows.Forms.Screen]::AllScreens;
   if ($index -ge $screens.Count) {{ [Console]::Error.Write('no screen ' + $index); exit 3 }}
   $bounds = $screens[$index].Bounds;
 }}
+if ({region_w} -gt 0) {{
+  $bounds = New-Object System.Drawing.Rectangle({region_x}, {region_y}, {region_w}, {region_h});
+}}
 $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height);
 $gfx = [System.Drawing.Graphics]::FromImage($bmp);
-$gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size);
+$gfx.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size);
 $bmp.Save({quoted}, [System.Drawing.Imaging.ImageFormat]::Png);
 $gfx.Dispose();
 $bmp.Dispose();
+$cursor = '-';
+try {{
+  $at = [System.Windows.Forms.Cursor]::Position;
+  $cursor = ('' + $at.X + ',' + $at.Y);
+}} catch {{ }}
+Write-Output ('geometry ' + $desktop.X + ' ' + $desktop.Y + ' ' + $desktop.Width + ' ' + $desktop.Height + ' ' + $bounds.X + ' ' + $bounds.Y + ' ' + $bounds.Width + ' ' + $bounds.Height + ' ' + $cursor);
 exit 0;"#
     );
     let output = std::process::Command::new("powershell")
@@ -278,17 +408,71 @@ exit 0;"#
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("could not capture the screen: {}", stderr.trim().to_owned());
     }
-    Ok(path)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let geometry = parse_geometry(&stdout).ok_or_else(|| {
+        anyhow::anyhow!(
+            "could not read the screen geometry from `{}`",
+            stdout.trim()
+        )
+    })?;
+    Ok(Shot {
+        path,
+        origin: geometry.origin,
+        size: geometry.size,
+        desktop: geometry.desktop,
+        cursor: geometry.cursor,
+    })
+}
+
+/// Read the `geometry` line the capture script prints: desktop x/y/w/h,
+/// frame x/y/w/h, then `x,y` for the cursor or `-` when it is unknown. A
+/// missing or short line is refused rather than guessed at, because a wrong
+/// origin would make the next click land somewhere else.
+#[cfg(any(windows, test))]
+fn parse_geometry(stdout: &str) -> Option<Geometry> {
+    let line = stdout
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("geometry "))?;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 9 {
+        return None;
+    }
+    let number = |index: usize| -> Option<i64> { parts.get(index)?.parse().ok() };
+    let cursor_token = *parts.get(8)?;
+    let cursor = if cursor_token == "-" {
+        None
+    } else {
+        let (x, y) = cursor_token.split_once(',')?;
+        Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+    };
+    Some(Geometry {
+        desktop: (
+            i32::try_from(number(0)?).ok()?,
+            i32::try_from(number(1)?).ok()?,
+            u32::try_from(number(2)?).ok()?,
+            u32::try_from(number(3)?).ok()?,
+        ),
+        origin: (
+            i32::try_from(number(4)?).ok()?,
+            i32::try_from(number(5)?).ok()?,
+        ),
+        size: (
+            u32::try_from(number(6)?).ok()?,
+            u32::try_from(number(7)?).ok()?,
+        ),
+        cursor,
+    })
 }
 
 #[cfg(not(windows))]
-fn screenshot(_screen: u32) -> anyhow::Result<std::path::PathBuf> {
+fn screenshot(_screen: u32, _region: Option<Region>) -> anyhow::Result<Shot> {
     anyhow::bail!("computer_use is only implemented on Windows")
 }
 
 /// A PowerShell single-quoted literal: `'` doubles, so a path or a piece of
 /// typed text cannot end the string early.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -315,6 +499,20 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            public const uint Wheel = 0x0800;\n\
          }\n\
          '@;\n\
+         Add-Type @'\n\
+         using System;\n\
+         using System.Runtime.InteropServices;\n\
+         public static class YopesWindow {\n\
+           [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr window);\n\
+           [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr window, int command);\n\
+         }\n\
+         '@;\n\
+         function OnTitle([string]$needle) {\n\
+           $found = Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.MainWindowTitle -and $_.MainWindowTitle.ToLower().Contains($needle.ToLower()) } catch { $false } } | Select-Object -First 1;\n\
+           if (-not $found) { [Console]::Error.Write('no window title contains ' + $needle); exit 4 }\n\
+           [void][YopesWindow]::ShowWindow($found.MainWindowHandle, 9);\n\
+           [void][YopesWindow]::SetForegroundWindow($found.MainWindowHandle);\n\
+         }\n\
          $ErrorActionPreference = 'Stop';\n",
     );
     for step in steps {
@@ -383,6 +581,18 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
                 script.push_str(&format!(
                     "[System.Windows.Forms.SendKeys]::SendWait('{literal}');\n\
                      Start-Sleep -Milliseconds 120;\n"
+                ));
+            }
+            Step::Wait { ms } => {
+                script.push_str(&format!(
+                    "Start-Sleep -Milliseconds {};\n",
+                    (*ms).min(MAX_WAIT_MS)
+                ));
+            }
+            Step::FocusWindow { title } => {
+                script.push_str(&format!(
+                    "OnTitle({});\nStart-Sleep -Milliseconds 150;\n",
+                    ps_quote(title)
                 ));
             }
         }
@@ -535,7 +745,8 @@ fn wrap_modified(key: &str, literal: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_STEPS, describe, key_name, screenshot_path, send_keys_literal, windows_script,
+        DEFAULT_SETTLE_MS, MAX_STEPS, MAX_WAIT_MS, describe, key_name, screenshot_path,
+        send_keys_literal, windows_script,
     };
 
     #[test]
@@ -623,10 +834,12 @@ mod tests {
             {"type":"drag","from_x":1,"from_y":2,"to_x":3,"to_y":4},
             {"type":"type","text":"hello"},
             {"type":"key","chord":"ctrl+s"},
-            {"type":"key","keys":["ENTER"]}
+            {"type":"key","keys":["ENTER"]},
+            {"type":"wait","ms":250},
+            {"type":"focus_window","title":"Notepad"}
         ]}"#;
         let parsed: super::ComputerUseArgs = serde_json::from_str(all).unwrap();
-        assert_eq!(parsed.actions.len(), 8);
+        assert_eq!(parsed.actions.len(), 10);
         assert_eq!(describe(&parsed.actions[0]), "move to (1, 2)");
         assert_eq!(describe(&parsed.actions[1]), "click 2x Right at (3, 4)");
         assert_eq!(describe(&parsed.actions[2]), "double-click at (5, 6)");
@@ -635,6 +848,80 @@ mod tests {
         assert_eq!(describe(&parsed.actions[5]), "type 5 characters");
         assert_eq!(describe(&parsed.actions[6]), "press ctrl+s");
         assert_eq!(describe(&parsed.actions[7]), "press ENTER");
+        assert_eq!(describe(&parsed.actions[8]), "wait 250 ms");
+        assert_eq!(describe(&parsed.actions[9]), "focus window `Notepad`");
         assert_eq!(MAX_STEPS, 32);
+    }
+
+    #[test]
+    fn a_wait_step_defaults_and_quotes_into_the_script() {
+        let parsed: super::ComputerUseArgs = serde_json::from_str(
+            r#"{"action":"x","actions":[{"type":"wait"},{"type":"focus_window","title":"a'b"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(describe(&parsed.actions[0]), "wait 500 ms");
+        let script = windows_script(&parsed.actions).unwrap();
+        assert!(
+            script.contains("Start-Sleep -Milliseconds 500;"),
+            "{script}"
+        );
+        assert!(script.contains("OnTitle('a''b');"), "{script}");
+    }
+
+    #[test]
+    fn a_wait_longer_than_the_cap_refuses() {
+        let error = super::computer_use(r#"{"action":"x","actions":[{"type":"wait","ms":60000}]}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("at most 10000 ms"), "{error}");
+        assert_eq!(MAX_WAIT_MS, 10_000);
+        assert!(DEFAULT_SETTLE_MS <= MAX_WAIT_MS);
+    }
+
+    #[test]
+    fn a_region_must_have_an_area() {
+        let error =
+            super::computer_use(r#"{"action":"x","region":{"x":0,"y":0,"width":0,"height":10}}"#)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("width and a height"), "{error}");
+    }
+
+    #[test]
+    fn the_geometry_line_is_read_back_exactly() {
+        let geometry =
+            super::parse_geometry("noise\ngeometry -1920 0 3840 1080 100 200 800 600 640,480\n")
+                .unwrap();
+        assert_eq!(geometry.desktop, (-1920, 0, 3840, 1080));
+        assert_eq!(geometry.origin, (100, 200));
+        assert_eq!(geometry.size, (800, 600));
+        assert_eq!(geometry.cursor, Some((640, 480)));
+        // A cursor the script could not read stays unknown instead of (0, 0).
+        let no_cursor = super::parse_geometry("geometry 0 0 1920 1080 0 0 1920 1080 -").unwrap();
+        assert_eq!(no_cursor.cursor, None);
+        // A short or absent line is refused, never guessed at.
+        assert!(super::parse_geometry("geometry 0 0 1920 1080").is_none());
+        assert!(super::parse_geometry("nothing here").is_none());
+        assert!(super::parse_geometry("geometry 0 0 1920 1080 0 0 800 600 foo,bar").is_none());
+    }
+
+    #[test]
+    fn the_report_names_the_frame_the_desktop_and_the_cursor() {
+        let shot = super::Shot {
+            path: std::path::PathBuf::from("C:\\Temp\\a.png"),
+            origin: (100, 200),
+            size: (800, 600),
+            desktop: (-1920, 0, 3840, 1080),
+            cursor: Some((640, 480)),
+        };
+        let report = format!("{}{}", shot.describe(), shot.cursor_line());
+        assert!(report.contains("Frame: (100, 200) 800x600"), "{report}");
+        assert!(report.contains("Desktop: (-1920, 0) 3840x1080"), "{report}");
+        assert!(report.contains("Cursor: (640, 480)"), "{report}");
+        // A click target survives the report: the path stays the last line.
+        assert_eq!(
+            screenshot_path(&format!("{report}After: C:\\Temp\\a.png")),
+            Some("C:\\Temp\\a.png".to_owned())
+        );
     }
 }

@@ -286,7 +286,7 @@ impl App {
     /// the turn forever.
     pub(crate) fn begin_turn_after_compaction(&mut self, attempts: u32) -> Action {
         let total = Session::estimate_tokens(&self.session.messages);
-        let window = self.model_context_window().unwrap_or(128_000);
+        let window = self.model_context_window().unwrap_or(DEFAULT_CONTEXT_WINDOW);
         let keep = window / COMPACTION_KEEP_FRAC;
         if self.auto_compact && attempts < MAX_COMPACTION_ATTEMPTS {
             if let Some(split) = self.session.compaction_split(keep) {
