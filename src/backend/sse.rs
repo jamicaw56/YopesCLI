@@ -412,21 +412,32 @@ struct OpenAiError {
     message: String,
 }
 
+/// One line of a server-sent event stream.
+enum SseLine<'a> {
+    /// Blank, a comment, or a non-data field such as `event:`.
+    Skip,
+    /// The `data: [DONE]` sentinel.
+    Done,
+    Data(&'a str),
+}
+
+fn sse_data(line: &str) -> SseLine<'_> {
+    match line.trim().strip_prefix("data:").map(str::trim) {
+        None => SseLine::Skip,
+        Some("[DONE]") => SseLine::Done,
+        Some(data) => SseLine::Data(data),
+    }
+}
+
 pub(super) fn parse_openai_line(
     line: &str,
     state: &mut OpenAiState,
 ) -> Result<(Vec<ParsedEvent>, bool)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') {
-        return Ok((Vec::new(), false));
-    }
-    let Some(data) = line.strip_prefix("data:") else {
-        return Ok((Vec::new(), false));
+    let data = match sse_data(line) {
+        SseLine::Skip => return Ok((Vec::new(), false)),
+        SseLine::Done => return Ok((state.flush_think().into_iter().collect(), true)),
+        SseLine::Data(data) => data,
     };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok((state.flush_think().into_iter().collect(), true));
-    }
     let chunk: OpenAiChunk = serde_json::from_str(data).context("invalid OpenAI stream chunk")?;
     if let Some(error) = chunk.error {
         bail!("OpenAI stream error: {}", error.message);
@@ -552,17 +563,11 @@ pub(super) fn parse_anthropic_line(
     line: &str,
     state: &mut OpenAiState,
 ) -> Result<(Vec<ParsedEvent>, bool)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
-        return Ok((Vec::new(), false));
-    }
-    let Some(data) = line.strip_prefix("data:") else {
-        return Ok((Vec::new(), false));
+    let data = match sse_data(line) {
+        SseLine::Skip => return Ok((Vec::new(), false)),
+        SseLine::Done => return Ok((Vec::new(), true)),
+        SseLine::Data(data) => data,
     };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok((Vec::new(), true));
-    }
     let chunk: AnthropicChunk =
         serde_json::from_str(data).context("invalid Anthropic stream chunk")?;
     if let Some(err) = chunk.error {
@@ -687,17 +692,11 @@ pub(super) fn parse_gemini_line(
     line: &str,
     state: &mut OpenAiState,
 ) -> Result<(Vec<ParsedEvent>, bool)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
-        return Ok((Vec::new(), false));
-    }
-    let Some(data) = line.strip_prefix("data:") else {
-        return Ok((Vec::new(), false));
+    let data = match sse_data(line) {
+        SseLine::Skip => return Ok((Vec::new(), false)),
+        SseLine::Done => return Ok((Vec::new(), true)),
+        SseLine::Data(data) => data,
     };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return Ok((Vec::new(), true));
-    }
     let chunk: GeminiChunk = serde_json::from_str(data).context("invalid Gemini stream chunk")?;
     if let Some(err) = chunk.error {
         bail!("Gemini stream error: {}", err.message);
