@@ -284,7 +284,7 @@ fn screenshot(_screen: u32) -> anyhow::Result<std::path::PathBuf> {
 
 /// A PowerShell single-quoted literal: `'` doubles, so a path or a piece of
 /// typed text cannot end the string early.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -573,7 +573,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn special_characters_are_wrapped_for_send_keys() {
         assert_eq!(send_keys_literal("a+b{c}"), "'a{+}b{{}c{}}'");
@@ -581,7 +580,6 @@ mod tests {
         assert_eq!(send_keys_literal("it's"), "'it{'}s'");
     }
 
-    #[cfg(windows)]
     #[test]
     fn keys_map_to_send_keys_names_and_unknown_ones_refuse() {
         assert_eq!(key_name("enter").unwrap(), "ENTER");
@@ -589,7 +587,6 @@ mod tests {
         assert!(key_name("hyperdrive").is_err());
     }
 
-    #[cfg(windows)]
     #[test]
     fn chords_compile_to_send_keys_syntax() {
         assert_eq!(super::chord_literal("ctrl+s").unwrap(), "^{s}");
@@ -598,7 +595,6 @@ mod tests {
         assert!(super::chord_literal("hyper+s").is_err());
     }
 
-    #[cfg(windows)]
     #[test]
     fn the_script_keeps_every_step_and_ends_cleanly() {
         let steps = vec![
