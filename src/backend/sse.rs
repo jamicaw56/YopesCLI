@@ -489,7 +489,11 @@ struct OllamaChunk {
 
 #[derive(Deserialize)]
 struct OllamaMessage {
+    #[serde(default)]
     content: String,
+    /// Reasoning from thinking models when the request set `think`.
+    #[serde(default)]
+    thinking: String,
 }
 
 pub(super) fn parse_ollama_line(line: &str) -> Result<(Vec<ParsedEvent>, bool)> {
@@ -504,12 +508,13 @@ pub(super) fn parse_ollama_line(line: &str) -> Result<(Vec<ParsedEvent>, bool)> 
         return Ok((Vec::new(), true));
     }
     let mut events = Vec::new();
-    if let Some(text) = chunk
-        .message
-        .map(|message| message.content)
-        .filter(|text| !text.is_empty())
-    {
-        events.push(ParsedEvent::Delta(text));
+    if let Some(message) = chunk.message {
+        if !message.thinking.is_empty() {
+            events.push(ParsedEvent::Reasoning(message.thinking));
+        }
+        if !message.content.is_empty() {
+            events.push(ParsedEvent::Delta(message.content));
+        }
     }
     Ok((events, false))
 }
@@ -842,6 +847,17 @@ mod tests {
         assert_eq!(
             parse_ollama_line(r#"{"done":true}"#).unwrap(),
             (Vec::new(), true)
+        );
+    }
+
+    #[test]
+    fn ollama_thinking_is_reasoning() {
+        assert_eq!(
+            parse_ollama_line(
+                r#"{"message":{"role":"assistant","content":"","thinking":"hmm"},"done":false}"#
+            )
+            .unwrap(),
+            (vec![ParsedEvent::Reasoning("hmm".to_owned())], false)
         );
     }
 

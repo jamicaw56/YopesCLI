@@ -488,7 +488,7 @@ impl Backend {
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "model": self.model,
             "messages": request_messages(
                 messages,
@@ -500,6 +500,15 @@ impl Backend {
             )?,
             "stream": true,
         });
+        // Ollama only streams `message.thinking` when asked; a model without
+        // thinking support rejects the flag, so it follows the effort setting.
+        if self
+            .reasoning_effort
+            .as_deref()
+            .is_some_and(|effort| !effort.trim().is_empty())
+        {
+            request["think"] = serde_json::Value::Bool(true);
+        }
         let response = send_with_retry("Ollama", request_id, events, || {
             self.client
                 .post(format!("{}/api/chat", self.base_url))
