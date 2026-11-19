@@ -544,11 +544,31 @@ impl Backend {
             "messages": payload_messages,
             "stream": true,
         });
+        // Prompt caching: breakpoints after the system prompt, the tool list
+        // and the newest message, so each turn rereads the stable prefix at
+        // the cached rate instead of paying for the whole history again.
+        let cached = serde_json::json!({"type": "ephemeral"});
         if let Some(sys) = system {
-            request["system"] = serde_json::Value::String(sys);
+            request["system"] = serde_json::json!([{
+                "type": "text",
+                "text": sys,
+                "cache_control": cached,
+            }]);
         }
         if tooling {
-            request["tools"] = anthropic_tools();
+            let mut tools = anthropic_tools();
+            if let Some(last) = tools.as_array_mut().and_then(|tools| tools.last_mut()) {
+                last["cache_control"] = cached.clone();
+            }
+            request["tools"] = tools;
+        }
+        if let Some(block) = request["messages"]
+            .as_array_mut()
+            .and_then(|messages| messages.last_mut())
+            .and_then(|message| message["content"].as_array_mut())
+            .and_then(|content| content.last_mut())
+        {
+            block["cache_control"] = cached;
         }
         if let Some(effort) = self
             .reasoning_effort

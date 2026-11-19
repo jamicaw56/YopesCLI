@@ -626,6 +626,7 @@ pub fn change_preview(call: &ToolCall) -> ChangePreview {
         "write_file" => write_file_preview(&call.function.arguments),
         "edit_file" => edit_file_preview(&call.function.arguments),
         "multi_edit" => multi_edit_preview(&call.function.arguments),
+        "apply_patch" => super::patch::apply_patch_preview(&call.function.arguments),
         _ => ChangePreview {
             diffs: Vec::new(),
             before: None,

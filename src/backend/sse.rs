@@ -540,6 +540,23 @@ struct AnthropicMessage {
 struct AnthropicUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    /// With prompt caching on, `input_tokens` counts only the uncached tail;
+    /// these two carry the rest of the prompt.
+    cache_read_input_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+}
+
+impl AnthropicUsage {
+    fn prompt_tokens(&self) -> u64 {
+        [
+            self.input_tokens,
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+        ]
+        .into_iter()
+        .flatten()
+        .sum()
+    }
 }
 
 #[derive(Deserialize)]
@@ -581,7 +598,8 @@ pub(super) fn parse_anthropic_line(
     let mut events = Vec::new();
 
     if let Some(usage) = chunk.message.and_then(|m| m.usage) {
-        if let Some(in_tokens) = usage.input_tokens.filter(|t| *t > 0) {
+        let in_tokens = usage.prompt_tokens();
+        if in_tokens > 0 {
             events.push(ParsedEvent::Usage {
                 prompt_tokens: in_tokens,
                 completion_tokens: 0,

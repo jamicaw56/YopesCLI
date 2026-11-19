@@ -121,6 +121,7 @@ impl Mode {
                     "write_file"
                         | "edit_file"
                         | "multi_edit"
+                        | "apply_patch"
                         | "run_command"
                         | "bash_background"
                         | "bash_kill"
@@ -179,6 +180,7 @@ mod tests {
         assert!(Mode::Plan.denied("write_file"));
         assert!(Mode::Plan.denied("edit_file"));
         assert!(Mode::Plan.denied("multi_edit"));
+        assert!(Mode::Plan.denied("apply_patch"));
         assert!(Mode::Plan.denied("run_command"));
         assert!(Mode::Plan.denied("bash_background"));
         assert!(Mode::Plan.denied("bash_kill"));

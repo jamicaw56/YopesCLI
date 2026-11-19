@@ -107,6 +107,30 @@ fn computer_use_schema() -> Value {
     })
 }
 
+/// The `apply_patch` schema, its own literal to spare the macro's recursion
+/// budget, like `computer_use`.
+fn apply_patch_schema() -> Value {
+    json!(
+        {
+            "type": "function",
+            "function": {
+                "name": "apply_patch",
+                "description": "Apply a multi-file patch: add, delete, update and rename files in one call. Format:\n*** Begin Patch\n*** Add File: path\n+line\n*** Update File: path\n*** Move to: new/path (optional)\n@@ optional line to seek first\n context line\n-removed line\n+added line\n*** Delete File: path\n*** End Patch\nKeep 1-3 context lines around each change. Every hunk is checked before anything is written, so a patch applies fully or not at all.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "patch": {
+                            "type": "string",
+                            "description": "The full patch text, from *** Begin Patch to *** End Patch."
+                        }
+                    },
+                    "required": ["patch"]
+                }
+            }
+        }
+    )
+}
+
 pub fn definitions() -> Value {
     let mut value = json!([
         {
@@ -591,6 +615,7 @@ pub fn definitions() -> Value {
     // One schema per literal: the macro expands each item itself, so adding
     // the deepest tool here would exhaust the recursion limit.
     if let Some(items) = value.as_array_mut() {
+        items.push(apply_patch_schema());
         items.push(computer_use_schema());
     }
     value

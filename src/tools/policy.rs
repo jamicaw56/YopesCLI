@@ -64,6 +64,9 @@ fn is_external_modification(call: &ToolCall) -> bool {
                         .is_some_and(|p| !is_within_allowed_roots(Path::new(p)))
                 })
             }),
+        "apply_patch" => super::patch::patch_paths(&call.function.arguments)
+            .iter()
+            .any(|p| !is_within_allowed_roots(Path::new(p))),
         // Moving the working directory outside the workspace or the temp root
         // re-roots every relative path the tools see, so it asks first.
         "move_to" => args
@@ -141,6 +144,8 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              be excluded there; read it when something you expect is absent. \
              For several replacements in one or more files, batch them with multi_edit: \
              it applies every edit in order, and one failure refuses the whole batch. \
+             For larger changes (new files, deletions, renames, many hunks) use apply_patch \
+             with a `*** Begin Patch` envelope; it also applies all or nothing. \
              Change the working directory with move_to when a task lives in another folder: \
              relative paths resolve against it, and moving outside the workspace asks first. \
              To read several files in one call, batch them with multi_read: \

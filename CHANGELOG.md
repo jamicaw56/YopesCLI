@@ -42,6 +42,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- Thinking from OpenAI-compatible proxies now shows: `delta.reasoning` is
+  read alongside `delta.reasoning_content`, and inline `<think>...</think>`
+  text in the content stream is split out as reasoning (tags split across
+  chunks included).
 - Session ids no longer collide when two tabs are created inside the same
   millisecond (a fast `alt+t`, or test processes starting together). The id
   folds a per-process counter and the process id into the wall clock, which
@@ -49,6 +53,13 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `apply_patch` tool: one `*** Begin Patch` envelope adds, deletes, updates
+  and renames files. Every hunk is matched in memory first (exact, then
+  whitespace-tolerant), so a patch applies fully or touches nothing. It shows
+  diffs in the approval dialog and transcript, asks before writing outside the
+  workspace, and is blocked in plan mode.
+- Ollama thinking models stream their reasoning: `think` is sent when a
+  reasoning effort is set, and `message.thinking` lands in the thinking block.
 - A `dangerous` permission mode (`/set tools dangerous`): every tool call runs
   unattended, `computer_use` included, so no approval prompt ever appears.
   It is deliberately outside the Shift+Tab cycle - a mode that hands the model

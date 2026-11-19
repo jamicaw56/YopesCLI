@@ -75,6 +75,7 @@ pub fn preview(call: &ToolCall) -> String {
                 .map_or(0, Vec::len);
             format!("{edits} edits")
         }
+        "apply_patch" => super::patch::patch_summary(&call.function.arguments),
         "move_to" => string("path"),
         "run_command" => clip(&string("command"), 160),
         "bash_background" => clip(&string("command"), 160),
@@ -186,6 +187,9 @@ pub fn applied_change_all(
     if call.function.name == "multi_edit" {
         let arguments = call.function.arguments.clone();
         return files::multi_edit_applied(&arguments, targets);
+    }
+    if call.function.name == "apply_patch" {
+        return super::patch::applied_diffs(&call.id);
     }
     applied_change(call, before, existed).into_iter().collect()
 }
