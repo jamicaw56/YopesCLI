@@ -34,7 +34,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 10] = [
+pub const COMMANDS: [CommandSpec; 11] = [
     CommandSpec {
         name: "/help",
         description: "Show keys, commands and the version",
@@ -54,6 +54,11 @@ pub const COMMANDS: [CommandSpec; 10] = [
         name: "/set",
         description: "Change a setting: tools, theme, system, compact, effort",
         argument: Some("key"),
+    },
+    CommandSpec {
+        name: "/settings",
+        description: "Change settings with the arrow keys",
+        argument: None,
     },
     CommandSpec {
         name: "/run",
@@ -136,6 +141,7 @@ mod tests {
                 "/session",
                 "/provider",
                 "/set",
+                "/settings",
                 "/run",
                 "/cd",
                 "/agents",
@@ -146,7 +152,7 @@ mod tests {
         );
         assert_eq!(command_names("/c"), vec!["/cd"]);
         assert_eq!(command_names("/r"), vec!["/run", "/revert"]);
-        assert_eq!(command_names("/s"), vec!["/session", "/set", "/skills"]);
+        assert_eq!(command_names("/s"), vec!["/session", "/set", "/settings", "/skills"]);
         assert_eq!(command_names("/p"), vec!["/provider"]);
         assert_eq!(command_names("/a"), vec!["/agents"]);
         assert_eq!(command_names("/q"), vec!["/quit"]);

@@ -115,6 +115,16 @@ pub(crate) enum ListRow {
     Spacer,
     Rule(&'static str),
 }
+/// The host of an endpoint URL, for naming where a fetch goes.
+///
+/// `/provider connect` shows the loading row while a model list is on its way;
+/// a custom endpoint fetches from its own host, not from models.dev.
+pub(super) fn endpoint_host(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split('/').next().unwrap_or_default().to_owned()
+}
+
 /// A single-glyph logo for a models.dev provider or the custom flow.
 pub fn provider_logo(id: &str) -> &'static str {
     match id {
@@ -728,9 +738,19 @@ impl ConnectState {
             .and_then(|provider| provider.env.first())
             .map(String::as_str)
     }
-    /// What the loading row of /connect names as its source.
-    pub const fn loading_detail(&self) -> &'static str {
-        "  loading providers from models.dev"
+    /// What the loading row of /connect names as its source: the custom
+    /// endpoint being queried, or the models.dev catalog.
+    pub fn loading_detail(&self) -> String {
+        if self.custom_flow || self.stage == ConnectStage::CustomModels {
+            let host = endpoint_host(&self.custom_endpoint);
+            if host.is_empty() {
+                "  fetching models from the endpoint".to_owned()
+            } else {
+                format!("  fetching models from {host}")
+            }
+        } else {
+            "  loading providers from models.dev".to_owned()
+        }
     }
     pub(super) fn provider(&self) -> Option<&catalog::Provider> {
         let id = self.provider_id.as_deref()?;

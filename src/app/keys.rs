@@ -37,7 +37,7 @@ impl App {
             }
             return;
         }
-        if !self.show_help {
+        if !self.show_help && !self.settings_open {
             if let Some(path) = pasted_image_path(value) {
                 if let Ok(bytes) = std::fs::read(&path) {
                     if let Ok(img) = image::load_from_memory(&bytes) {
@@ -484,6 +484,9 @@ impl App {
         }
         if self.approval.is_some() {
             return self.handle_approval_key(key);
+        }
+        if self.settings_open {
+            return self.handle_settings_key(key);
         }
         if self.connect.is_some() {
             return self.handle_connect_key(key);

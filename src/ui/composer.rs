@@ -2,11 +2,6 @@ use super::*;
 
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
-    let context = app.context_tokens();
-    let window = app
-        .model_context_window()
-        .map(|w| w.max(context))
-        .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
 
     // No product branding in the working view: the mode dot, the permission
     // badge and the session tabs are what need the space.
@@ -96,8 +91,6 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         app.backend.provider_label(),
         app.backend.model(),
         &app.spent_cost(),
-        context,
-        window,
         right_budget as usize,
     );
     let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(right_budget);
@@ -207,19 +200,12 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// The header's right side: provider, model, spend and the context load as
-/// `ctx used/window`.
+/// The header's right side: provider, model and spend.
 ///
-/// A narrow terminal drops the least useful segments from the front — model
-/// name first — so the context load survives instead of being cut mid-string.
-fn header_right(
-    provider: &str,
-    model: &str,
-    cost: &str,
-    context: u64,
-    window: u64,
-    budget: usize,
-) -> String {
+/// The context load lives at the bottom right, next to the message count, so
+/// the header's right side stays short. A narrow terminal drops the least
+/// useful segments from the front, the model name first.
+fn header_right(provider: &str, model: &str, cost: &str, budget: usize) -> String {
     let mut segments: Vec<String> = Vec::new();
     if !provider.is_empty() {
         segments.push(provider.to_owned());
@@ -228,22 +214,27 @@ fn header_right(
         segments.push(model.to_owned());
     }
     // A provider that bills nothing it can price sends an empty cost: the
-    // segment is dropped, so no `—` placeholder reaches the row.
+    // segment is dropped, so no dash placeholder reaches the row.
     if !cost.is_empty() {
         segments.push(cost.to_owned());
-    }
-    if context > 0 {
-        segments.push(format!(
-            "ctx {}/{}",
-            format_tokens(context),
-            format_tokens(window)
-        ));
     }
     let joined = |segments: &[String]| segments.join(" · ");
     while segments.len() > 2 && UnicodeWidthStr::width(joined(&segments).as_str()) > budget {
         segments.remove(0);
     }
     joined(&segments)
+}
+
+/// The context load as `ctx used/window`, for the footer's right side.
+fn context_label(context: u64, window: u64) -> String {
+    if context == 0 {
+        return String::new();
+    }
+    format!(
+        "ctx {}/{}",
+        format_tokens(context),
+        format_tokens(window)
+    )
 }
 
 pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
@@ -523,20 +514,37 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
     let count = app.session.messages.len();
-    let right = if count == 1 {
+    let context = app.context_tokens();
+    let window = app
+        .model_context_window()
+        .map(|w| w.max(context))
+        .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
+    let ctx = context_label(context, window);
+    // The right side is the context load, then the message count to its left.
+    // On a narrow terminal, or while a notice or a turn speaks on the left,
+    // the message count steps aside but the context load stays: it is the one
+    // number worth a row.
+    let quiet = app.notice.is_none() && !app.is_streaming();
+    let messages = if count == 1 {
         "1 message".to_owned()
     } else {
         format!("{count} messages")
     };
-    let right_width =
-        if inner.width >= 60 && count > 0 && app.notice.is_none() && !app.is_streaming() {
-            (right.chars().count() as u16).min(inner.width / 3)
+    let right = if ctx.is_empty() {
+        if inner.width >= 60 && count > 0 && quiet {
+            messages
         } else {
-            0
-        };
+            String::new()
+        }
+    } else if inner.width >= 60 && count > 0 && quiet {
+        format!("{messages} · {ctx}")
+    } else {
+        ctx
+    };
+    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(inner.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(8), Constraint::Length(right_width)])
@@ -640,30 +648,28 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::header_right;
+    use super::{context_label, header_right};
 
     #[test]
-    fn header_right_shows_the_context_load_and_drops_segments_when_narrow() {
-        // Full width: everything shows, with the window.
-        let wide = header_right(
-            "anthropic",
-            "claude-sonnet-4",
-            "$0.12",
-            12_800,
-            128_000,
-            200,
-        );
-        assert_eq!(
-            wide,
-            "anthropic · claude-sonnet-4 · $0.12 · ctx 12.8k/128.0k"
-        );
-        // Narrow: provider and model drop, the spend and context load survive.
-        let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 12_800, 128_000, 30);
-        assert_eq!(narrow, "$0.12 · ctx 12.8k/128.0k");
-        // A malformed window of 0 renders without panicking, and a provider
-        // with no price drops the spend segment: no `—` placeholder, and no
-        // dangling separator where it used to sit.
-        assert_eq!(header_right("p", "m", "", 500, 0, 200), "p · m · ctx 500/0");
+    fn header_right_shows_provider_model_and_spend() {
+        // Full width: everything shows.
+        let wide = header_right("anthropic", "claude-sonnet-4", "$0.12", 200);
+        assert_eq!(wide, "anthropic · claude-sonnet-4 · $0.12");
+        // Narrow: the provider name drops first, the model and spend survive.
+        let narrow = header_right("anthropic", "claude-sonnet-4", "$0.12", 20);
+        assert_eq!(narrow, "claude-sonnet-4 · $0.12");
+        // A provider with no price drops the spend segment: no dangling
+        // separator where it used to sit.
+        assert_eq!(header_right("p", "m", "", 200), "p · m");
+    }
+
+    #[test]
+    fn the_footer_names_the_context_load_and_its_window() {
+        assert_eq!(context_label(12_800, 128_000), "ctx 12.8k/128.0k");
+        // An empty transcript shows no context row at all.
+        assert_eq!(context_label(0, 128_000), "");
+        // A malformed window of 0 still renders instead of panicking.
+        assert_eq!(context_label(500, 0), "ctx 500/0");
     }
 
     /// Nine tabs with long titles must all stay visible on a terminal that

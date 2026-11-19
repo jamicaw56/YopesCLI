@@ -36,6 +36,7 @@ mod keys;
 mod mode;
 mod palette;
 mod pickers;
+mod settings;
 mod stream;
 mod tabs;
 mod talk;
@@ -49,6 +50,7 @@ pub(crate) use delegate::{
 };
 pub(crate) use input::Input;
 pub(crate) use pickers::{ListPicker, ModelChoice, ModelRow};
+pub(crate) use settings::SETTING_ROWS;
 
 #[cfg(test)]
 pub(crate) use turn::tests::test_app;
@@ -271,6 +273,10 @@ pub struct App {
     /// Terminal width the cached image rows were rendered for.
     image_width: u16,
     pub approval: Option<ToolApproval>,
+    /// Whether the `/settings` popup is open.
+    pub settings_open: bool,
+    /// Row of the `/settings` popup the arrow keys act on.
+    pub settings_index: usize,
     /// Popup picker opened by `/provider models` with no argument.
     pub model_picker: Option<ListPicker>,
     /// The models offered by every connected provider, rebuilt when the
@@ -425,6 +431,8 @@ impl App {
             image_rows: HashMap::new(),
             image_width: 0,
             approval: None,
+            settings_open: false,
+            settings_index: 0,
             model_picker: None,
             model_choices: Vec::new(),
             fetching_models: false,

@@ -50,7 +50,11 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
         let value = words.next().unwrap_or_default();
         return !key.eq_ignore_ascii_case("compact") || matches!(value, "on" | "off");
     }
-    matches!(name, "/help" | "/agents" | "/skills" | "/quit")
+    // `/settings` and the read-only commands change nothing about the turn.
+    matches!(
+        name,
+        "/help" | "/agents" | "/skills" | "/quit" | "/settings"
+    )
 }
 
 fn normalize_endpoint_url(url: &str) -> (String, &str) {
@@ -473,6 +477,7 @@ impl App {
                     other => self.error(format!("Unknown setting `{other}` · /set {SET_KEYS}")),
                 }
             }
+            "/settings" => self.open_settings(),
             "/agents" => self.open_agents_picker(),
             "/skills" => self.show_skills(),
             "/revert" => self.open_revert_picker(),
@@ -510,7 +515,7 @@ impl App {
     }
 
     /// `/set tools <mode>`: the permission mode Shift+Tab cycles.
-    fn set_tools_mode(&mut self, value: &str) {
+    pub(crate) fn set_tools_mode(&mut self, value: &str) {
         let value = value.trim().to_ascii_lowercase();
         if value.is_empty() {
             self.info(format!(
@@ -553,7 +558,7 @@ impl App {
     }
 
     /// `/set theme [name]`: the color theme, saved to the config.
-    fn set_theme(&mut self, value: &str) {
+    pub(crate) fn set_theme(&mut self, value: &str) {
         let value = value.trim().to_ascii_lowercase();
         if value.is_empty() {
             self.info(format!(
@@ -597,7 +602,7 @@ impl App {
 
     /// `/set effort [level]`: the reasoning effort, or `off` for the backend
     /// default.
-    fn set_effort(&mut self, value: &str) {
+    pub(crate) fn set_effort(&mut self, value: &str) {
         let value = value.trim().to_ascii_lowercase();
         if value.is_empty() {
             match self.backend.reasoning_effort() {
@@ -622,7 +627,7 @@ impl App {
     }
 
     /// `/set compact [on|off|now]`: auto compaction, or summarize right now.
-    fn set_compact(&mut self, value: &str) -> Action {
+    pub(crate) fn set_compact(&mut self, value: &str) -> Action {
         let value = value.trim().to_ascii_lowercase();
         if value.is_empty() || value == "now" {
             if !self.backend.is_configured() {

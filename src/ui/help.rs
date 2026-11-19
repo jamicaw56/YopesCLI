@@ -39,6 +39,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
             "set tools",
             "permission mode; `dangerous` drops every approval prompt",
         ),
+        help_row("/settings", "change settings with the arrow keys"),
         help_row("↑ ↓", "palette, conversation, or diff"),
         help_row("esc", "stop streaming / interrupt tools / close"),
         help_row("enter", "run the pending tool"),

@@ -13,8 +13,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::{
     app::{
         App, COMMANDS, ChangeReport, CommandSpec, ConnectStage, ConnectState,
-        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, ModelRow, NoticeKind, ToolApproval,
-        ToolsMode, format_bytes, format_tokens, list_row_of,
+        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, ModelRow, NoticeKind, SETTING_ROWS,
+        ToolApproval, ToolsMode, format_bytes, format_tokens, list_row_of,
     },
     diff::{ChangeKind, DiffLine, FileDiff},
     session::{Message, Role, Usage},
@@ -28,9 +28,13 @@ mod connect;
 mod help;
 mod markdown;
 mod pickers;
+mod settings;
 mod transcript;
 
-use self::{agents::*, approval::*, composer::*, connect::*, help::*, pickers::*, transcript::*};
+use self::{
+    agents::*, approval::*, composer::*, connect::*, help::*, pickers::*, settings::*,
+    transcript::*,
+};
 
 /// How a `read_file` result surfaces in the transcript: quiet. The header and
 /// range lines render instead of the contents; a click still expands it.
@@ -236,6 +240,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         || session_picker.is_some()
         || revert_picker.is_some()
         || agents_picker.is_some()
+        || app.settings_open
         || app.subagent_view.is_some()
     {
         Vec::new()
@@ -353,6 +358,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_approval(frame, approval, sides, spinner, area);
     } else if app.show_help {
         draw_help(frame, app, area);
+    } else if app.settings_open {
+        draw_settings(frame, app, area);
     } else if let Some(connect) = app.connect_state() {
         draw_connect(frame, app, connect, spinner, area);
     } else if app.subagent_view.is_some() {

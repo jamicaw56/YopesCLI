@@ -288,7 +288,7 @@ pub(super) fn draw_connect_list(
             Paragraph::new(Line::from(vec![
                 Span::styled(spinner(step), Style::default().fg(accent())),
                 Span::styled(
-                    connect.loading_detail().to_owned(),
+                    connect.loading_detail(),
                     Style::default().fg(muted()),
                 ),
             ])),
