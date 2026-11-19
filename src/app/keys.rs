@@ -315,7 +315,7 @@ impl App {
             }
             return Action::None;
         }
-        // Tab bar clicks: the header refills the hit-boxes every draw. `×`
+        // Tab bar clicks: the footer refills the hit-boxes every draw. `×`
         // closes that tab, `+` opens one, the label switches to it.
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             let column = mouse.column;

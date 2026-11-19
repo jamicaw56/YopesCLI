@@ -8,48 +8,65 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|w| w.max(context))
         .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
 
-    // No product branding in the working view: the mode dot, the permission
-    // badge and the session tabs are what need the space.
-    let mut title_spans = vec![
-        Span::styled(
-            "◆",
-            Style::default()
-                .fg(app.mode.color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", app.mode.label()),
-            Style::default()
-                .fg(app.mode.color())
-                .add_modifier(Modifier::BOLD),
-        ),
+    // No product branding in the working view. The permission badge and the
+    // session tabs live in the footer's right column.
+    let mode_style = Style::default()
+        .fg(app.mode.color())
+        .add_modifier(Modifier::BOLD);
+    let title_spans = vec![
+        Span::styled("◆", mode_style),
+        Span::styled(format!(" {}", app.mode.label()), mode_style),
     ];
-    match app.tools_mode {
-        ToolsMode::Auto => {
-            title_spans.push(Span::styled(
-                " [YOLO]",
-                Style::default().fg(warning()).add_modifier(Modifier::BOLD),
-            ));
-        }
-        ToolsMode::Ask => {
-            title_spans.push(Span::styled(" [ASK]", Style::default().fg(dim())));
-        }
-        ToolsMode::Off => {
-            title_spans.push(Span::styled(" [OFF]", Style::default().fg(dim())));
-        }
-        ToolsMode::Dangerous => {
-            title_spans.push(Span::styled(
-                " [DANGER]",
-                Style::default().fg(error()).add_modifier(Modifier::BOLD),
-            ));
-        }
-        ToolsMode::On => {}
-    }
-    title_spans.push(Span::styled("  ", Style::default()));
+    let title_w = title_spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>() as u16;
+    let right_budget = inner.width.saturating_sub(title_w.saturating_add(2));
+    let right = header_right(
+        app.backend.provider_label(),
+        app.backend.model(),
+        &app.spent_cost(),
+        context,
+        window,
+        right_budget as usize,
+    );
+    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(right_budget);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(4), Constraint::Length(right_width)])
+        .split(inner);
+    frame.render_widget(Paragraph::new(Line::from(title_spans)), columns[0]);
 
-    // The tab row is the interactive element and wins the space fight: its
-    // need is computed first, and the passive right side (provider, model,
-    // spend, context load) takes only what the tabs do not use.
+    if right_width > 0 {
+        frame.render_widget(
+            Paragraph::new(right)
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(muted())),
+            columns[1],
+        );
+    }
+}
+
+/// The permission badge for the footer; `On` is the default and shows none.
+fn permission_badge(mode: ToolsMode) -> Option<Span<'static>> {
+    let bold = |color| Style::default().fg(color).add_modifier(Modifier::BOLD);
+    match mode {
+        ToolsMode::Auto => Some(Span::styled("[YOLO]", bold(warning()))),
+        ToolsMode::Ask => Some(Span::styled("[ASK]", Style::default().fg(dim()))),
+        ToolsMode::Off => Some(Span::styled("[OFF]", Style::default().fg(dim()))),
+        ToolsMode::Dangerous => Some(Span::styled("[DANGER]", bold(error()))),
+        ToolsMode::On => None,
+    }
+}
+
+/// Lays the session tabs out from column 0 within `avail` cells and returns
+/// the spans with their width. Hit-boxes land in `app` relative to column 0;
+/// the caller shifts them once the row's screen position is known.
+fn tab_row(app: &mut App, avail: u16, row: u16) -> (Vec<Span<'static>>, u16) {
+    app.tab_hits.clear();
+    app.tab_close_hits.clear();
+    app.tab_new_hit = None;
+    let mut spans: Vec<Span<'static>> = Vec::new();
     let count = app.tab_count();
     let markers: Vec<String> = (0..count)
         .map(|index| {
@@ -76,51 +93,17 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         .sum();
     // The smallest useful form is the tab number alone.
     let smallest: u16 = (0..count).map(|index| tab_width(index, "9")).sum();
-    let title_w = title_spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum::<usize>() as u16;
     // The `+` button's columns are reserved up front, so a full row of tabs
     // never overflows into a "+N" count the budget promised to keep.
-    let plus_w: u16 = 3; // " +"
+    let plus_w: u16 = 2; // " +"
     let tabs_full = full.saturating_add(plus_w);
-    let tabs_min = smallest.saturating_add(plus_w);
-    let available = inner.width.saturating_sub(title_w);
-    let right_budget = if tabs_full <= available {
-        available - tabs_full
-    } else {
-        available.saturating_sub(tabs_min)
-    }
-    .min(inner.width / 2);
-    let right = header_right(
-        app.backend.provider_label(),
-        app.backend.model(),
-        &app.spent_cost(),
-        context,
-        window,
-        right_budget as usize,
-    );
-    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(right_budget);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(4), Constraint::Length(right_width)])
-        .split(inner);
-
-    // Session tabs: a turning ring while a tab streams, `!` when it wants a
-    // decision. Click or Alt+1..9 to switch; the active one is accent + bold.
-    app.tab_hits.clear();
-    app.tab_close_hits.clear();
-    app.tab_new_hit = None;
-    let tab_row = area.y;
-    let mut x = inner.x + title_w;
-    let end_x = columns[0].x + columns[0].width;
+    let mut x: u16 = 0;
     // Full labels first; when they do not fit, every label shrinks to an
-    // equal share so the whole stack stays visible — a tab never poofs just
-    // because the terminal is small. The active tab earns twice the share:
-    // its title is the one worth reading on a cramped row.
+    // equal share so the whole stack stays visible. The active tab earns
+    // twice the share: its title is the one worth reading on a cramped row.
     let mut budget: Option<usize> = None;
-    if tabs_full > end_x.saturating_sub(x) {
-        let shareable = end_x.saturating_sub(x).saturating_sub(plus_w);
+    if tabs_full > avail {
+        let shareable = avail.saturating_sub(plus_w);
         if count > 0 && shareable >= smallest {
             budget = Some(usize::from((shareable - smallest) / count as u16) + 1);
         }
@@ -133,8 +116,6 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         let close_w: u16 = 2; // " ×"
         let label = match budget {
             Some(share) => {
-                // The active tab earns twice the share: its title is the one
-                // worth reading on a cramped row.
                 let cells = if index == active {
                     share.saturating_mul(2)
                 } else {
@@ -145,12 +126,12 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             None => labels[index].clone(),
         };
         let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
-        if x.saturating_add(sep_w + marker_w + label_w + close_w) > end_x {
+        if x.saturating_add(sep_w + marker_w + label_w + close_w) > avail {
             overflow = count - index;
             break;
         }
         if index > 0 {
-            title_spans.push(Span::styled(" │ ", Style::default().fg(dim())));
+            spans.push(Span::styled(" │ ", Style::default().fg(dim())));
             x = x.saturating_add(sep_w);
         }
         if !marker.is_empty() {
@@ -159,7 +140,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 Style::default().fg(accent())
             };
-            title_spans.push(Span::styled(marker, marker_style));
+            spans.push(Span::styled(marker, marker_style));
             x = x.saturating_add(marker_w);
         }
         let style = if index == active {
@@ -167,44 +148,32 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default().fg(muted())
         };
-        title_spans.push(Span::styled(label, style));
+        spans.push(Span::styled(label, style));
         x = x.saturating_add(label_w);
         let start = x.saturating_sub(label_w + marker_w);
-        app.tab_hits.push((start, x, tab_row, index));
+        app.tab_hits.push((start, x, row, index));
         // `×` after each label: mouse users close that tab without switching.
-        title_spans.push(Span::styled(" ×", Style::default().fg(dim())));
+        spans.push(Span::styled(" ×", Style::default().fg(dim())));
         x = x.saturating_add(close_w);
-        let close_start = x.saturating_sub(close_w);
-        app.tab_close_hits.push((close_start, x, tab_row, index));
+        app.tab_close_hits.push((x.saturating_sub(close_w), x, row, index));
     }
     if overflow > 0 {
         // Hidden tabs are never silent: the marker counts what did not fit,
         // and Alt+1..9 still reaches every one of them.
-        title_spans.push(Span::styled(
-            format!(" +{overflow}"),
-            Style::default().fg(dim()),
-        ));
+        let more = format!(" +{overflow}");
+        x = x.saturating_add(UnicodeWidthStr::width(more.as_str()) as u16);
+        spans.push(Span::styled(more, Style::default().fg(dim())));
     }
     // `+` after the last tab: opens one. A click past the limit is told so.
-    if x.saturating_add(plus_w) <= end_x {
-        title_spans.push(Span::styled(
+    if x.saturating_add(plus_w) <= avail {
+        spans.push(Span::styled(
             " +",
             Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ));
         x = x.saturating_add(plus_w);
-        app.tab_new_hit = Some((x.saturating_sub(plus_w - 1), x, tab_row));
+        app.tab_new_hit = Some((x - 1, x, row));
     }
-    let title = Line::from(title_spans);
-    frame.render_widget(Paragraph::new(title), columns[0]);
-
-    if right_width > 0 {
-        frame.render_widget(
-            Paragraph::new(right)
-                .alignment(Alignment::Right)
-                .style(Style::default().fg(muted())),
-            columns[1],
-        );
-    }
+    (spans, x)
 }
 
 /// The header's right side: provider, model, spend and the context load as
@@ -523,25 +492,8 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
-    let count = app.session.messages.len();
-    let right = if count == 1 {
-        "1 message".to_owned()
-    } else {
-        format!("{count} messages")
-    };
-    let right_width =
-        if inner.width >= 60 && count > 0 && app.notice.is_none() && !app.is_streaming() {
-            (right.chars().count() as u16).min(inner.width / 3)
-        } else {
-            0
-        };
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(8), Constraint::Length(right_width)])
-        .split(inner);
-
     let (text, color) = if app.approval.is_some() {
         (
             "approval needed · enter run · a always allow · shift+tab yolo · esc deny · v diff"
@@ -618,24 +570,57 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             },
         )
     } else {
-        // The idle row stays quiet: the mode and the permission badge already
-        // sit in the header, and the shortcut hints live in F1 help. A notice
-        // or an in-flight turn still speaks here.
+        // The idle row stays quiet: the shortcut hints live in F1 help. A
+        // notice or an in-flight turn still speaks here.
         (String::new(), muted())
     };
-    frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(color)),
-        columns[0],
-    );
-
-    if right_width > 0 {
-        frame.render_widget(
-            Paragraph::new(right)
-                .alignment(Alignment::Right)
-                .style(Style::default().fg(muted())),
-            columns[1],
-        );
+    // Right column: permission badge, then the session tabs. They are the
+    // only place either lives, so they always show and the status text on
+    // the left is the one that truncates. A busy row still keeps a quarter
+    // of the width for the status.
+    let badge = permission_badge(app.tools_mode);
+    let badge_w = badge
+        .as_ref()
+        .map_or(0, |span| UnicodeWidthStr::width(span.content.as_ref()) as u16 + 1);
+    let reserve_left = if text.is_empty() { 0 } else { inner.width / 4 };
+    let tabs_avail = inner
+        .width
+        .saturating_sub(badge_w)
+        .saturating_sub(reserve_left);
+    let (tab_spans, tabs_w) = tab_row(app, tabs_avail, area.y);
+    let right_w = (badge_w + tabs_w).min(inner.width);
+    let right_x = inner.x + inner.width - right_w;
+    // Hit-boxes were laid out from column 0: move them onto the screen.
+    let shift = right_x + badge_w;
+    for hit in app.tab_hits.iter_mut().chain(app.tab_close_hits.iter_mut()) {
+        hit.0 += shift;
+        hit.1 += shift;
     }
+    if let Some(hit) = app.tab_new_hit.as_mut() {
+        hit.0 += shift;
+        hit.1 += shift;
+    }
+    let mut right_spans = Vec::with_capacity(tab_spans.len() + 2);
+    if let Some(badge) = badge {
+        right_spans.push(badge);
+        right_spans.push(Span::raw(" "));
+    }
+    right_spans.extend(tab_spans);
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(right_w)])
+        .split(inner);
+    // One column of air between the status and the tabs.
+    let left = Rect {
+        width: columns[0].width.saturating_sub(1),
+        ..columns[0]
+    };
+    frame.render_widget(
+        Paragraph::new(truncate(&text, usize::from(left.width))).style(Style::default().fg(color)),
+        left,
+    );
+    frame.render_widget(Paragraph::new(Line::from(right_spans)), columns[1]);
 }
 
 #[cfg(test)]
@@ -684,7 +669,7 @@ mod tests {
             .unwrap();
         let row: String = (0..120)
             .map(|column| {
-                terminal.backend().buffer()[(column, 0)]
+                terminal.backend().buffer()[(column, 23)]
                     .symbol()
                     .to_string()
             })
@@ -692,7 +677,7 @@ mod tests {
         for index in 1..=9u16 {
             assert!(
                 row.contains(&index.to_string()),
-                "tab {index} is missing from the header: {row}"
+                "tab {index} is missing from the footer: {row}"
             );
         }
         // Every tab keeps a click hit-box, so switching still reaches all of them.
