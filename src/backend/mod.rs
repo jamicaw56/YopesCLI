@@ -85,6 +85,42 @@ pub enum StreamEvent {
     },
 }
 
+impl StreamEvent {
+    pub fn request_id(&self) -> u64 {
+        match self {
+            Self::Delta { request_id, .. }
+            | Self::Reasoning { request_id, .. }
+            | Self::ToolProgress { request_id, .. }
+            | Self::Usage { request_id, .. }
+            | Self::ToolCalls { request_id, .. }
+            | Self::Retrying { request_id, .. }
+            | Self::Done { request_id }
+            | Self::Stalled { request_id, .. }
+            | Self::OutputLimit { request_id }
+            | Self::Error { request_id, .. } => *request_id,
+        }
+    }
+
+    /// Streamed text that can wait for the fixed redraw cadence.
+    pub fn is_text(&self) -> bool {
+        matches!(
+            self,
+            Self::Delta { .. } | Self::Reasoning { .. } | Self::ToolProgress { .. }
+        )
+    }
+
+    /// The request is over once one of these arrives.
+    pub fn is_final(&self) -> bool {
+        matches!(
+            self,
+            Self::Done { .. }
+                | Self::Error { .. }
+                | Self::OutputLimit { .. }
+                | Self::Stalled { .. }
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct Backend {
     provider: ProviderKind,
