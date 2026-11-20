@@ -152,15 +152,19 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
 
 pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPicker, area: Rect) {
     let width = responsive_palette_width(area.width);
-    if width < 24 || area.height < 3 {
+    let height = (app.session_picker_count().clamp(1, 12) as u16)
+        .saturating_add(2)
+        .min(area.height);
+    if width < 24 || height < 3 {
         return;
     }
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
-        area.y,
+        area.y + area.height.saturating_sub(height) / 2,
         width,
-        area.height,
+        height,
     );
+    frame.render_widget(Clear, popup);
     let filter_field = if picker.filter.is_empty() {
         String::new()
     } else {
@@ -170,11 +174,11 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(dim()))
         .title_top(Line::styled(
-            format!(" sessions{filter_field} "),
-            Style::default().fg(dim()),
+            format!(" sessions · Alt+H{filter_field} "),
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::styled(
-            " ↑↓ move · enter load · esc cancel ",
+            " ↑↓ move · enter load · type to filter · Alt+H/esc close ",
             Style::default().fg(dim()),
         ));
     let inner = block.inner(popup);

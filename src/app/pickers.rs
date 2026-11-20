@@ -361,11 +361,14 @@ impl App {
         }
         let current = self.session_path.clone().unwrap_or_default();
         let entries = self.collect_sessions();
-        if entries.len() == 1 && entries[0].path == current {
-            self.info("Only the current session exists yet — /session new starts another.");
-            return;
-        }
-        self.session_picker = Some(ListPicker::default());
+        let selected = entries
+            .iter()
+            .position(|entry| entry.path == current)
+            .unwrap_or(0);
+        self.session_picker = Some(ListPicker {
+            selected,
+            ..ListPicker::default()
+        });
     }
 
     /// `/session` rows: every file in the sessions directory, newest first,

@@ -10,9 +10,9 @@ A better coding CLI, built with Rust, Ratatui, and Tokio.
 
 - Streaming OpenAI-compatible providers, custom endpoints included, with per-tool approval and a diff viewer.
 - `delegate` hands subtasks to parallel subagents, streamed live in the sidebar and readable with `/agents`.
-- `computer_use` drives the desktop with its own agent cursor, so your mouse never moves.
+- `computer_use` drives the desktop with a visible, click-through agent cursor, so your mouse never moves.
 - Image pasting, thirteen themes, a popout command palette, and one-command self-updates (`yopes update`).
-- Persistent sessions and tabs: `/session`, `--resume`, Alt+1..9.
+- Persistent sessions and tabs: Alt+H session browser, `/session`, `--resume`, Alt+1..9.
 
 ## Install
 
@@ -62,8 +62,8 @@ dist/
 
 The interface is text, so the terminal's monospace font does the styling. Pick
 one with full box-drawing and braille coverage (frames, spinners, diff rulers):
-JetBrains Mono, Cascadia Code, Fira Code, or Iosevka. Any of them works out of
-the box; a Nerd Font build adds icons but is not required. In Windows Terminal
+JetBrains Mono, Cascadia Code, Fira Code, or Iosevka. A Nerd Font build is
+recommended for the build, plan and chat mode icons. In Windows Terminal
 set it under **Settings → Profiles → Appearance → Font face**, in VS Code's
 integrated terminal under `terminal.integrated.fontFamily`. A font without
 braille or CJK glyphs shows replacement boxes; that is the terminal's font, not

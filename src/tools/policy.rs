@@ -183,7 +183,8 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              or keyboard actions, then attaches a second screenshot of the result, so aim by the \
              pixels you saw and describe what the new screenshot shows. The agent has its own \
              pointer: mouse actions post to the window under the point and never move the system \
-             cursor, and the agent cursor is drawn into the capture, so do not describe the system \
+             cursor. The agent cursor is a visible click-through desktop arrow and is drawn into \
+             the capture, so do not describe the system \
              pointer as yours. Every call asks the user \
              first; one call should do one visible thing. The result reports the frame origin and \
              size in screen pixels, the desktop bounds and where the agent's pointer ended up, so add the \

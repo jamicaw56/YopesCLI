@@ -1342,6 +1342,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn alt_h_toggles_sessions_from_landing_and_conversation() {
+        let mut app = test_app();
+        let dir = crate::temp::unique_dir("alt-h-sessions");
+        let path = dir.join("current.json");
+        app.sessions_dir = Some(dir.clone());
+        app.session_path = Some(path.clone());
+        app.session.save(&path).unwrap();
+        let alt_h = || {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::ALT,
+            )
+        };
+
+        // One saved session still gets the browser, including on the landing page.
+        app.handle_key(alt_h());
+        assert!(app.session_picker.is_some());
+        assert_eq!(app.session_picker_count(), 1);
+        app.handle_key(alt_h());
+        assert!(app.session_picker.is_none());
+
+        app.session.messages.push(Message::new(Role::User, "hello"));
+        app.handle_key(alt_h());
+        assert!(app.session_picker.is_some());
+        app.handle_key(alt_h());
+        assert!(app.session_picker.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn ctrl_r_prefills_the_rename_command_with_the_current_title() {
         let mut app = test_app();
         app.handle_key(crossterm::event::KeyEvent::new(

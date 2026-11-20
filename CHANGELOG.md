@@ -8,12 +8,19 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `Alt+H` opens a centered, filterable session browser from both the landing
+  screen and an active conversation. Empty sessions now show a compact grid of
+  common keys, and a persistent hint above the footer names `Alt+H`, `/` and
+  `F1`.
+
 - `computer_use` drives the desktop with its own agent pointer. Mouse steps no
   longer move the system cursor: they post button messages to the window under
   the point, so the person at the keyboard keeps their mouse while the agent
-  works. The agent's pointer is drawn into each capture as a highlighted black
-  arrow on a soft halo, and the result's `Cursor:` line names it instead of the
-  system pointer.
+  works. A real click-through, topmost desktop arrow follows every mouse step
+  and stays visible between calls without taking focus or intercepting the
+  user's clicks. It closes when yopes exits. The pointer is also drawn into
+  each capture as a highlighted black arrow on a soft halo, and the result's
+  `Cursor:` line names it instead of the system pointer.
 
 - `/settings` opens a popup with every `/set` key as a row, so a setting can
   be changed with the arrow keys instead of memorising a command: `↑↓` picks
@@ -26,6 +33,9 @@ All notable changes to YopesCLI are recorded here. The format follows
   join the roster (thirteen built-in themes).
 
 ### Changed
+
+- The header uses the supplied Nerd Font mode icons: `` build, `` plan and
+  `` chat.
 
 - The welcome screen drops the mascot and names the workspace instead, with
   the home directory shortened to `~`. The idle welcome no longer ticks.

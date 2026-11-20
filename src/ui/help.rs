@@ -52,6 +52,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         help_row("ctrl+p", "fold / unfold the Progress panel"),
         help_row("ctrl+r", "rename this session"),
         help_row("ctrl+n", "new session"),
+        help_row("alt+h", "browse saved sessions"),
         help_row("ctrl+u", "clear input"),
         help_row("ctrl+w", "delete previous word"),
         help_row("ctrl+t", "new tab"),

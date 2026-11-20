@@ -8,7 +8,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     // the context load in the footer.
     let title_spans = vec![
         Span::styled(
-            "◆",
+            app.mode.icon(),
             Style::default()
                 .fg(app.mode.color())
                 .add_modifier(Modifier::BOLD),
@@ -642,6 +642,25 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+/// The primary session shortcut never disappears behind an idle footer notice.
+pub(super) fn draw_shortcut_hint(frame: &mut Frame, area: Rect) {
+    let inner = padded(area, 2);
+    let mut spans = vec![
+        Span::styled(
+            "Alt+H",
+            Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" sessions", Style::default().fg(muted())),
+    ];
+    if inner.width >= 42 {
+        spans.push(Span::styled(
+            "  ·  / commands  ·  F1 help",
+            Style::default().fg(dim()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{context_label, header_right};
@@ -728,6 +747,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_session_shortcut_row_sits_directly_above_the_footer() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let hints = screen_row(&terminal, 22);
+        let footer = screen_row(&terminal, 23);
+        assert!(hints.contains("Alt+H sessions"), "{hints}");
+        assert!(hints.contains("/ commands"), "{hints}");
+        assert!(hints.contains("F1 help"), "{hints}");
+        assert!(footer.contains("[ON]"), "{footer}");
+    }
+
+    #[test]
+    fn landing_hints_and_the_centered_session_browser_are_visible() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let landing = (0..30)
+            .map(|row| screen_row(&terminal, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for hint in [
+            "quick keys",
+            "Alt+Enter",
+            "Shift+Tab",
+            "Ctrl+N",
+            "Ctrl+V",
+            "all shortcuts",
+        ] {
+            assert!(landing.contains(hint), "missing {hint}: {landing}");
+        }
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT));
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let title_row = (0..30)
+            .find(|row| screen_row(&terminal, *row).contains("sessions · Alt+H"))
+            .expect("centered session browser title");
+        assert!(
+            (12..=15).contains(&title_row),
+            "session browser is not centered: row {title_row}"
+        );
+    }
+
     fn screen_row(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, row: u16) -> String {
         let width = terminal.backend().buffer().area.width;
         (0..width)
@@ -803,7 +877,10 @@ mod tests {
         let footer = screen_row(&terminal, 23);
         assert!(!header.contains("[ON]"), "badge in header: {header}");
         assert!(!header.contains(" │ "), "tab separator in header: {header}");
-        assert!(header.contains("build"), "mode dot in header: {header}");
+        assert!(
+            header.contains("\u{f0ad} build"),
+            "mode icon in header: {header}"
+        );
         assert!(tabs.contains(" │ "), "no tabs on the tab row: {tabs}");
         assert!(footer.contains("[ON]"), "no badge in footer: {footer}");
         assert!(

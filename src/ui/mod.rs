@@ -194,11 +194,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    let session_height = if session_picker.is_some() {
-        (app.session_picker_count().clamp(1, 12) as u16).saturating_add(2)
-    } else {
-        0
-    };
     let revert_height = if revert_picker.is_some() {
         (app.revert_picker_count().clamp(1, 12) as u16).saturating_add(2)
     } else {
@@ -209,8 +204,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    let popup_height =
-        palette_height + picker_height + session_height + revert_height + agents_height;
+    let popup_height = palette_height + picker_height + revert_height + agents_height;
     let composer_height = composer_height(app, area.width, area.height);
     let progress_height = if tasks {
         if app.progress_collapsed {
@@ -239,6 +233,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Length(composer_height));
+    // Discoverable session navigation stays put above the model/context footer.
+    constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Length(1));
 
     let chunks = Layout::default()
@@ -281,8 +277,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if popup_height > 0 {
         if let Some(revert_picker) = &revert_picker {
             draw_revert_picker(frame, app, revert_picker, chunks[index]);
-        } else if let Some(session_picker) = &session_picker {
-            draw_session_picker(frame, app, session_picker, chunks[index]);
         } else if let Some(agents_picker) = &agents_picker {
             draw_agents_picker(frame, app, agents_picker, chunks[index]);
         } else if let Some(picker) = &picker {
@@ -302,7 +296,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // that row instead.
     index += 1;
     draw_composer(frame, app, chunks[index]);
-    draw_footer(frame, app, chunks[index + 1]);
+    draw_shortcut_hint(frame, chunks[index + 1]);
+    draw_footer(frame, app, chunks[index + 2]);
 
     let spinner = app.spinner;
     let sides = app.diff_sides;
@@ -314,6 +309,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_settings(frame, app, area);
     } else if let Some(connect) = app.connect_state() {
         draw_connect(frame, app, connect, spinner, area);
+    } else if let Some(session_picker) = &session_picker {
+        draw_session_picker(frame, app, session_picker, area);
     } else if app.subagent_view.is_some() {
         draw_agents_viewer(frame, app, area);
     }

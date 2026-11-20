@@ -549,6 +549,17 @@ impl App {
             }
             return Action::None;
         }
+        // The saved-session browser is available on the landing screen and
+        // inside a conversation. Alt+H closes it without reaching for Esc.
+        if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('h' | 'H'))
+        {
+            if self.session_picker.is_some() {
+                self.session_picker = None;
+            } else {
+                self.open_session_picker();
+            }
+            return Action::None;
+        }
         if self.model_picker.is_some() {
             return self.handle_model_picker_key(key);
         }

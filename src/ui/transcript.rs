@@ -1,6 +1,23 @@
 use super::markdown::markdown_lines;
 use super::*;
 
+/// One two-column landing-page hint. These labels are ASCII, so fixed-width
+/// formatting keeps both columns aligned without another layout pass.
+fn landing_hint_row(
+    left_key: &'static str,
+    left_action: &'static str,
+    right_key: &'static str,
+    right_action: &'static str,
+) -> Line<'static> {
+    let key = || Style::default().fg(accent2()).add_modifier(Modifier::BOLD);
+    Line::from(vec![
+        Span::styled(format!("{left_key:<9}"), key()),
+        Span::styled(format!("{left_action:<17}"), Style::default().fg(muted())),
+        Span::styled(format!("{right_key:<10}"), key()),
+        Span::styled(right_action, Style::default().fg(muted())),
+    ])
+}
+
 /// How many messages keep their rendered markdown in the cache: a very long
 /// session evicts the oldest instead of holding every message's lines.
 const MARKDOWN_CACHE_LIMIT: usize = 300;
@@ -145,10 +162,19 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default().fg(muted()),
             ));
         }
+        welcome.push(Line::raw(""));
         welcome.push(Line::styled(
-            "Type / to see commands.",
-            Style::default().fg(muted()),
+            "quick keys",
+            Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
         ));
+        welcome.extend([
+            landing_hint_row("Alt+H", "sessions", "/", "commands"),
+            landing_hint_row("Enter", "send", "Alt+Enter", "new line"),
+            landing_hint_row("Tab", "mode", "Shift+Tab", "permissions"),
+            landing_hint_row("Ctrl+T", "new tab", "Alt+1-9", "switch tabs"),
+            landing_hint_row("Ctrl+N", "new session", "Ctrl+R", "rename"),
+            landing_hint_row("Ctrl+V", "paste", "F1", "all shortcuts"),
+        ]);
         frame.render_widget(Paragraph::new(welcome).alignment(Alignment::Center), inner);
         return;
     }

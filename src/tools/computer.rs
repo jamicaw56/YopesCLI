@@ -9,18 +9,22 @@
 //!
 //! The agent has a pointer of its own. Mouse steps never move the system
 //! cursor: they post button messages to the window under the point, and the
-//! agent's pointer is drawn into the capture with a highlighted cursor, so the
-//! person at the keyboard keeps their mouse for themselves.
+//! agent's pointer is a visible click-through desktop overlay and is also drawn
+//! into the capture, so the person at the keyboard keeps their mouse.
 //!
 //! Windows only. The Windows implementation drives the desktop through
-//! `System.Windows.Forms` (typing) and `System.Drawing` (screen capture) from
-//! one PowerShell script, so the binary links no platform libraries. Everywhere
-//! else the tool answers with a plain error instead of pretending it worked.
+//! `System.Windows.Forms` (typing), `System.Drawing` (screen capture) and WPF
+//! (the overlay) through PowerShell, so the binary links no platform libraries.
+//! Everywhere else the tool answers with a plain error instead of pretending it
+//! worked.
 
 use anyhow::Context;
 use serde::Deserialize;
 
 use super::{parse, truncate_output};
+
+#[cfg(any(windows, test))]
+mod cursor;
 
 #[derive(Debug, Deserialize)]
 struct ComputerUseArgs {
@@ -181,6 +185,10 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
     // The "before" capture proves the desktop answered; the model receives
     // only the state after the actions, one screenshot per call.
     let before = screenshot(args.screen, args.region)?;
+    // Show the real desktop pointer before the first action. Startup is a
+    // handshake: a failed overlay must not leave invisible clicks behind.
+    #[cfg(windows)]
+    cursor::ensure(remembered_pointer().or(before.cursor))?;
     // A wait step writes into the same PowerShell run as the clicks around
     // it, so one call can wait for a window to open instead of the model
     // guessing a settle time from outside.
@@ -231,7 +239,7 @@ fn cursor_line(pointer: Option<(i32, i32)>, marked: bool) -> String {
         return String::new();
     };
     let drawn = if marked {
-        ", drawn in the capture as the agent cursor"
+        ", visible on the desktop and drawn in the capture as the agent cursor"
     } else {
         ""
     };
@@ -257,13 +265,24 @@ fn pointer_path() -> std::path::PathBuf {
 }
 
 fn remembered_pointer() -> Option<(i32, i32)> {
-    let text = std::fs::read_to_string(pointer_path()).ok()?;
+    #[cfg(windows)]
+    if let Some(at) = read_pointer(&cursor::state_path()) {
+        return Some(at);
+    }
+    read_pointer(&pointer_path())
+}
+
+fn read_pointer(path: &std::path::Path) -> Option<(i32, i32)> {
+    let text = std::fs::read_to_string(path).ok()?;
     let mut parts = text.split_whitespace();
     Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
 }
 
 fn remember_pointer(at: (i32, i32)) {
-    let _ = std::fs::write(pointer_path(), format!("{} {}", at.0, at.1));
+    let text = format!("{} {}", at.0, at.1);
+    let _ = std::fs::write(pointer_path(), &text);
+    #[cfg(windows)]
+    let _ = std::fs::write(cursor::state_path(), text);
 }
 
 /// Draw the agent's own cursor into a capture, at `pointer` in screen pixels:
@@ -636,6 +655,7 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
          Add-Type -AssemblyName System.Drawing;\n\
          Add-Type @'\n\
          using System;\n\
+         using System.IO;\n\
          using System.Runtime.InteropServices;\n\
          public static class YopesInput {\n\
            [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }\n\
@@ -653,6 +673,12 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            public const uint MiddleDown = 0x0207;\n\
            public const uint MiddleUp = 0x0208;\n\
            public const uint Wheel = 0x020A;\n\
+           public static string CursorPath = \"\";\n\
+           // The visible overlay polls this file; never move the system cursor.\n\
+           static void Mark(int x, int y) {\n\
+             if (CursorPath.Length == 0) return;\n\
+             try { File.WriteAllText(CursorPath, x + \" \" + y); } catch { }\n\
+           }\n\
            // The deepest visible window under a screen point, zero when none.\n\
            static IntPtr At(int x, int y) {\n\
              POINT point; point.X = x; point.Y = y;\n\
@@ -677,11 +703,13 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            public static bool Hover(int x, int y) {\n\
              IntPtr window = At(x, y);\n\
              if (window == IntPtr.Zero) return false;\n\
+             Mark(x, y);\n\
              return PostMessage(window, Move, IntPtr.Zero, Packed(window, x, y));\n\
            }\n\
            public static bool Click(int x, int y, uint down, uint up, int count) {\n\
              IntPtr window = At(x, y);\n\
              if (window == IntPtr.Zero) return false;\n\
+             Mark(x, y);\n\
              SetForegroundWindow(GetAncestor(window, 2));\n\
              System.Threading.Thread.Sleep(60);\n\
              IntPtr at = Packed(window, x, y);\n\
@@ -697,11 +725,13 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            public static bool Scroll(int x, int y, int delta) {\n\
              IntPtr window = At(x, y);\n\
              if (window == IntPtr.Zero) return false;\n\
+             Mark(x, y);\n\
              return PostMessage(window, Wheel, (IntPtr)(delta << 16), (IntPtr)((y << 16) | (x & 0xFFFF)));\n\
            }\n\
            public static bool Drag(int fromX, int fromY, int toX, int toY, uint down, uint up) {\n\
              IntPtr window = At(fromX, fromY);\n\
              if (window == IntPtr.Zero) return false;\n\
+             Mark(fromX, fromY);\n\
              SetForegroundWindow(GetAncestor(window, 2));\n\
              System.Threading.Thread.Sleep(80);\n\
              PostMessage(window, Move, IntPtr.Zero, Packed(window, fromX, fromY));\n\
@@ -710,6 +740,7 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
              System.Threading.Thread.Sleep(80);\n\
              for (int step = 1; step <= 4; step++) {\n\
                PostMessage(window, Move, Held(down), Packed(window, fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4));\n\
+               Mark(fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4);\n\
                System.Threading.Thread.Sleep(40);\n\
              }\n\
              PostMessage(window, up, IntPtr.Zero, Packed(window, toX, toY));\n\
@@ -734,6 +765,10 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
          }\n\
          $ErrorActionPreference = 'Stop';\n",
     );
+    script.push_str(&format!(
+        "[YopesInput]::CursorPath = {};\n",
+        ps_quote(&cursor::state_path().display().to_string())
+    ));
     for step in steps {
         match step {
             Step::Move { x, y } => {
@@ -1033,6 +1068,12 @@ mod tests {
         assert!(!script.contains("SetCursorPos"), "{script}");
         assert!(!script.contains("mouse_event"), "{script}");
         assert!(script.contains("[YopesInput]::Hover(5, 6)"), "{script}");
+        assert!(script.contains("[YopesInput]::CursorPath = '"), "{script}");
+        assert!(
+            script.contains("static void Mark(int x, int y)"),
+            "{script}"
+        );
+        assert!(script.contains("Mark(fromX + (toX - fromX)"), "{script}");
         assert!(script.contains("SendWait('it{'}s')"), "{script}");
         assert!(script.ends_with("exit 0;\n"), "{script}");
     }
@@ -1098,7 +1139,8 @@ mod tests {
         // The frame origin is subtracted, so screen pixels land where they should.
         assert!(super::draw_agent_cursor(&path, (100, 100), (60, 60), (120, 120)).unwrap());
         let drawn = image::open(&path).unwrap().to_rgba8();
-        let dark = drawn.get_pixel(26, 26).0;
+        // Sample the fill, not the anti-aliased white outline at (26, 26).
+        let dark = drawn.get_pixel(24, 26).0;
         assert!(dark[..3].iter().all(|channel| *channel < 60), "{dark:?}");
         // Everything outside the icon is left exactly as captured.
         assert_eq!(drawn.get_pixel(55, 55).0, [240, 240, 240, 255]);
