@@ -672,6 +672,7 @@ pub fn definitions() -> Value {
     if let Some(items) = value.as_array_mut() {
         items.push(apply_patch_schema());
         items.push(computer_use_schema());
+        items.extend(crate::mcp::definitions());
     }
     value
 }

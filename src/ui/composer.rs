@@ -3,48 +3,20 @@ use super::*;
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
 
-    // The header carries the mode and the passive provider line. The session
-    // tabs sit on their own row underneath, and the permission badge next to
-    // the context load in the footer.
-    let title_spans = vec![
-        Span::styled(
-            app.mode.icon(),
-            Style::default()
-                .fg(app.mode.color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {}", app.mode.label()),
-            Style::default()
-                .fg(app.mode.color())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ", Style::default()),
-    ];
-    let title_w = title_spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum::<usize>() as u16;
-    let available = inner.width.saturating_sub(title_w);
+    // The header carries the passive provider line. The mode, the permission
+    // badge and the context load sit together in the footer.
     let right = header_right(
         app.backend.provider_label(),
         app.backend.model(),
         &app.spent_cost(),
-        available as usize,
+        inner.width as usize,
     );
-    let right_width = (UnicodeWidthStr::width(right.as_str()) as u16).min(available);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(4), Constraint::Length(right_width)])
-        .split(inner);
-
-    frame.render_widget(Paragraph::new(Line::from(title_spans)), columns[0]);
-    if right_width > 0 {
+    if !right.is_empty() {
         frame.render_widget(
             Paragraph::new(right)
                 .alignment(Alignment::Right)
                 .style(Style::default().fg(muted())),
-            columns[1],
+            inner,
         );
     }
 }
@@ -540,16 +512,39 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     let gap: u16 = 3; // " · " between the three groups
     let ctx_w = UnicodeWidthStr::width(ctx.as_str()) as u16;
     let ctx_cost = if ctx.is_empty() { 0 } else { gap + ctx_w };
-    // The badge never drops; the context load is the segment that yields on a
-    // narrow terminal. The tabs live on their own row above the transcript.
-    let keep_ctx = ctx_cost > 0 && badge_w + ctx_cost <= inner.width;
-    let right_width = (badge_w + if keep_ctx { ctx_cost } else { 0 }).min(inner.width);
+    let mode = format!("{} {}", app.mode.icon(), app.mode.label());
+    let mode_w = UnicodeWidthStr::width(mode.as_str()) as u16;
+    // A goal carries its progress beside the permission badge: the checklist
+    // from todo_write is the only honest measure of how close the goal is.
+    let goal = app.goal_progress_label();
+    let goal_cost = goal
+        .as_ref()
+        .map(|label| gap + UnicodeWidthStr::width(label.as_str()) as u16)
+        .unwrap_or(0);
+    // The mode and the badge never drop; the context load is the segment that
+    // yields on a narrow terminal. The tabs live on their own row above the transcript.
+    let fixed = mode_w + gap + badge_w + goal_cost;
+    let keep_ctx = ctx_cost > 0 && fixed + ctx_cost <= inner.width;
+    let right_width = (fixed + if keep_ctx { ctx_cost } else { 0 }).min(inner.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width)])
         .split(inner);
 
-    let mut spans = vec![Span::styled(badge, badge_style)];
+    let mut spans = vec![
+        Span::styled(
+            mode,
+            Style::default()
+                .fg(app.mode.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(dim())),
+        Span::styled(badge, badge_style),
+    ];
+    if let Some(goal) = goal {
+        spans.push(Span::styled(" · ", Style::default().fg(dim())));
+        spans.push(Span::styled(goal, Style::default().fg(accent2())));
+    }
     if keep_ctx {
         spans.push(Span::styled(" · ", Style::default().fg(dim())));
         spans.push(Span::styled(ctx, Style::default().fg(muted())));
@@ -642,25 +637,6 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-/// The primary session shortcut never disappears behind an idle footer notice.
-pub(super) fn draw_shortcut_hint(frame: &mut Frame, area: Rect) {
-    let inner = padded(area, 2);
-    let mut spans = vec![
-        Span::styled(
-            "Alt+H",
-            Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" sessions", Style::default().fg(muted())),
-    ];
-    if inner.width >= 42 {
-        spans.push(Span::styled(
-            "  ·  / commands  ·  F1 help",
-            Style::default().fg(dim()),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
-}
-
 #[cfg(test)]
 mod tests {
     use super::{context_label, header_right};
@@ -732,7 +708,7 @@ mod tests {
         terminal
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
-        let footer = screen_row(&terminal, 23);
+        let footer = screen_row(&terminal, 22);
         assert!(
             footer.contains("ctx "),
             "the context load is missing from the footer: {footer}"
@@ -756,11 +732,9 @@ mod tests {
         terminal
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
-        let hints = screen_row(&terminal, 22);
-        let footer = screen_row(&terminal, 23);
-        assert!(hints.contains("Alt+H sessions"), "{hints}");
-        assert!(hints.contains("/ commands"), "{hints}");
-        assert!(hints.contains("F1 help"), "{hints}");
+        let footer = screen_row(&terminal, 22);
+        assert!(!screen_row(&terminal, 23).contains("Alt+H sessions"));
+        assert!(footer.contains("build"), "{footer}");
         assert!(footer.contains("[ON]"), "{footer}");
     }
 
@@ -783,7 +757,7 @@ mod tests {
             "Alt+Enter",
             "Shift+Tab",
             "Ctrl+N",
-            "Ctrl+V",
+            "Ctrl+G",
             "all shortcuts",
         ] {
             assert!(landing.contains(hint), "missing {hint}: {landing}");
@@ -874,14 +848,12 @@ mod tests {
             .unwrap();
         let header = screen_row(&terminal, 0);
         let tabs = screen_row(&terminal, 1);
-        let footer = screen_row(&terminal, 23);
+        let footer = screen_row(&terminal, 22);
         assert!(!header.contains("[ON]"), "badge in header: {header}");
         assert!(!header.contains(" │ "), "tab separator in header: {header}");
-        assert!(
-            header.contains("\u{f0ad} build"),
-            "mode icon in header: {header}"
-        );
+        assert!(!header.contains("build"), "mode in header: {header}");
         assert!(tabs.contains(" │ "), "no tabs on the tab row: {tabs}");
+        assert!(footer.contains("build"), "no mode in footer: {footer}");
         assert!(footer.contains("[ON]"), "no badge in footer: {footer}");
         assert!(
             !footer.contains(" │ "),

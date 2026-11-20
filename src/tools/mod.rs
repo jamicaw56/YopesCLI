@@ -147,6 +147,23 @@ pub fn workspace() -> PathBuf {
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
+/// Common model slips mapped to the real tool name, so a near miss still runs.
+/// ponytail: static alias list; add entries as new slips show up in logs.
+pub(crate) fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "readfile" | "read" | "cat" | "open_file" => "read_file",
+        "writefile" | "write" | "create_file" => "write_file",
+        "editfile" | "edit" | "str_replace" => "edit_file",
+        "listdir" | "ls" | "list_files" | "list_directory" => "list_dir",
+        "run" | "shell" | "bash" | "exec" | "execute_command" | "terminal" => "run_command",
+        "search" | "find" | "ripgrep" | "rg" => "grep",
+        "glob_files" | "find_files" => "glob",
+        "websearch" | "search_web" => "web_search",
+        "webfetch" | "fetch" | "fetch_url" => "web_fetch",
+        other => other,
+    }
+}
+
 pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Result<String> {
     scoped_workspace(workspace, || match call.function.name.as_str() {
         "list_dir" => files::list_dir(&call.function.arguments),
@@ -178,6 +195,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         "computer_use" => computer::computer_use(&call.function.arguments),
         // Handled by the session loop: the subagent needs the backend.
         "delegate" => bail!("delegate cannot run outside the session loop"),
+        name if crate::mcp::is_mcp(name) => crate::mcp::call(name, &call.function.arguments),
         other => bail!("unknown tool `{other}`"),
     })
 }
@@ -302,6 +320,7 @@ mod tests {
             .iter()
             .filter_map(|definition| definition.pointer("/function/name"))
             .filter_map(|name| name.as_str())
+            .filter(|name| !crate::mcp::is_mcp(name))
             .collect::<Vec<_>>();
         assert_eq!(names, TOOL_NAMES);
     }
@@ -1051,5 +1070,12 @@ mod tests {
         // on everything else, so only Windows can assert it as a drive path.
         #[cfg(windows)]
         assert!(requires_approval(&call("C:\\Windows\\System32")));
+    }
+
+    #[test]
+    fn slipped_tool_names_resolve_to_real_tools() {
+        assert_eq!(super::canonical_tool_name("bash"), "run_command");
+        assert_eq!(super::canonical_tool_name("readfile"), "read_file");
+        assert_eq!(super::canonical_tool_name("read_file"), "read_file");
     }
 }

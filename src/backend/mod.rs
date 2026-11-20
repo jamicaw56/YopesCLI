@@ -307,8 +307,15 @@ impl Backend {
         let request_id = u64::MAX;
         let (events, mut receiver) = mpsc::unbounded_channel();
         let messages = vec![Message::new(Role::User, task)];
-        self.stream(request_id, messages, false, Some(brief.to_owned()), workspace, events)
-            .await;
+        self.stream(
+            request_id,
+            messages,
+            false,
+            Some(brief.to_owned()),
+            workspace,
+            events,
+        )
+        .await;
         let mut text = String::new();
         while let Some(event) = receiver.recv().await {
             match event {
@@ -358,23 +365,44 @@ impl Backend {
             }
             ProviderKind::OpenAi | ProviderKind::Custom => {
                 self.stream_openai(
-                    request_id, &messages, tooling, mode_note.clone(), &workspace, &events,
+                    request_id,
+                    &messages,
+                    tooling,
+                    mode_note.clone(),
+                    &workspace,
+                    &events,
                 )
                 .await
             }
             ProviderKind::Ollama => {
-                self.stream_ollama(request_id, &messages, mode_note.clone(), &workspace, &events)
-                    .await
+                self.stream_ollama(
+                    request_id,
+                    &messages,
+                    mode_note.clone(),
+                    &workspace,
+                    &events,
+                )
+                .await
             }
             ProviderKind::Anthropic => {
                 self.stream_anthropic(
-                    request_id, &messages, tooling, mode_note.clone(), &workspace, &events,
+                    request_id,
+                    &messages,
+                    tooling,
+                    mode_note.clone(),
+                    &workspace,
+                    &events,
                 )
                 .await
             }
             ProviderKind::Gemini => {
                 self.stream_gemini(
-                    request_id, &messages, tooling, mode_note.clone(), &workspace, &events,
+                    request_id,
+                    &messages,
+                    tooling,
+                    mode_note.clone(),
+                    &workspace,
+                    &events,
                 )
                 .await
             }
@@ -445,7 +473,7 @@ impl Backend {
         {
             request["reasoning_effort"] = serde_json::Value::String(effort.to_owned());
         }
-        let response = send_with_retry("OpenAI-compatible API", request_id, events, || {
+        let response = send_with_retry("provider API", request_id, events, || {
             let mut builder = self
                 .client
                 .post(completion_url(&self.base_url))

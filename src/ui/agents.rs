@@ -21,11 +21,7 @@ fn agent_row(agent: &crate::app::Subagent, step: usize, width: u16) -> Line<'sta
         crate::app::SubagentStatus::Done => ("✓", muted()),
         crate::app::SubagentStatus::Failed => ("✗", error()),
     };
-    let glyph = if agent.cancel_requested {
-        "⊘"
-    } else {
-        glyph
-    };
+    let glyph = if agent.cancel_requested { "⊘" } else { glyph };
     let elapsed_ms = match agent.status() {
         crate::app::SubagentStatus::Running => {
             u64::try_from(agent.started.elapsed().as_millis()).unwrap_or(0)

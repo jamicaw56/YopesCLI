@@ -160,11 +160,17 @@ impl DelegateSpec {
                 return Err("expect_files must be an array of paths".to_owned());
             };
             for entry in list {
-                let Some(path) = entry.as_str().map(str::trim).filter(|path| !path.is_empty())
+                let Some(path) = entry
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
                 else {
                     return Err("expect_files must hold non-empty path strings".to_owned());
                 };
-                if !expect_files.iter().any(|known: &String| same_path(known, path)) {
+                if !expect_files
+                    .iter()
+                    .any(|known: &String| same_path(known, path))
+                {
                     expect_files.push(path.to_owned());
                 }
             }
@@ -335,7 +341,9 @@ pub fn is_check_command(command: &str) -> bool {
         "gradlew test",
         "bun test",
     ];
-    const WORDS: [&str; 7] = ["pytest", "jest", "vitest", "tsc", "ctest", "rspec", "phpunit"];
+    const WORDS: [&str; 7] = [
+        "pytest", "jest", "vitest", "tsc", "ctest", "rspec", "phpunit",
+    ];
     PHRASES.iter().any(|phrase| lower.contains(phrase))
         || lower
             .split(|character: char| character.is_whitespace() || "&|;()".contains(character))
@@ -377,14 +385,20 @@ impl Evidence {
     }
 
     pub fn changed_paths(&self) -> Vec<String> {
-        self.changes.iter().map(|change| change.path.clone()).collect()
+        self.changes
+            .iter()
+            .map(|change| change.path.clone())
+            .collect()
     }
 
     /// The last run of every distinct check command, in order of first use.
     fn last_checks(&self) -> Vec<&CommandRecord> {
         let mut last: Vec<&CommandRecord> = Vec::new();
         for record in self.commands.iter().filter(|record| record.check) {
-            match last.iter_mut().find(|known| known.command == record.command) {
+            match last
+                .iter_mut()
+                .find(|known| known.command == record.command)
+            {
                 Some(known) => *known = record,
                 None => last.push(record),
             }
@@ -576,7 +590,12 @@ pub fn report(
     }
     if !verdict.warnings.is_empty() {
         lines.push("warnings:".to_owned());
-        lines.extend(verdict.warnings.iter().map(|warning| format!("- {warning}")));
+        lines.extend(
+            verdict
+                .warnings
+                .iter()
+                .map(|warning| format!("- {warning}")),
+        );
     }
     lines.push("evidence (observed by yopes, not reported by the subagent):".to_owned());
     if evidence.changes.is_empty() {
@@ -591,7 +610,11 @@ pub fn report(
             } else {
                 format!("+{} -{}", change.additions, change.deletions)
             };
-            let source = if change.by_command { " (by a command)" } else { "" };
+            let source = if change.by_command {
+                " (by a command)"
+            } else {
+                ""
+            };
             lines.push(format!("  - {} {what}{source}", change.path));
         }
         if evidence.changes.len() > 30 {
@@ -614,7 +637,10 @@ pub fn report(
         lines.push(format!("- verify command: {}", verify.describe()));
     }
     if evidence.tool_errors > 0 {
-        lines.push(format!("- tool calls that errored: {}", evidence.tool_errors));
+        lines.push(format!(
+            "- tool calls that errored: {}",
+            evidence.tool_errors
+        ));
     }
     if !others_active.is_empty() {
         let ids: Vec<String> = others_active.iter().map(|id| format!("run {id}")).collect();
@@ -691,8 +717,10 @@ pub fn ledger(records: &[DelegationRecord], now_unix: u64) -> Option<String> {
     if records.is_empty() {
         return None;
     }
-    let active: Vec<&DelegationRecord> =
-        records.iter().filter(|record| record.state.is_active()).collect();
+    let active: Vec<&DelegationRecord> = records
+        .iter()
+        .filter(|record| record.state.is_active())
+        .collect();
     let unresolved = records
         .iter()
         .filter(|record| matches!(record.state, RunState::Failed | RunState::Blocked))
@@ -722,8 +750,10 @@ pub fn ledger(records: &[DelegationRecord], now_unix: u64) -> Option<String> {
         text
     };
     lines.extend(active.iter().map(|record| line(record)));
-    let finished: Vec<&DelegationRecord> =
-        records.iter().filter(|record| record.state.is_terminal()).collect();
+    let finished: Vec<&DelegationRecord> = records
+        .iter()
+        .filter(|record| record.state.is_terminal())
+        .collect();
     let skip = finished.len().saturating_sub(LEDGER_FINISHED);
     lines.extend(finished.iter().skip(skip).map(|record| line(record)));
     if !active.is_empty() {
@@ -822,12 +852,22 @@ pub fn compare(snapshot: Snapshot) -> (Vec<FileChange>, usize) {
             unchanged += 1;
             continue;
         }
-        changes.push(file_change(path, before.as_deref(), after.as_deref(), false));
+        changes.push(file_change(
+            path,
+            before.as_deref(),
+            after.as_deref(),
+            false,
+        ));
     }
     (changes, unchanged)
 }
 
-fn file_change(path: String, before: Option<&[u8]>, after: Option<&[u8]>, by_command: bool) -> FileChange {
+fn file_change(
+    path: String,
+    before: Option<&[u8]>,
+    after: Option<&[u8]>,
+    by_command: bool,
+) -> FileChange {
     let (additions, deletions) = match (before, after) {
         (Some(before), Some(after)) if before.len() + after.len() <= MAX_DIFF_BYTES => {
             match (std::str::from_utf8(before), std::str::from_utf8(after)) {
@@ -871,7 +911,9 @@ pub fn fingerprint(root: &Path) -> Option<Fingerprint> {
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
     let mut files = BTreeMap::new();
-    let mut entries = status.split(|byte| *byte == 0).filter(|entry| !entry.is_empty());
+    let mut entries = status
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
     while let Some(entry) = entries.next() {
         if entry.len() < 4 {
             continue;
@@ -1011,7 +1053,10 @@ mod tests {
         assert!(Submitted.can_move_to(Verifying));
         assert!(Verifying.can_move_to(Completed));
         for state in [Pending, Assigned, Running, Submitted] {
-            assert!(!state.can_move_to(Completed), "{state:?} skipped verification");
+            assert!(
+                !state.can_move_to(Completed),
+                "{state:?} skipped verification"
+            );
         }
         // Terminal states never move again: a duplicate report is a no-op.
         for state in [Completed, Failed, Blocked, Cancelled] {
@@ -1030,7 +1075,10 @@ mod tests {
         let claim = outcome("Done! I implemented the parser and all tests pass.");
         let verdict = verdict(TaskKind::Change, &[], &claim);
         assert_eq!(verdict.state, RunState::Failed);
-        assert!(verdict.reasons[0].contains("changed no files"), "{verdict:?}");
+        assert!(
+            verdict.reasons[0].contains("changed no files"),
+            "{verdict:?}"
+        );
     }
 
     #[test]

@@ -6,13 +6,40 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Landing shortcuts aligned; image paste hint is `Ctrl+G`.
+- Provider errors say "provider" instead of "OpenAI-compatible".
+- README: headless, ignore rules and fonts moved out; image paste warning added.
+- Common tool-name slips (`bash`, `readfile`, `ls`, ...) resolve to the real tool.
+- Permission (Shift+Tab) and diff view are saved and restored on restart.
+- Read-only `/settings` and similar commands run while a tool is busy.
+- Changelog popup after an update: the running version's `CHANGELOG.md` section,
+  shown once per build, closed with Esc or Enter.
+- `computer_use` clicks inject real input (`SendInput`) and restore the pointer,
+  so Windows Terminal and browsers respond instead of ignoring the click.
+- Context windows come from a LiteLLM snapshot (4800 ids) before the family
+  rules, so new models get the right window.
+- Config writes use a unique temp file with retries: two instances no longer
+  clobber each other's save.
+- `/goal` shows checklist progress in the footer (`goal 3/7 · 43%`).
+- Pasted images render larger and sharper (Lanczos3, taller cap).
+
 ### Added
 
+- MCP client: stdio servers listed in `~/.yopes/mcp.json` under `mcpServers`.
+  Their tools appear as `mcp__<server>__<tool>` and ask for approval on every call.
+- Global state lives in `~/.yopes/` (config, sessions, skills, `mcp.json`). The
+  old per-OS config and session files are copied in on first run, not moved.
+- The mode (`build`/`plan`/`chat`) sits in the footer beside the permission
+  badge. The header keeps only the provider and model line.
+- Removed the shortcut hint row under the composer.
+- Custom provider model fetch replaces the list: models the endpoint no longer
+  lists are dropped. A hand-set context window is kept for models that remain.
 - `Alt+H` opens a centered, filterable session browser from both the landing
   screen and an active conversation. Empty sessions now show a compact grid of
   common keys, and a persistent hint above the footer names `Alt+H`, `/` and
   `F1`.
-
 - `computer_use` drives the desktop with its own agent pointer. Mouse steps no
   longer move the system cursor: they post button messages to the window under
   the point, so the person at the keyboard keeps their mouse while the agent
@@ -28,7 +55,6 @@ All notable changes to YopesCLI are recorded here. The format follows
   same setters the typed command does, so both paths agree. The permission
   row cycles on · yolo · ask · off and leaves `dangerous` out, which stays
   reachable by `/set tools dangerous` only.
-
 - Four more palettes: `one-dark`, `solarized`, `everforest` and `kanagawa`
   join the roster (thirteen built-in themes).
 

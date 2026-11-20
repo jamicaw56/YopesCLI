@@ -574,28 +574,27 @@ impl App {
         match result {
             Err(error) => connect.error = Some(format!("Could not fetch models: {error}")),
             Ok(models) => {
-                for (id, name) in models {
-                    let id = id.trim().to_owned();
-                    if id.is_empty() {
-                        continue;
-                    }
-                    match connect
-                        .custom_models
-                        .iter_mut()
-                        .find(|model| model.id == id)
-                    {
-                        Some(existing) => {
-                            if !name.is_empty() {
-                                existing.name = name;
-                            }
-                        }
-                        None => connect.custom_models.push(SavedModel {
+                // The endpoint is the source of truth: models it no longer lists
+                // are dropped, not kept as stale entries.
+                let fetched: Vec<SavedModel> = models
+                    .into_iter()
+                    .filter_map(|(id, name)| {
+                        let id = id.trim().to_owned();
+                        (!id.is_empty()).then_some(SavedModel {
                             id,
                             name,
                             ..SavedModel::default()
-                        }),
+                        })
+                    })
+                    .collect();
+                let mut fetched = fetched;
+                for model in &mut fetched {
+                    // Keep a context window the user set by hand.
+                    if let Some(old) = connect.custom_models.iter().find(|m| m.id == model.id) {
+                        model.context_window = old.context_window;
                     }
                 }
+                connect.custom_models = fetched;
                 connect.stage = ConnectStage::CustomModels;
                 connect.selected = 0;
                 connect.error = if connect.custom_models.is_empty() {

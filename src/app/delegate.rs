@@ -279,12 +279,7 @@ impl App {
     /// every tab: a report routes to the session that asked even after the
     /// tab on screen changed, or the owning tab was closed.
     pub(crate) fn session_for_run(&self, run: u64) -> Option<u64> {
-        let holds = |session: &Session| {
-            session
-                .delegations
-                .iter()
-                .any(|record| record.run == run)
-        };
+        let holds = |session: &Session| session.delegations.iter().any(|record| record.run == run);
         if holds(&self.session) {
             return Some(self.session.id);
         }
@@ -631,10 +626,10 @@ mod tests {
     fn app_with_run() -> (App, u64) {
         let mut app = crate::app::turn::tests::test_app();
         let run = app.begin_subagent(
-        "call-1",
-        "Write the tests for the parser".to_owned(),
-        crate::delegation::TaskKind::Change,
-    );
+            "call-1",
+            "Write the tests for the parser".to_owned(),
+            crate::delegation::TaskKind::Change,
+        );
         (app, run)
     }
 

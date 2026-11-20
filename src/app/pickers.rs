@@ -882,6 +882,8 @@ mod tests {
             auto_compact: false,
             reasoning_effort: None,
             theme: "dark".to_owned(),
+            permission: None,
+            diff_sides: None,
         };
         let backend = Backend::new(&config).expect("backend");
         let mut app = App::new(

@@ -67,6 +67,13 @@ impl App {
                         .as_ref()
                         .is_some_and(|active| active.compacting.is_none()) =>
             {
+                let mut calls = calls;
+                for call in &mut calls {
+                    let name = crate::tools::canonical_tool_name(&call.function.name);
+                    if name != call.function.name {
+                        call.function.name = name.to_owned();
+                    }
+                }
                 if let Some(message) = self.session.messages.last_mut() {
                     if message.role == Role::Assistant {
                         message.tool_calls = Some(calls.clone());
@@ -540,6 +547,14 @@ impl App {
     pub(crate) fn persist_system_prompt(&mut self, value: Option<String>) {
         if let Err(error) = config::save_system_prompt(&self.config_path, value) {
             self.error(format!("Could not save the system prompt: {error:#}"));
+        }
+    }
+
+    /// Store the permission mode in the saved config.
+    pub(crate) fn persist_permission(&mut self) {
+        let value = self.tools_mode.label();
+        if let Err(error) = config::save_permission(&self.config_path, value) {
+            self.error(format!("Could not save the permission: {error:#}"));
         }
     }
 

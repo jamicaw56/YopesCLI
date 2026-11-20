@@ -24,9 +24,10 @@ use crate::credentials;
 pub use cli::{Cli, Command};
 use saved::{custom_providers, load_saved, resolve_api_key};
 pub(crate) use saved::{
-    delete_custom_provider, delete_saved_model, disconnect_provider, load_connected_providers,
-    load_custom_providers, load_endpoint_models, load_endpoint_secret, rename_custom_provider,
-    save_auto_compact, save_connection, save_model, save_reasoning_effort, save_system_prompt,
+    delete_custom_provider, delete_saved_model, disconnect_provider, last_seen_version,
+    load_connected_providers, load_custom_providers, load_endpoint_models, load_endpoint_secret,
+    rename_custom_provider, save_auto_compact, save_connection, save_diff_sides,
+    save_last_seen_version, save_model, save_permission, save_reasoning_effort, save_system_prompt,
     save_theme, update_endpoint_models, update_model_context_window,
 };
 
@@ -187,6 +188,10 @@ pub struct Config {
     pub reasoning_effort: Option<String>,
     /// UI theme name; one of the built-ins in `crate::theme`.
     pub theme: String,
+    /// Saved permission mode (`on`, `yolo`, `ask`), when one was set.
+    pub permission: Option<String>,
+    /// Saved diff layout, when one was set.
+    pub diff_sides: Option<bool>,
 }
 
 pub struct Connection {
@@ -277,6 +282,7 @@ impl Config {
 
     fn resolve(cli: Cli) -> Result<Self> {
         let config_path = default_config_path();
+        migrate_legacy_config(&config_path);
         let saved = load_saved(&config_path)?;
 
         let env_provider = env::var("YOPES_PROVIDER")
@@ -326,6 +332,7 @@ impl Config {
         };
 
         if let Some(dir) = &sessions_dir {
+            migrate_legacy_sessions(dir);
             migrate_legacy_session(dir);
         }
 
@@ -365,6 +372,8 @@ impl Config {
                     .as_ref()
                     .and_then(|saved| saved.theme.clone())
                     .unwrap_or_else(|| "dark".to_owned()),
+                permission: saved.as_ref().and_then(|saved| saved.permission.clone()),
+                diff_sides: saved.as_ref().and_then(|saved| saved.diff_sides),
             });
         }
 
@@ -466,6 +475,8 @@ impl Config {
                 .as_ref()
                 .and_then(|saved| saved.theme.clone())
                 .unwrap_or_else(|| "dark".to_owned()),
+            permission: saved.as_ref().and_then(|saved| saved.permission.clone()),
+            diff_sides: saved.as_ref().and_then(|saved| saved.diff_sides),
         })
     }
 }
@@ -491,26 +502,56 @@ fn default_base_url(provider: ProviderKind) -> &'static str {
     }
 }
 
-fn default_config_path() -> PathBuf {
-    ProjectDirs::from("dev", "Yopes", "Yopes").map_or_else(
-        || PathBuf::from(".yopes-config.json"),
-        |dirs| dirs.config_dir().join("config.json"),
+/// The global `~/.yopes` directory: config, sessions, skills and `mcp.json`.
+pub(crate) fn yopes_home() -> PathBuf {
+    directories::BaseDirs::new().map_or_else(
+        || PathBuf::from(".yopes"),
+        |dirs| dirs.home_dir().join(".yopes"),
     )
 }
 
-fn default_session_path() -> PathBuf {
-    ProjectDirs::from("dev", "Yopes", "Yopes").map_or_else(
-        || PathBuf::from(".yopes-session.json"),
-        |dirs| dirs.data_local_dir().join("session.json"),
-    )
+fn default_config_path() -> PathBuf {
+    yopes_home().join("config.json")
 }
 
 fn default_sessions_dir() -> PathBuf {
-    let legacy = default_session_path();
-    legacy
-        .parent()
-        .map(|parent| parent.join("sessions"))
-        .unwrap_or_else(|| PathBuf::from("sessions"))
+    yopes_home().join("sessions")
+}
+
+/// Copy the config the old per-OS app directory held into `~/.yopes`, once.
+/// Copies rather than moves, so an older yopes build still finds its config.
+fn migrate_legacy_config(path: &Path) {
+    if path.exists() {
+        return;
+    }
+    let Some(dirs) = ProjectDirs::from("dev", "Yopes", "Yopes") else {
+        return;
+    };
+    let legacy = dirs.config_dir().join("config.json");
+    if legacy.exists() {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::copy(&legacy, path);
+    }
+}
+
+/// Copy session files from the old per-OS data directory, skipping names
+/// already present.
+fn migrate_legacy_sessions(dir: &Path) {
+    let Some(dirs) = ProjectDirs::from("dev", "Yopes", "Yopes") else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(dirs.data_local_dir().join("sessions")) else {
+        return;
+    };
+    let _ = fs::create_dir_all(dir);
+    for entry in entries.flatten() {
+        let target = dir.join(entry.file_name());
+        if !target.exists() {
+            let _ = fs::copy(entry.path(), target);
+        }
+    }
 }
 
 // ponytail: millisecond timestamp names max 1 session/ms; loop increments stamp on collision.
@@ -545,7 +586,10 @@ fn newest_session_path(dir: &Path) -> Option<PathBuf> {
 }
 
 fn migrate_legacy_session(dir: &Path) {
-    let legacy = default_session_path();
+    let Some(dirs) = ProjectDirs::from("dev", "Yopes", "Yopes") else {
+        return;
+    };
+    let legacy = dirs.data_local_dir().join("session.json");
     if legacy.exists()
         && fs::metadata(&legacy)
             .map(|metadata| metadata.len() > 0)

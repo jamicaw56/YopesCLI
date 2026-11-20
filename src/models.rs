@@ -1,6 +1,40 @@
 //! Built-in model context window table and fuzzy resolution rules.
 
-// ponytail: curated static table + family prefix matching; add dynamic fetch cache fallback for newly released models.
+use std::{collections::HashMap, sync::OnceLock};
+
+// ponytail: snapshot of LiteLLM's model_prices_and_context_window.json, baked
+// in at build time. Upgrade path: refresh src/data/context_windows.json, or
+// fetch it at runtime into the config dir when a newer model is missing.
+static LITELLM_SNAPSHOT: &str = include_str!("data/context_windows.json");
+
+/// LiteLLM ids keyed by `normalize_model_id`, so `provider/model` and dated
+/// snapshots match the same entry.
+///
+/// Many keys collapse onto one id (`mistral/mistral-medium`,
+/// `azure_ai/mistral-medium-2505`). The winner is chosen by a fixed rank, not
+/// map order, or the same model would resolve differently between runs: an id
+/// that was not reshaped beats one that lost a provider prefix or a date.
+fn litellm_index() -> &'static HashMap<String, u64> {
+    static INDEX: OnceLock<HashMap<String, u64>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let raw: HashMap<String, u64> = serde_json::from_str(LITELLM_SNAPSHOT).unwrap_or_default();
+        let mut ranked: Vec<((u8, u8, usize, &str), u64)> = raw
+            .iter()
+            .map(|(key, window)| {
+                let basename = key.rsplit('/').next().unwrap_or(key);
+                let prefixed = u8::from(key.contains('/'));
+                let reshaped = u8::from(normalize_model_id(key) != basename.to_ascii_lowercase());
+                ((prefixed, reshaped, key.len(), key.as_str()), *window)
+            })
+            .collect();
+        ranked.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut index = HashMap::with_capacity(ranked.len());
+        for ((_, _, _, key), window) in ranked {
+            index.entry(normalize_model_id(key)).or_insert(window);
+        }
+        index
+    })
+}
 
 /// Clean a model identifier for lookup: strip provider namespaces (`provider/model`),
 /// strip reasoning/effort/release suffixes (`:medium`, `:thinking`, `:free`),
@@ -144,7 +178,12 @@ pub fn context_window(raw: &str) -> Option<u64> {
         }
     }
 
-    // 2. Family and pattern rules
+    // 2. Pre-listed windows for ids the table does not name
+    if let Some(window) = litellm_index().get(&clean) {
+        return Some(*window);
+    }
+
+    // 3. Family and pattern rules
     if clean.contains("gemini") {
         if clean.contains("pro") {
             return Some(2_097_152);
@@ -280,5 +319,18 @@ mod tests {
             Some(128_000)
         );
         assert_eq!(context_window("unknown-alien-model"), None);
+    }
+
+    #[test]
+    fn litellm_snapshot_fills_ids_missing_from_the_table() {
+        // Not in KNOWN_MODELS; the snapshot answers before the `mistral` family rule (32768).
+        assert_eq!(context_window("mistral/mistral-medium"), Some(262_144));
+        // Same answer twice: the tie-break is a fixed rank, not map order.
+        assert_eq!(
+            context_window("mistral/mistral-medium"),
+            context_window("mistral-medium")
+        );
+        // Normalization collapses the ~4800 raw keys onto ~1500 distinct ids.
+        assert!(litellm_index().len() > 1500);
     }
 }

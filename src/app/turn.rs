@@ -151,7 +151,7 @@ impl App {
                 // A command that only reads or changes a setting is safe to
                 // run while the model is answering or a tool is running; the
                 // ones that would disturb the turn are not.
-                if tool_busy {
+                if tool_busy && !command_is_safe_while_streaming(&prompt) {
                     self.input.set(prompt);
                     self.info("Finish or stop the tool before running that command.");
                     return Action::None;
@@ -167,7 +167,7 @@ impl App {
                 // skill body, so it works with tools off too.
                 Some(expanded) => value = expanded,
                 None => {
-                    if tool_busy {
+                    if tool_busy && !command_is_safe_while_streaming(&prompt) {
                         self.input.set(prompt);
                         self.info("Finish or stop the tool before running that command.");
                         return Action::None;
@@ -523,6 +523,20 @@ impl App {
         Action::None
     }
 
+    /// The goal's progress for the footer: `goal 3/7 · 43%`, or plain `goal`
+    /// while the checklist is empty. The checklist is the only measure, so no
+    /// number is invented when the model never wrote one.
+    pub(crate) fn goal_progress_label(&self) -> Option<String> {
+        self.session.goal.as_ref()?;
+        let total = self.session.tasks.len();
+        if total == 0 {
+            return Some("goal".to_owned());
+        }
+        let done = self.session.tasks.iter().filter(|task| task.done).count();
+        let percent = done * 100 / total;
+        Some(format!("goal {done}/{total} · {percent}%"))
+    }
+
     /// `/goal`: the objective the model is told to reach, carried in every
     /// request's system note so compaction cannot drop it. `/goal clear` drops
     /// it; `clear`, `off` and `none` are reserved words, not goals.
@@ -592,6 +606,7 @@ impl App {
             return;
         };
         self.tools_mode = mode;
+        self.persist_permission();
         let suffix = if mode.advertised()
             && !matches!(
                 self.backend.provider_kind(),
@@ -1123,6 +1138,8 @@ pub(crate) mod tests {
             auto_compact: false,
             reasoning_effort: None,
             theme: "dark".to_owned(),
+            permission: None,
+            diff_sides: None,
         };
         let backend = Backend::new(&config).expect("backend");
         App::new(
@@ -1172,6 +1189,12 @@ pub(crate) mod tests {
         assert!(matches!(action, Action::None));
         assert_eq!(app.input.value, "/session new");
         assert!(app.notice.is_some());
+
+        // A read-only setting command runs while the tool is busy.
+        app.input.set("/settings");
+        app.submit();
+        assert!(app.settings_open);
+        app.settings_open = false;
 
         // Chat message while tool runs is queued into session messages
         app.input.set("queued turn");
@@ -1694,5 +1717,30 @@ pub(crate) mod tests {
             panic!("the second turn starts");
         };
         assert!(!mode_note.unwrap_or_default().contains("ship the release"));
+    }
+
+    #[test]
+    fn the_goal_footer_reports_checklist_progress() {
+        let mut app = test_app();
+        // No goal: nothing in the footer.
+        assert_eq!(app.goal_progress_label(), None);
+        app.command("/goal ship the release");
+        // Goal without a checklist: no invented percentage.
+        assert_eq!(app.goal_progress_label().as_deref(), Some("goal"));
+        app.session.tasks = vec![
+            TaskState {
+                text: "one".to_owned(),
+                done: true,
+            },
+            TaskState {
+                text: "two".to_owned(),
+                done: true,
+            },
+            TaskState {
+                text: "three".to_owned(),
+                done: false,
+            },
+        ];
+        assert_eq!(app.goal_progress_label().as_deref(), Some("goal 2/3 · 66%"));
     }
 }

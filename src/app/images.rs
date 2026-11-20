@@ -163,13 +163,20 @@ pub(super) fn build_rows(
     let (width, height) = (rendered.width().max(1), rendered.height().max(1));
     // Cells are twice as wide as tall, and one `▄` carries two pixel rows,
     // so two pixels per cell in both directions keep the aspect square.
-    let row_pairs = ((u64::from(height) * cols as u64) / u64::from(width) / 2).clamp(1, 18) as u32;
+    let row_pairs = ((u64::from(height) * cols as u64) / u64::from(width) / 2).clamp(1, 30) as u32;
     let row_pairs = if thumbnail {
-        row_pairs.min(6)
+        row_pairs.min(12)
     } else {
         row_pairs
     };
-    let scaled = image::imageops::thumbnail(rendered, (cols * 2) as u32, row_pairs * 2);
+    // Lanczos keeps edges readable: the fast thumbnail filter blurred text in
+    // screenshots, which read as pixelation on top of the half-block limit.
+    let scaled = image::imageops::resize(
+        rendered,
+        (cols * 2) as u32,
+        row_pairs * 2,
+        image::imageops::FilterType::Lanczos3,
+    );
     let row_pairs = scaled.height().div_ceil(2);
     let mut rows = Vec::with_capacity(row_pairs as usize);
     for pair in 0..row_pairs {

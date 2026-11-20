@@ -525,6 +525,36 @@ impl App {
         if self.agents_picker.is_some() {
             return self.handle_agents_picker_key(key);
         }
+        if self.changelog.is_some() {
+            let close = match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'Q') => true,
+                KeyCode::Up | KeyCode::Left => {
+                    let view = self.changelog.as_mut().expect("view");
+                    view.scroll = view.scroll.saturating_sub(1);
+                    false
+                }
+                KeyCode::Down | KeyCode::Right => {
+                    let view = self.changelog.as_mut().expect("view");
+                    view.scroll = view.scroll.saturating_add(1);
+                    false
+                }
+                KeyCode::PageUp => {
+                    let view = self.changelog.as_mut().expect("view");
+                    view.scroll = view.scroll.saturating_sub(10);
+                    false
+                }
+                KeyCode::PageDown => {
+                    let view = self.changelog.as_mut().expect("view");
+                    view.scroll = view.scroll.saturating_add(10);
+                    false
+                }
+                _ => false,
+            };
+            if close {
+                self.close_changelog();
+            }
+            return Action::None;
+        }
         if key.code == KeyCode::F(1) {
             self.show_help = !self.show_help;
             self.help_scroll = 0;
@@ -839,16 +869,30 @@ impl App {
         }
     }
 
+    /// Close the changelog popup and note the version as read, so the next
+    /// start on this build stays quiet.
+    pub(crate) fn close_changelog(&mut self) {
+        self.changelog = None;
+        let version = crate::update::current_version();
+        if let Err(error) = config::save_last_seen_version(&self.config_path, version) {
+            self.error(format!("Could not save the version: {error:#}"));
+        }
+    }
+
     /// Switch every visible diff between unified and side-by-side.
     pub(crate) fn toggle_diff_view(&mut self) {
         self.diff_sides = !self.diff_sides;
         for report in self.changes.values_mut() {
             report.side_by_side = self.diff_sides;
         }
+        if let Err(error) = config::save_diff_sides(&self.config_path, self.diff_sides) {
+            self.error(format!("Could not save the diff view: {error:#}"));
+        }
     }
 
     pub(crate) fn cycle_tools_mode(&mut self) {
         self.tools_mode = self.tools_mode.next_permission();
+        self.persist_permission();
         self.info(format!(
             "Permission: {} — Shift+Tab again to cycle on · yolo · ask",
             self.tools_mode.label()

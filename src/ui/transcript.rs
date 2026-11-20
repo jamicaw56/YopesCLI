@@ -14,7 +14,7 @@ fn landing_hint_row(
         Span::styled(format!("{left_key:<9}"), key()),
         Span::styled(format!("{left_action:<17}"), Style::default().fg(muted())),
         Span::styled(format!("{right_key:<10}"), key()),
-        Span::styled(right_action, Style::default().fg(muted())),
+        Span::styled(format!("{right_action:<16}"), Style::default().fg(muted())),
     ])
 }
 
@@ -173,7 +173,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             landing_hint_row("Tab", "mode", "Shift+Tab", "permissions"),
             landing_hint_row("Ctrl+T", "new tab", "Alt+1-9", "switch tabs"),
             landing_hint_row("Ctrl+N", "new session", "Ctrl+R", "rename"),
-            landing_hint_row("Ctrl+V", "paste", "F1", "all shortcuts"),
+            landing_hint_row("Ctrl+G", "paste image", "F1", "all shortcuts"),
         ]);
         frame.render_widget(Paragraph::new(welcome).alignment(Alignment::Center), inner);
         return;
@@ -181,7 +181,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Rows for newly seen images are rendered up front: the message loop
     // borrows the session immutably, so it can only read the finished cache.
-    app.warm_image_cache(inner.width.clamp(4, 48));
+    app.warm_image_cache(inner.width.clamp(4, 96));
 
     // The transcript is assembled as slots: owned lines for the small
     // per-message pieces, shared blocks for cached markdown. A frame only

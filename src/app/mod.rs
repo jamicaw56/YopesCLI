@@ -258,6 +258,27 @@ pub(crate) type MarkdownBlock = (
     usize,
 );
 
+/// The post-update changelog popup: a version's section, scrolled with the
+/// arrow keys and closed with Esc or Enter.
+pub struct ChangeLogView {
+    pub title: String,
+    pub lines: Vec<String>,
+    pub scroll: usize,
+}
+
+impl ChangeLogView {
+    /// Open the popup for the running build, or nothing when the changelog
+    /// has no section to show.
+    pub(crate) fn for_current_version() -> Option<Self> {
+        let section = crate::changelog::section_for(crate::update::current_version())?;
+        Some(Self {
+            title: format!("what's new in v{}", crate::update::current_version()),
+            lines: section.lines,
+            scroll: 0,
+        })
+    }
+}
+
 pub struct App {
     pub session: Session,
     pub backend: Backend,
@@ -269,6 +290,8 @@ pub struct App {
     pub transcript_height: u16,
     pub follow_tail: bool,
     pub show_help: bool,
+    /// The post-update changelog popup, shown once per new version.
+    pub changelog: Option<ChangeLogView>,
     /// How far the help popup is scrolled down.
     pub help_scroll: usize,
     pub should_quit: bool,
@@ -454,6 +477,7 @@ impl App {
             transcript_height: 10,
             follow_tail: true,
             show_help: false,
+            changelog: None,
             help_scroll: 0,
             should_quit: false,
             notice: None,

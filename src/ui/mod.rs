@@ -23,6 +23,7 @@ use crate::{
 
 mod agents;
 mod approval;
+mod changelog;
 mod composer;
 mod connect;
 mod help;
@@ -32,8 +33,8 @@ mod settings;
 mod transcript;
 
 use self::{
-    agents::*, approval::*, composer::*, connect::*, help::*, pickers::*, settings::*,
-    transcript::*,
+    agents::*, approval::*, changelog::*, composer::*, connect::*, help::*, pickers::*,
+    settings::*, transcript::*,
 };
 
 /// How a `read_file` result surfaces in the transcript: quiet. The header and
@@ -168,6 +169,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // checklist means finished work, not a panel parked over the composer.
     let tasks = app.session.tasks.iter().any(|task| !task.done);
     let palette = if app.show_help
+        || app.changelog.is_some()
         || app.connect_open()
         || app.approval.is_some()
         || picker.is_some()
@@ -220,10 +222,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let mut constraints = vec![Constraint::Length(1)];
     // The session tabs get their own row under the header, so a full set of
     // them never squeezes the footer's badge and context load.
-    let tabs_height = if app.tab_count() > 1 { 1 } else { 0 };
-    if tabs_height > 0 {
-        constraints.push(Constraint::Length(tabs_height));
-    }
+    constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Min(2));
     if popup_height > 0 {
         constraints.push(Constraint::Length(popup_height));
@@ -233,7 +232,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Length(composer_height));
-    // Discoverable session navigation stays put above the model/context footer.
     constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Length(1));
 
@@ -244,14 +242,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_header(frame, app, chunks[0]);
     let mut index = 1;
-    if tabs_height > 0 {
-        draw_tab_bar(frame, app, chunks[index]);
-        index += 1;
-    } else {
-        app.tab_hits.clear();
-        app.tab_close_hits.clear();
-        app.tab_new_hit = None;
-    }
+    draw_tab_bar(frame, app, chunks[index]);
+    index += 1;
     // The sidebar of subagent runs takes the transcript's right edge while
     // anything still streams, and steps aside once every run has finished —
     // a finished run means finished work, not a panel parked over the
@@ -296,13 +288,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // that row instead.
     index += 1;
     draw_composer(frame, app, chunks[index]);
-    draw_shortcut_hint(frame, chunks[index + 1]);
-    draw_footer(frame, app, chunks[index + 2]);
+    draw_footer(frame, app, chunks[index + 1]);
 
     let spinner = app.spinner;
     let sides = app.diff_sides;
     if let Some(approval) = app.approval.as_mut() {
         draw_approval(frame, approval, sides, spinner, area);
+    } else if app.changelog.is_some() {
+        draw_changelog(frame, app, area);
     } else if app.show_help {
         draw_help(frame, app, area);
     } else if app.settings_open {

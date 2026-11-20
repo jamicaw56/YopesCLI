@@ -4,7 +4,11 @@
 //! the rest of the crate sees. Its fields are `pub(super)` so the resolved
 //! `Config` can read them directly.
 
-use std::{collections::BTreeMap, env, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -55,6 +59,15 @@ pub(super) struct SavedConfig {
     /// UI theme name; one of the built-ins in `crate::theme`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) theme: Option<String>,
+    /// Shift+Tab permission mode: on, yolo or ask. Dangerous is never saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) permission: Option<String>,
+    /// Diff view: side-by-side when true, unified when false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) diff_sides: Option<bool>,
+    /// The build whose changelog popup was last shown, so it shows once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) last_seen_version: Option<String>,
 }
 
 fn auto_compact_default() -> bool {
@@ -95,6 +108,9 @@ impl SavedConfig {
             auto_compact: true,
             reasoning_effort: None,
             theme: None,
+            permission: None,
+            diff_sides: None,
+            last_seen_version: None,
         }
     }
 }
@@ -668,6 +684,35 @@ pub(crate) fn save_theme(path: &Path, value: &str) -> Result<()> {
     update_saved(path, |saved| saved.theme = Some(value.to_owned()))
 }
 
+/// Store the permission mode, in place. Dangerous is never stored, so a
+/// restart cannot reopen unattended mode.
+pub(crate) fn save_permission(path: &Path, value: &str) -> Result<()> {
+    if value == "dangerous" {
+        return Ok(());
+    }
+    update_saved(path, |saved| saved.permission = Some(value.to_owned()))
+}
+
+/// Store the diff view layout, in place.
+pub(crate) fn save_diff_sides(path: &Path, value: bool) -> Result<()> {
+    update_saved(path, |saved| saved.diff_sides = Some(value))
+}
+
+/// The build whose changelog popup was last shown, if any.
+pub(crate) fn last_seen_version(path: &Path) -> Option<String> {
+    load_saved(path)
+        .ok()
+        .flatten()
+        .and_then(|saved| saved.last_seen_version)
+}
+
+/// Record that the changelog popup for `version` was shown.
+pub(crate) fn save_last_seen_version(path: &Path, version: &str) -> Result<()> {
+    update_saved(path, |saved| {
+        saved.last_seen_version = Some(version.to_owned());
+    })
+}
+
 pub(super) fn load_saved(path: &Path) -> Result<Option<SavedConfig>> {
     let load_path = if path.exists() {
         path.to_path_buf()
@@ -704,32 +749,73 @@ fn save_saved(path: &Path, saved: &SavedConfig) -> Result<()> {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(saved)?;
-    let temporary = path.with_extension("tmp");
+    // A per-process, per-write name: two instances writing at once used to
+    // share one `config.tmp` and could delete the other's file mid-write.
+    let temporary = unique_temp_path(path);
     fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600));
     }
-    #[cfg(not(windows))]
-    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))?;
-    #[cfg(windows)]
-    {
-        if path.exists() {
-            let backup = path.with_extension("bak");
-            let _ = fs::remove_file(&backup);
-            let _ = fs::rename(path, &backup);
-            if let Err(error) = fs::rename(&temporary, path) {
-                let _ = fs::rename(&backup, path);
-                return Err(error).with_context(|| format!("replacing {}", path.display()));
-            }
-            let _ = fs::remove_file(&backup);
-        } else {
-            fs::rename(&temporary, path)
-                .with_context(|| format!("replacing {}", path.display()))?;
+    let result = replace_with_retry(&temporary, path);
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+/// A temp path next to `path` that no other writer can be holding.
+fn unique_temp_path(path: &Path) -> PathBuf {
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut name = path.file_stem().unwrap_or_default().to_os_string();
+    name.push(format!(".tmp.{}.{write}", std::process::id()));
+    path.with_file_name(name)
+}
+
+/// Replace `path` with `temporary`, retrying while another instance holds it.
+///
+/// Windows cannot rename onto an existing file, so the file it holds open
+/// makes the swap fail for a moment; a few short retries ride that out
+/// instead of surfacing an error the user cannot act on.
+fn replace_with_retry(temporary: &Path, path: &Path) -> Result<()> {
+    let mut last = None;
+    for attempt in 0..10 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20 * attempt));
+        }
+        match replace(temporary, path) {
+            Ok(()) => return Ok(()),
+            Err(error) => last = Some(error),
         }
     }
-    Ok(())
+    Err(last.unwrap()).with_context(|| format!("replacing {}", path.display()))
+}
+
+#[cfg(not(windows))]
+fn replace(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, path)
+}
+
+#[cfg(windows)]
+fn replace(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return fs::rename(temporary, path);
+    }
+    let backup = path.with_extension("bak");
+    let _ = fs::remove_file(&backup);
+    fs::rename(path, &backup)?;
+    match fs::rename(temporary, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::rename(&backup, path);
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -994,6 +1080,46 @@ mod tests {
                 .any(|model| model["id"] == "one")
         );
         assert_eq!(saved["model"], "one");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn concurrent_writes_never_share_a_temp_file() {
+        use super::{save_theme, unique_temp_path};
+        use std::{fs, path::Path};
+
+        // Two writers must never aim at the same temp path.
+        let path = Path::new("C:/tmp/config.json");
+        assert_ne!(unique_temp_path(path), unique_temp_path(path));
+
+        let path =
+            std::env::temp_dir().join(format!("yopes-race-test-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let writers = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                std::thread::spawn(move || save_theme(&path, &format!("theme{index}")).unwrap())
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        // Whatever order they landed in, the file must still be valid JSON.
+        let saved = super::load_saved(&path).unwrap().expect("config written");
+        assert!(saved.theme.is_some());
+        // No temp file is left behind.
+        let leftovers = fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("yopes-race-test-")
+                    && entry.file_name().to_string_lossy().contains(".tmp.")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
         let _ = fs::remove_file(&path);
     }
 

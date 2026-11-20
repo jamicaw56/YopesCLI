@@ -7,10 +7,13 @@
 //! model sees the result. The result also names where the captured frame sits
 //! on the desktop and where the pointer ended up, so the next call can aim.
 //!
-//! The agent has a pointer of its own. Mouse steps never move the system
-//! cursor: they post button messages to the window under the point, and the
-//! agent's pointer is a visible click-through desktop overlay and is also drawn
-//! into the capture, so the person at the keyboard keeps their mouse.
+//! The agent has a pointer of its own. Hovering never moves the system
+//! cursor: it posts a move message to the window under the point. Clicks,
+//! drags and the wheel are injected as real input, because Windows Terminal,
+//! Chromium and most GPU windows ignore posted button messages; the user's
+//! pointer is put back where it was immediately afterwards. The agent's
+//! pointer is a visible click-through desktop overlay and is also drawn into
+//! the capture, so the person at the keyboard keeps their mouse position.
 //!
 //! Windows only. The Windows implementation drives the desktop through
 //! `System.Windows.Forms` (typing), `System.Drawing` (screen capture) and WPF
@@ -243,7 +246,9 @@ fn cursor_line(pointer: Option<(i32, i32)>, marked: bool) -> String {
     } else {
         ""
     };
-    format!("Cursor: ({x}, {y}){drawn}; the system pointer never moves\n")
+    format!(
+        "Cursor: ({x}, {y}){drawn}; clicks inject real input and put the system pointer back where it was\n"
+    )
 }
 
 /// Where the call leaves the agent's pointer, if any step aims it.
@@ -673,6 +678,75 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            public const uint MiddleDown = 0x0207;\n\
            public const uint MiddleUp = 0x0208;\n\
            public const uint Wheel = 0x020A;\n\
+           [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint flags; public uint time; public IntPtr extra; }\n\
+           [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mi; }\n\
+           [DllImport(\"user32.dll\")] static extern uint SendInput(uint count, INPUT[] inputs, int size);\n\
+           [DllImport(\"user32.dll\")] static extern bool SetCursorPos(int x, int y);\n\
+           [DllImport(\"user32.dll\")] static extern bool GetCursorPos(out POINT point);\n\
+           const uint RawMove = 0x0001;\n\
+           const uint RawLeftDown = 0x0002;\n\
+           const uint RawLeftUp = 0x0004;\n\
+           const uint RawRightDown = 0x0008;\n\
+           const uint RawRightUp = 0x0010;\n\
+           const uint RawMiddleDown = 0x0020;\n\
+           const uint RawMiddleUp = 0x0040;\n\
+           const uint RawWheel = 0x0800;\n\
+           static void Raw(uint flags, int data) {\n\
+             INPUT input = new INPUT();\n\
+             input.type = 0;\n\
+             input.mi.flags = flags;\n\
+             input.mi.mouseData = (uint)data;\n\
+             SendInput(1, new INPUT[] { input }, Marshal.SizeOf(typeof(INPUT)));\n\
+           }\n\
+           static uint RawDown(uint down) {\n\
+             if (down == RightDown) return RawRightDown;\n\
+             if (down == MiddleDown) return RawMiddleDown;\n\
+             return RawLeftDown;\n\
+           }\n\
+           static uint RawUp(uint up) {\n\
+             if (up == RightUp) return RawRightUp;\n\
+             if (up == MiddleUp) return RawMiddleUp;\n\
+             return RawLeftUp;\n\
+           }\n\
+           // Posted messages are ignored by Windows Terminal, Chromium and most\n\
+           // GPU windows, so the click is also injected as real input. The\n\
+           // pointer is put back where the user left it straight afterwards.\n\
+           static void Restore(POINT saved) { SetCursorPos(saved.X, saved.Y); Mark(saved.X, saved.Y); }\n\
+           public static void RealClick(int x, int y, uint down, uint up, int count) {\n\
+             POINT saved; GetCursorPos(out saved);\n\
+             SetCursorPos(x, y);\n\
+             System.Threading.Thread.Sleep(40);\n\
+             for (int i = 0; i < count; i++) {\n\
+               Raw(RawDown(down), 0);\n\
+               System.Threading.Thread.Sleep(30);\n\
+               Raw(RawUp(up), 0);\n\
+               System.Threading.Thread.Sleep(90);\n\
+             }\n\
+             Restore(saved);\n\
+           }\n\
+           public static void RealWheel(int x, int y, int delta) {\n\
+             POINT saved; GetCursorPos(out saved);\n\
+             SetCursorPos(x, y);\n\
+             System.Threading.Thread.Sleep(40);\n\
+             Raw(RawWheel, delta);\n\
+             System.Threading.Thread.Sleep(120);\n\
+             Restore(saved);\n\
+           }\n\
+           public static void RealDrag(int fromX, int fromY, int toX, int toY, uint down, uint up) {\n\
+             POINT saved; GetCursorPos(out saved);\n\
+             SetCursorPos(fromX, fromY);\n\
+             System.Threading.Thread.Sleep(60);\n\
+             Raw(RawDown(down), 0);\n\
+             System.Threading.Thread.Sleep(80);\n\
+             for (int step = 1; step <= 4; step++) {\n\
+               SetCursorPos(fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4);\n\
+               Mark(fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4);\n\
+               System.Threading.Thread.Sleep(40);\n\
+             }\n\
+             Raw(RawUp(up), 0);\n\
+             System.Threading.Thread.Sleep(120);\n\
+             Restore(saved);\n\
+           }\n\
            public static string CursorPath = \"\";\n\
            // The visible overlay polls this file; never move the system cursor.\n\
            static void Mark(int x, int y) {\n\
@@ -712,21 +786,15 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
              Mark(x, y);\n\
              SetForegroundWindow(GetAncestor(window, 2));\n\
              System.Threading.Thread.Sleep(60);\n\
-             IntPtr at = Packed(window, x, y);\n\
-             PostMessage(window, Move, IntPtr.Zero, at);\n\
-             for (int i = 0; i < count; i++) {\n\
-               PostMessage(window, down, Held(down), at);\n\
-               System.Threading.Thread.Sleep(30);\n\
-               PostMessage(window, up, IntPtr.Zero, at);\n\
-               System.Threading.Thread.Sleep(90);\n\
-             }\n\
+             RealClick(x, y, down, up, count);\n\
              return true;\n\
            }\n\
            public static bool Scroll(int x, int y, int delta) {\n\
              IntPtr window = At(x, y);\n\
              if (window == IntPtr.Zero) return false;\n\
              Mark(x, y);\n\
-             return PostMessage(window, Wheel, (IntPtr)(delta << 16), (IntPtr)((y << 16) | (x & 0xFFFF)));\n\
+             RealWheel(x, y, delta);\n\
+             return true;\n\
            }\n\
            public static bool Drag(int fromX, int fromY, int toX, int toY, uint down, uint up) {\n\
              IntPtr window = At(fromX, fromY);\n\
@@ -734,17 +802,7 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
              Mark(fromX, fromY);\n\
              SetForegroundWindow(GetAncestor(window, 2));\n\
              System.Threading.Thread.Sleep(80);\n\
-             PostMessage(window, Move, IntPtr.Zero, Packed(window, fromX, fromY));\n\
-             System.Threading.Thread.Sleep(60);\n\
-             PostMessage(window, down, Held(down), Packed(window, fromX, fromY));\n\
-             System.Threading.Thread.Sleep(80);\n\
-             for (int step = 1; step <= 4; step++) {\n\
-               PostMessage(window, Move, Held(down), Packed(window, fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4));\n\
-               Mark(fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4);\n\
-               System.Threading.Thread.Sleep(40);\n\
-             }\n\
-             PostMessage(window, up, IntPtr.Zero, Packed(window, toX, toY));\n\
-             System.Threading.Thread.Sleep(120);\n\
+             RealDrag(fromX, fromY, toX, toY, down, up);\n\
              return true;\n\
            }\n\
          }\n\
@@ -1055,6 +1113,41 @@ mod tests {
         assert!(super::chord_literal("hyper+s").is_err());
     }
 
+    /// The C# block is only checked for text above; this runs it through
+    /// PowerShell so a broken injection fails here instead of mid-task. No
+    /// steps means no clicks: the script only defines its types.
+    #[cfg(windows)]
+    #[test]
+    fn the_generated_script_compiles_in_powershell() {
+        let script = super::windows_script(&[]).expect("script");
+        assert!(!script.contains("[YopesInput]::Click("), "{script}");
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child
+                    .stdin
+                    .as_mut()
+                    .expect("stdin")
+                    .write_all(script.as_bytes())?;
+                child.wait_with_output()
+            });
+        match output {
+            Ok(output) => assert!(
+                output.status.success(),
+                "powershell rejected the script: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            // No PowerShell on this host: nothing to check.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("running powershell: {error}"),
+        }
+    }
+
     #[test]
     fn the_script_keeps_every_step_and_ends_cleanly() {
         let steps = vec![
@@ -1064,9 +1157,14 @@ mod tests {
             },
         ];
         let script = windows_script(&steps).unwrap();
-        // The agent's pointer is its own: no step moves the system cursor.
-        assert!(!script.contains("SetCursorPos"), "{script}");
-        assert!(!script.contains("mouse_event"), "{script}");
+        // Hover is posted, so the pointer stays put; a click injects real
+        // input and restores the pointer right after.
+        assert!(
+            script.contains("static void Restore(POINT saved)"),
+            "{script}"
+        );
+        assert!(script.contains("GetCursorPos(out saved)"), "{script}");
+        assert!(script.contains("SendInput(1"), "{script}");
         assert!(script.contains("[YopesInput]::Hover(5, 6)"), "{script}");
         assert!(script.contains("[YopesInput]::CursorPath = '"), "{script}");
         assert!(
@@ -1243,7 +1341,7 @@ mod tests {
         assert!(report.contains("Cursor: (640, 480)"), "{report}");
         // The line says whose pointer it is, and that the marker was drawn.
         assert!(report.contains("agent cursor"), "{report}");
-        assert!(report.contains("system pointer never moves"), "{report}");
+        assert!(report.contains("system pointer back"), "{report}");
         // An unknown pointer says nothing rather than guessing (0, 0).
         assert_eq!(cursor_line(None, false), "");
         // A click target survives the report: the path stays the last line.

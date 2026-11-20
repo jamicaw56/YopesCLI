@@ -481,7 +481,7 @@ pub(super) fn parse_openai_line(
     };
     let chunk: OpenAiChunk = serde_json::from_str(data).context("invalid OpenAI stream chunk")?;
     if let Some(error) = chunk.error {
-        bail!("OpenAI stream error: {}", error.message);
+        bail!("provider stream error: {}", error.message);
     }
     let mut events = Vec::new();
     let mut done = false;
@@ -1211,7 +1211,7 @@ mod tests {
         assert!(transport_failure(&io));
 
         // A provider refusing the request is a real error, reported as one.
-        let rejected = anyhow::anyhow!("OpenAI-compatible API returned 401: invalid api key");
+        let rejected = anyhow::anyhow!("provider API returned 401: invalid api key");
         assert!(!transport_failure(&rejected), "{rejected:#}");
         let bad_json = anyhow::Error::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,

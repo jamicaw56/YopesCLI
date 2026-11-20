@@ -83,16 +83,32 @@ mod tests {
 
         // The first run finishes while its sibling still works: the report
         // lands, but the model is not woken to announce a partial batch.
-        let action = report(&mut app, first, judged(TaskKind::Change, &["a.rs"], "landed"), "landed");
-        assert!(matches!(action, Action::None), "a sibling run is still active");
+        let action = report(
+            &mut app,
+            first,
+            judged(TaskKind::Change, &["a.rs"], "landed"),
+            "landed",
+        );
+        assert!(
+            matches!(action, Action::None),
+            "a sibling run is still active"
+        );
         assert_eq!(app.session.delegations[0].state, RunState::Completed);
         assert_eq!(app.active_runs_in_owner(), vec![second]);
-        assert!(app.session.messages.iter().any(|message| message
-            .content
-            .contains("verdict: COMPLETED")));
+        assert!(
+            app.session
+                .messages
+                .iter()
+                .any(|message| message.content.contains("verdict: COMPLETED"))
+        );
 
         // The last one wakes the coordinator.
-        let action = report(&mut app, second, judged(TaskKind::Change, &["b.rs"], "done"), "done");
+        let action = report(
+            &mut app,
+            second,
+            judged(TaskKind::Change, &["b.rs"], "done"),
+            "done",
+        );
         assert!(matches!(action, Action::Start { .. }), "the batch is done");
         assert!(app.active_runs_in_owner().is_empty());
     }
@@ -101,9 +117,18 @@ mod tests {
     fn an_agent_that_claims_completion_without_changing_files_fails() {
         let mut app = app();
         let run = start(&mut app, "c1", "implement the parser", TaskKind::Change);
-        let verdict = judged(TaskKind::Change, &[], "Implemented everything, all tests pass!");
+        let verdict = judged(
+            TaskKind::Change,
+            &[],
+            "Implemented everything, all tests pass!",
+        );
         assert_eq!(verdict.state, RunState::Failed);
-        let action = report(&mut app, run, verdict, "Implemented everything, all tests pass!");
+        let action = report(
+            &mut app,
+            run,
+            verdict,
+            "Implemented everything, all tests pass!",
+        );
         assert!(matches!(action, Action::Start { .. }));
         assert_eq!(app.session.delegations[0].state, RunState::Failed);
         assert_eq!(app.subagents[0].status_label(), "failed");
@@ -115,7 +140,11 @@ mod tests {
             .rev()
             .find(|message| message.content.contains("[delegation report]"))
             .expect("a report landed");
-        assert!(report.content.contains("changed no files"), "{}", report.content);
+        assert!(
+            report.content.contains("changed no files"),
+            "{}",
+            report.content
+        );
         assert!(report.content.contains("a claim, not evidence"));
     }
 
@@ -130,18 +159,17 @@ mod tests {
             answer: "ported".to_owned(),
             ..RunOutcome::default()
         };
-        let verdict = delegation::verdict(
-            TaskKind::Change,
-            &["src/parser.rs".to_owned()],
-            &outcome,
-        );
+        let verdict =
+            delegation::verdict(TaskKind::Change, &["src/parser.rs".to_owned()], &outcome);
         assert_eq!(verdict.state, RunState::Failed);
         report(&mut app, run, verdict, "ported");
         assert_eq!(app.session.delegations[0].state, RunState::Failed);
-        assert!(app.session.delegations[0]
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("src/parser.rs")));
+        assert!(
+            app.session.delegations[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("src/parser.rs"))
+        );
     }
 
     #[test]
@@ -165,7 +193,10 @@ mod tests {
         assert_eq!(record.state, RunState::Failed);
         assert_eq!(record.files, vec!["src/half.rs".to_owned()]);
         assert!(
-            record.reasons.iter().any(|reason| reason.contains("timed out")),
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("timed out")),
             "{:?}",
             record.reasons
         );
@@ -194,10 +225,20 @@ mod tests {
     fn a_duplicate_report_is_ignored() {
         let mut app = app();
         let run = start(&mut app, "c1", "a", TaskKind::Change);
-        report(&mut app, run, judged(TaskKind::Change, &["a.rs"], "done"), "done");
+        report(
+            &mut app,
+            run,
+            judged(TaskKind::Change, &["a.rs"], "done"),
+            "done",
+        );
         let messages = app.session.messages.len();
         // The same verdict arrives again: no second message, no second turn.
-        let action = report(&mut app, run, judged(TaskKind::Change, &["a.rs"], "done"), "done");
+        let action = report(
+            &mut app,
+            run,
+            judged(TaskKind::Change, &["a.rs"], "done"),
+            "done",
+        );
         assert!(matches!(action, Action::None));
         assert_eq!(app.session.messages.len(), messages);
     }
@@ -261,7 +302,12 @@ mod tests {
         assert_eq!(app.session_for_run(run), Some(owner));
         let index = app.tab_for_session(owner).expect("the owner is open");
         app.with_tab(index, |tab| {
-            let action = report(tab, run, judged(TaskKind::Change, &["a.rs"], "done"), "done");
+            let action = report(
+                tab,
+                run,
+                judged(TaskKind::Change, &["a.rs"], "done"),
+                "done",
+            );
             assert!(matches!(action, Action::Start { .. }));
         });
         // The tab on screen never received it: the report is in the owner's
@@ -275,7 +321,9 @@ mod tests {
                     .any(|message| message.content.contains("[delegation report]"))
             );
         });
-        let other = app.tab_for_session(on_screen).expect("the other tab is open");
+        let other = app
+            .tab_for_session(on_screen)
+            .expect("the other tab is open");
         app.with_tab(other, |tab| {
             assert!(
                 !tab.session
@@ -292,7 +340,12 @@ mod tests {
         let mut app = app();
         let live = start(&mut app, "c1", "a", TaskKind::Change);
         let done = start(&mut app, "c2", "b", TaskKind::Change);
-        report(&mut app, done, judged(TaskKind::Change, &["b.rs"], "done"), "done");
+        report(
+            &mut app,
+            done,
+            judged(TaskKind::Change, &["b.rs"], "done"),
+            "done",
+        );
 
         // The app stops and the session comes back from disk.
         let dir = std::env::temp_dir().join(format!("yopes-restore-{}", std::process::id()));
@@ -310,7 +363,10 @@ mod tests {
                 .expect("the ledger kept the run")
         };
         assert_eq!(record(live).state, RunState::Failed);
-        assert_eq!(record(live).reasons, vec![delegation::INTERRUPTED.to_owned()]);
+        assert_eq!(
+            record(live).reasons,
+            vec![delegation::INTERRUPTED.to_owned()]
+        );
         assert_eq!(record(done).state, RunState::Completed);
         // The ledger the next request carries forbids presenting it as done.
         let text = delegation::ledger(&restored.delegations, delegation::unix_now()).unwrap();
@@ -340,7 +396,12 @@ mod tests {
         assert!(!app.subagents[0].heard_from);
         assert_eq!(app.active_runs_in_owner(), vec![run]);
         // Only evidence changes that.
-        report(&mut app, run, judged(TaskKind::Change, &["a.rs"], "done"), "done");
+        report(
+            &mut app,
+            run,
+            judged(TaskKind::Change, &["a.rs"], "done"),
+            "done",
+        );
         assert_eq!(app.session.delegations[0].state, RunState::Completed);
     }
 
@@ -369,7 +430,12 @@ mod tests {
         ));
         let verdict = delegation::verdict(TaskKind::Change, &[], &outcome);
         assert_eq!(verdict.state, RunState::Failed);
-        assert!(verdict.reasons.iter().any(|reason| reason.contains("cargo test")));
+        assert!(
+            verdict
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("cargo test"))
+        );
     }
 
     #[test]

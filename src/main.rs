@@ -1,12 +1,14 @@
 mod app;
 mod backend;
 mod catalog;
+mod changelog;
 mod clipboard;
 mod config;
 mod credentials;
 mod delegation;
 mod diff;
 mod logos;
+mod mcp;
 mod models;
 mod session;
 mod skills;
@@ -84,6 +86,8 @@ async fn run() -> Result<()> {
     let custom_providers = config.custom_providers.clone();
     let tavily_api_key = config.tavily_api_key.clone();
     let auto_compact = config.auto_compact;
+    let saved_permission = config.permission.clone();
+    let saved_diff_sides = config.diff_sides;
     let mut app = App::new(
         session,
         backend,
@@ -94,6 +98,21 @@ async fn run() -> Result<()> {
         tavily_api_key,
         auto_compact,
     );
+    if let Some(mode) = saved_permission.as_deref().and_then(ToolsMode::parse) {
+        app.tools_mode = mode;
+    }
+    if let Some(sides) = saved_diff_sides {
+        app.diff_sides = sides;
+    }
+    // The changelog opens once per build: a fresh version shows what changed,
+    // and closing it records the version so the next start stays quiet.
+    if config::last_seen_version(&config.config_path)
+        .as_deref()
+        .is_none_or(|seen| seen != update::current_version())
+        && let Some(view) = crate::app::ChangeLogView::for_current_version()
+    {
+        app.changelog = Some(view);
+    }
     // One-shot runs need no terminal: raw mode and the alternate screen want
     // a tty, and a CI runner has none.
     let mut terminal = if headless {
