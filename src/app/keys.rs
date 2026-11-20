@@ -315,7 +315,7 @@ impl App {
             }
             return Action::None;
         }
-        // Tab bar clicks: the footer refills the hit-boxes every draw. `×`
+        // Tab bar clicks: the tab row refills the hit-boxes every draw. `×`
         // closes that tab, `+` opens one, the label switches to it.
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             let column = mouse.column;
@@ -390,12 +390,38 @@ impl App {
                 return Action::None;
             }
         }
+        // The wheel over the Progress panel scrolls its own task window
+        // instead of the transcript behind it.
+        if !self.progress_collapsed {
+            if let Some((x, y, width, height)) = self.progress_area {
+                let inside = mouse.column >= x
+                    && mouse.column < x.saturating_add(width)
+                    && mouse.row >= y
+                    && mouse.row < y.saturating_add(height);
+                if inside {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            self.progress_scroll = Some(self.progress_start.saturating_sub(1));
+                            return Action::None;
+                        }
+                        MouseEventKind::ScrollDown => {
+                            self.progress_scroll = Some(self.progress_start.saturating_add(1));
+                            return Action::None;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll_up(3),
             MouseEventKind::ScrollDown => self.scroll_down(3),
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.progress_row == Some(mouse.row) {
+                    // Folding and unfolding hands the window back to the
+                    // follow-the-current-task rule.
                     self.progress_collapsed = !self.progress_collapsed;
+                    self.progress_scroll = None;
                 } else {
                     self.toggle_output_at(mouse.row);
                 }
@@ -641,7 +667,7 @@ impl App {
                 Action::None
             }
             KeyCode::Tab if self.palette_open() => {
-                self.palette_complete();
+                let _ = self.palette_complete();
                 Action::None
             }
             KeyCode::Tab => {

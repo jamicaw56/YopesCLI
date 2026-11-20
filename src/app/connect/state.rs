@@ -85,6 +85,27 @@ impl ConnectStage {
             Self::RenameProvider => "rename provider",
         }
     }
+
+    /// Where this stage sits in the flow, shown in the dialog's bottom title:
+    /// a user always knows which step they are on and what comes next.
+    pub const fn hint(self) -> &'static str {
+        match self {
+            Self::Providers => "pick a provider",
+            Self::Models => "pick a model",
+            Self::ApiKey => "paste the API key",
+            Self::Endpoint => "type the endpoint URL",
+            Self::ModelsEndpoint => "type the models URL",
+            Self::CustomToken => "paste the token",
+            Self::ModelId => "type the model id",
+            Self::ModelName => "name the model",
+            Self::ModelContextWindow => "pick the context window",
+            Self::CustomModels => "pick a saved model",
+            Self::Password => "set a passphrase",
+            Self::Unlock => "unlock the stored key",
+            Self::AddProvider => "fill the provider form",
+            Self::RenameProvider => "rename the provider",
+        }
+    }
 }
 /// How a connection gets its key.
 #[derive(Clone, Debug)]

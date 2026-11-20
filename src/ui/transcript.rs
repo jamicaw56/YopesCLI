@@ -33,7 +33,10 @@ fn tool_frame_key(
         name_hash: content_hash(call_name.unwrap_or_default()),
         expanded: app.expanded.contains(call_id),
         has_report: app.changes.contains_key(call_id),
-        report_files: app.changes.get(call_id).map_or(0, |report| report.diffs.len()),
+        report_files: app
+            .changes
+            .get(call_id)
+            .map_or(0, |report| report.diffs.len()),
         image_rows: message
             .images
             .iter()
@@ -104,10 +107,15 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Line::raw(""),
+            // Where the session works: the home directory reads as `~`.
+            Line::styled(
+                format!("workspace  {}", workspace_label(app.working_dir())),
+                Style::default().fg(muted()),
+            ),
+            Line::raw(""),
         ];
-        // The mascot belongs to the startup screen only, never to a reply.
-        welcome.extend(mascot_frame(app.spinner));
-        welcome.push(Line::raw(""));
+        // The startup screen carries no mascot: the workspace line is what the
+        // eye needs, not an animation to watch.
         welcome.push(Line::styled(
             "A quiet place to think out loud.",
             Style::default().fg(text()),
@@ -153,7 +161,10 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     // per-message pieces, shared blocks for cached markdown. A frame only
     // clones the blocks the visible window shows (see the render step).
     let mut slots: Vec<Slot<'_>> = Vec::new();
-    let mut rows: Vec<(usize, String)> = Vec::new();
+    // Click rows as (slot index, line offset inside the slot, key): a slot can
+    // be a whole framed block, so the offset must be added to the slot's own
+    // screen row instead of indexing the slot table with it.
+    let mut rows: Vec<(usize, usize, String)> = Vec::new();
     // Copied out: the summary is owned so the session can stay borrowed.
     let compaction = app.compaction_text().map(str::to_owned);
     // Call names by tool-call id, built in one forward pass: the per-result
@@ -251,7 +262,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             // The framed result is one shared block: its wrap rows are measured
             // once when it is built, and click rows are rebased to this slot.
             for offset in &frame.clicks {
-                rows.push((start + offset, message.tool_call_id.clone().unwrap_or_default()));
+                rows.push((
+                    start,
+                    *offset,
+                    message.tool_call_id.clone().unwrap_or_default(),
+                ));
             }
             slots.push(Slot::Block {
                 lines: frame.lines.clone(),
@@ -296,7 +311,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         if !reasoning.is_empty() {
             let start = slots.len();
             if think_count > 2 && !streaming {
-                rows.push((start, reason_key));
+                rows.push((start, 0, reason_key));
             }
             for line in reasoning {
                 slots.push(Slot::Line(line));
@@ -561,10 +576,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Map tool frames to screen rows so a click can hit one.
     let scroll = app.scroll;
-    for (line_index, call_id) in rows {
-        let Some(&screen_row) = starts.get(line_index) else {
+    for (slot, offset, call_id) in rows {
+        let Some(&start) = starts.get(slot) else {
             continue;
         };
+        let screen_row = start + offset;
         if screen_row < scroll {
             continue;
         }
@@ -678,6 +694,80 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    /// A long edit diff folds inside its frame, and a click on any of its rows
+    /// expands it in place.
+    #[test]
+    fn an_edit_diff_frame_opens_on_click() {
+        use crate::diff::FileDiff;
+        use crate::session::{Message, Role, ToolCall};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            reasoning: String::new(),
+            tool_calls: Some(vec![ToolCall::new("call_edit", "edit_file", "{}")]),
+            tool_call_id: None,
+            usage: None,
+            images: Vec::new(),
+            error: None,
+        });
+        let before = (0..40)
+            .map(|line| format!("old line {line}\n"))
+            .collect::<String>();
+        let after = (0..40)
+            .map(|line| format!("new line {line}\n"))
+            .collect::<String>();
+        app.changes.insert(
+            "call_edit".to_owned(),
+            crate::app::ChangeReport {
+                diffs: vec![FileDiff::new("src/main.rs", &before, &after, false)],
+                side_by_side: app.diff_sides,
+            },
+        );
+        app.session.messages.push(Message {
+            role: Role::Tool,
+            content: "Edited src/main.rs".to_owned(),
+            reasoning: String::new(),
+            tool_calls: None,
+            tool_call_id: Some("call_edit".to_owned()),
+            usage: None,
+            images: Vec::new(),
+            error: None,
+        });
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let folded = rendered_text(&terminal);
+        assert!(folded.contains("click to expand"), "no fold hint: {folded}");
+        let row = app
+            .output_rows
+            .first()
+            .map(|(row, _)| *row)
+            .expect("the diff frame registers click rows");
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 4,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(
+            app.expanded.contains("call_edit"),
+            "the click did not expand the diff"
+        );
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let opened = rendered_text(&terminal);
+        assert!(
+            opened.contains("click to collapse"),
+            "not expanded: {opened}"
+        );
     }
 
     #[test]
@@ -903,17 +993,25 @@ mod tests {
             app.session
                 .messages
                 .push(Message::new(Role::User, format!("question {i}")));
-            app.session
-                .messages
-                .push(Message::new(Role::Assistant, "a short finished answer".repeat(5)));
+            app.session.messages.push(Message::new(
+                Role::Assistant,
+                "a short finished answer".repeat(5),
+            ));
         }
-        app.session.messages.push(Message::new(Role::Assistant, String::new()));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, String::new()));
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let chunk = "streamed words and more words ";
         let mut total = std::time::Duration::ZERO;
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..50 {
-            app.session.messages.last_mut().unwrap().content.push_str(chunk);
+            app.session
+                .messages
+                .last_mut()
+                .unwrap()
+                .content
+                .push_str(chunk);
             let start = std::time::Instant::now();
             terminal
                 .draw(|frame| crate::ui::draw(frame, &mut app))
@@ -951,11 +1049,7 @@ mod tests {
                     role: Role::Assistant,
                     content: String::new(),
                     reasoning: String::new(),
-                    tool_calls: Some(vec![ToolCall::new(
-                        &format!("call_{i}"),
-                        "todo_write",
-                        "{}",
-                    )]),
+                    tool_calls: Some(vec![ToolCall::new(format!("call_{i}"), "todo_write", "{}")]),
                     tool_call_id: None,
                     usage: None,
                     images: Vec::new(),

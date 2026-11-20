@@ -46,7 +46,9 @@ mod turn;
 mod orchestration_tests;
 
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
-pub(crate) use commands::{COMMANDS, CommandSpec, EFFORT_CHOICES, SET_KEYS, matching_commands};
+pub(crate) use commands::{
+    COMMANDS, EFFORT_CHOICES, SET_KEYS, Suggestion, argument_suggestions, matching_commands,
+};
 pub(crate) use delegate::{
     DelegateUpdate, SUBAGENT_BRIEF, SUBAGENT_NAME_BRIEF, Subagent, SubagentStatus, WRITING_TOOLS,
     ZERO_WRITE_NUDGE_ROUNDS,
@@ -341,6 +343,13 @@ pub struct App {
     pub output_rows: Vec<(u16, String)>,
     /// Whether the Progress checklist is folded to its title row.
     pub progress_collapsed: bool,
+    /// The Progress window's top task when the user scrolled it: `None`
+    /// follows the first unfinished task.
+    pub progress_scroll: Option<usize>,
+    /// The window start the last draw used, so a wheel step begins there.
+    pub progress_start: usize,
+    /// The Progress panel's on-screen area, for wheel hit-testing.
+    pub progress_area: Option<(u16, u16, u16, u16)>,
     /// Screen row of the Progress title, for click-to-fold.
     pub progress_row: Option<u16>,
     /// Composer target area for mouse click and drag selection.
@@ -480,6 +489,9 @@ impl App {
             expanded: HashSet::new(),
             output_rows: Vec::new(),
             progress_collapsed: false,
+            progress_scroll: None,
+            progress_start: 0,
+            progress_area: None,
             progress_row: None,
             composer_area: None,
             diff_sides: true,
@@ -712,8 +724,6 @@ impl App {
             || self.approval.is_some()
             || self.running_tool.is_some()
             || self.any_subagent_running()
-            // The startup mascot animates across ticks.
-            || self.session.messages.is_empty()
             // A notice dismisses itself after a few seconds: the ticker runs
             // that expiry.
             || self.notice.is_some()

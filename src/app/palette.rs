@@ -1,11 +1,25 @@
 use super::*;
 
 impl App {
-    pub(crate) fn palette_matches(&self) -> Vec<&'static CommandSpec> {
+    /// The palette rows: command names while the name is being typed, then
+    /// the command's arguments, so neither has to be memorised.
+    pub(crate) fn palette_matches(&self) -> Vec<Suggestion> {
         if self.palette_hidden {
             return Vec::new();
         }
-        matching_commands(&self.input.value)
+        let commands = matching_commands(&self.input.value);
+        if !commands.is_empty() {
+            return commands
+                .into_iter()
+                .map(|command| Suggestion {
+                    label: command.display_name(),
+                    completion: command.completion(),
+                    description: command.description,
+                    submit: true,
+                })
+                .collect();
+        }
+        argument_suggestions(&self.input.value)
     }
 
     pub(crate) fn palette_selected(&self) -> usize {
@@ -39,21 +53,24 @@ impl App {
         };
     }
 
-    pub(crate) fn palette_complete(&mut self) -> Option<CommandSpec> {
+    /// Complete the selected row into the composer, keeping the palette closed
+    /// until the next keystroke reopens it.
+    pub(crate) fn palette_complete(&mut self) -> Option<Suggestion> {
         let matches = self.palette_matches();
         let index = self.palette_index.min(matches.len().saturating_sub(1));
-        let command = *matches.get(index).copied()?;
-        self.input.set(command.completion());
+        let suggestion = matches.get(index).cloned()?;
+        self.input.set(suggestion.completion.clone());
         self.palette_index = 0;
         self.palette_hidden = true;
-        Some(command)
+        Some(suggestion)
     }
 
+    /// Enter on the palette: a completed command runs, a completed argument
+    /// stays in the composer for the rest of the line.
     pub(crate) fn palette_accept(&mut self) -> Action {
-        if self.palette_complete().is_some() {
-            self.submit()
-        } else {
-            Action::None
+        match self.palette_complete() {
+            Some(suggestion) if suggestion.submit => self.submit(),
+            _ => Action::None,
         }
     }
 }

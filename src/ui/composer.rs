@@ -3,10 +3,9 @@ use super::*;
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
 
-    // The header carries the mode and the passive provider line. The
-    // permission badge and the session tabs live in the footer's right side,
-    // next to the context load, so the tab bar sits where the eye already
-    // reads state and every clickable target shares one row.
+    // The header carries the mode and the passive provider line. The session
+    // tabs sit on their own row underneath, and the permission badge next to
+    // the context load in the footer.
     let title_spans = vec![
         Span::styled(
             "◆",
@@ -98,11 +97,7 @@ fn context_label(context: u64, window: u64) -> String {
     if context == 0 {
         return String::new();
     }
-    format!(
-        "ctx {}/{}",
-        format_tokens(context),
-        format_tokens(window)
-    )
+    format!("ctx {}/{}", format_tokens(context), format_tokens(window))
 }
 
 pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
@@ -291,53 +286,67 @@ fn render_composer_text(input: &Input) -> Text<'static> {
 }
 
 /// The native progress panel: the session's task checklist above the composer.
+///
+/// The window follows the first unfinished task, so a run that completes a row
+/// scrolls the checklist by itself; the mouse wheel sets an explicit offset.
 pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.width < 20 {
         return;
     }
     app.progress_row = Some(area.y);
+    app.progress_area = Some((area.x, area.y, area.width, area.height));
     let inner = padded(area, 2);
     let marker = if app.progress_collapsed { "▸" } else { "▾" };
     let total = app.session.tasks.len();
+    let done = app.session.tasks.iter().filter(|task| task.done).count();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let done = if app.progress_collapsed {
-        app.session.tasks.iter().filter(|task| task.done).count()
-    } else {
+    let mut scrolled = false;
+    if !app.progress_collapsed {
         if area.height < 3 {
             return;
         }
-        // One pass counts completion for every task and renders the visible
-        // rows, so the header never costs a second scan. Done tasks take the
-        // added color: a checklist that scans as green-first reads its own
-        // progress without counting checkboxes.
-        let mut counted = 0usize;
-        for (index, task) in app.session.tasks.iter().enumerate() {
-            counted += usize::from(task.done);
-            match index {
-                0..=5 => {
-                    let (mark, mark_color) = if task.done {
-                        ("✓", added())
-                    } else {
-                        ("○", accent())
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
-                        Span::styled(
-                            task.text.clone(),
-                            Style::default().fg(if task.done { muted() } else { text() }),
-                        ),
-                    ]));
-                }
-                6 => lines.push(Line::styled(
-                    format!("… {} more", total - 6),
-                    Style::default().fg(muted()),
-                )),
-                _ => {}
-            }
+        let visible = usize::from(inner.height).saturating_sub(1).max(1);
+        let active = app
+            .session
+            .tasks
+            .iter()
+            .position(|task| !task.done)
+            .unwrap_or(total.saturating_sub(1));
+        let maximum = total.saturating_sub(visible);
+        let start = match app.progress_scroll {
+            Some(offset) => offset.min(maximum),
+            None => active
+                .saturating_add(1)
+                .saturating_sub(visible)
+                .min(maximum),
+        };
+        app.progress_start = start;
+        scrolled = maximum > 0;
+        for (index, task) in app
+            .session
+            .tasks
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+        {
+            let (mark, mark_color) = if task.done {
+                ("✓", added())
+            } else if index == active {
+                ("▶", accent2())
+            } else {
+                ("○", accent())
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
+                Span::styled(
+                    task.text.clone(),
+                    Style::default().fg(if task.done { muted() } else { text() }),
+                ),
+            ]));
         }
-        counted
-    };
+    }
 
     // The title row carries a tiny progress meter: done and open boxes side
     // by side, so the ratio reads at a glance before the words.
@@ -346,10 +355,7 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
         let open_boxes = "□".repeat(total.min(6).saturating_sub(done));
         let mut spans = Vec::new();
         if !done_boxes.is_empty() {
-            spans.push(Span::styled(
-                done_boxes.clone(),
-                Style::default().fg(added()),
-            ));
+            spans.push(Span::styled(done_boxes, Style::default().fg(added())));
         }
         if !open_boxes.is_empty() {
             spans.push(Span::styled(open_boxes, Style::default().fg(dim())));
@@ -377,22 +383,27 @@ pub(super) fn draw_progress(frame: &mut Frame, app: &mut App, area: Rect) {
         title.push(Span::styled("  ", Style::default()));
         title.extend(meter);
     }
-    title.push(Span::styled(" · click to fold", Style::default().fg(dim())));
+    title.push(Span::styled(
+        if scrolled {
+            " · wheel to scroll · click to fold"
+        } else {
+            " · click to fold"
+        },
+        Style::default().fg(dim()),
+    ));
     lines.insert(0, Line::from(title));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
+/// The session tabs, on their own row under the header.
+///
+/// The row belongs to the tabs alone: the permission badge and the context
+/// load stay in the footer, so a bar full of sessions never squeezes them.
+pub(super) fn draw_tab_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
-    let context = app.context_tokens();
-    let window = app
-        .model_context_window()
-        .map(|w| w.max(context))
-        .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
-    let ctx = context_label(context, window);
-    let (badge, badge_style) = permission_badge(app.tools_mode);
-    let badge_w = UnicodeWidthStr::width(badge) as u16;
-    let gap: u16 = 3; // " · " between the three groups
+    if inner.width < 12 {
+        return;
+    }
     let sep_w: u16 = 3; // " │ " between two tabs
     let close_w: u16 = 2; // " ×" after each tab label
     let plus_w: u16 = 3; // " +" opens a tab
@@ -417,20 +428,17 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         marker_w(index) + UnicodeWidthStr::width(label) as u16 + close_w
     };
     let seps = sep_w * tab_count.saturating_sub(1) as u16;
-    let full: u16 = (0..tab_count).map(|index| tab_w(index, &labels[index])).sum::<u16>() + seps;
+    let full: u16 = (0..tab_count)
+        .map(|index| tab_w(index, &labels[index]))
+        .sum::<u16>()
+        + seps;
     let smallest: u16 = (0..tab_count).map(|index| tab_w(index, "9")).sum::<u16>() + seps;
 
-    // The badge and the tabs never drop; the context load is the segment that
-    // yields on a narrow terminal, and the tab labels shrink before any tab
-    // disappears from the row.
-    let ctx_w = UnicodeWidthStr::width(ctx.as_str()) as u16;
-    let ctx_cost = if ctx.is_empty() { 0 } else { gap + ctx_w };
-    let room = inner.width.saturating_sub(badge_w + gap + plus_w);
-    let keep_ctx = ctx_cost > 0 && full + ctx_cost <= room;
-    let budget = room.saturating_sub(if keep_ctx { ctx_cost } else { 0 });
+    // The labels shrink to the tab numbers before any tab drops from the row.
     // The active tab earns twice the share, so its title stays readable.
     let active = app.tab_index();
     let mut labels = labels;
+    let budget = inner.width.saturating_sub(plus_w);
     if full > budget {
         let shareable = budget.saturating_sub(smallest);
         let per_tab = if tab_count > 0 {
@@ -450,12 +458,12 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Fit the tabs left to right, dropping the last ones when even the shrunk
     // labels do not fit: a `+N` count names what went. The widths add up to the
-    // right column, so the hit-boxes below land on real screen columns.
+    // row, so the hit-boxes below land on real screen columns.
     let mut shown = tab_count;
     let mut used = 0u16;
-    for index in 0..tab_count {
+    for (index, label) in labels.iter().enumerate() {
         let sep = if index > 0 { sep_w } else { 0 };
-        let w = sep + tab_w(index, &labels[index]);
+        let w = sep + tab_w(index, label);
         if used + w > budget {
             shown = index;
             break;
@@ -463,32 +471,15 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         used += w;
     }
     let overflow = tab_count - shown;
-    if overflow == 0 {
-        used += plus_w;
-    } else {
-        // The `+N` marker takes the columns the dropped tabs would have used.
-        used += UnicodeWidthStr::width(format!(" +{overflow}").as_str()) as u16;
-    }
-    if keep_ctx {
-        used += ctx_cost;
-    }
-    let right_width = (badge_w + gap + used).min(inner.width);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(right_width)])
-        .split(inner);
 
     // Session tabs: a turning ring while a tab streams, `!` when it wants a
     // decision. Click or Alt+1..9 to switch; the active one is accent + bold.
     app.tab_hits.clear();
     app.tab_close_hits.clear();
     app.tab_new_hit = None;
-    let row = area.y;
-    let mut spans = vec![
-        Span::styled(badge, badge_style),
-        Span::styled(" · ", Style::default().fg(dim())),
-    ];
-    let mut cursor = columns[1].x + badge_w + gap;
+    let row = inner.y;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut cursor = inner.x;
     for index in 0..shown {
         if index > 0 {
             spans.push(Span::styled(" │ ", Style::default().fg(dim())));
@@ -514,7 +505,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         cursor += label_w;
         // `×` after each label: mouse users close that tab without switching.
         spans.push(Span::styled(" ×", Style::default().fg(dim())));
-        app.tab_close_hits.push((cursor, cursor + close_w, row, index));
+        app.tab_close_hits
+            .push((cursor, cursor + close_w, row, index));
         cursor += close_w;
     }
     if shown == tab_count {
@@ -523,21 +515,45 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(accent()).add_modifier(Modifier::BOLD),
         ));
         let start = cursor;
-        cursor += plus_w;
         app.tab_new_hit = Some((start + 1, start + plus_w, row));
-    } else if overflow > 0 {
+    } else {
         // Hidden tabs are never silent: the count says what did not fit, and
         // Alt+1..9 still reaches every one of them.
-        let count = format!(" +{overflow}");
-        spans.push(Span::styled(count.clone(), Style::default().fg(dim())));
-        cursor += UnicodeWidthStr::width(count.as_str()) as u16;
+        spans.push(Span::styled(
+            format!(" +{overflow}"),
+            Style::default().fg(dim()),
+        ));
     }
+    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+}
+
+pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
+    let inner = padded(area, 2);
+    let context = app.context_tokens();
+    let window = app
+        .model_context_window()
+        .map(|w| w.max(context))
+        .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
+    let ctx = context_label(context, window);
+    let (badge, badge_style) = permission_badge(app.tools_mode);
+    let badge_w = UnicodeWidthStr::width(badge) as u16;
+    let gap: u16 = 3; // " · " between the three groups
+    let ctx_w = UnicodeWidthStr::width(ctx.as_str()) as u16;
+    let ctx_cost = if ctx.is_empty() { 0 } else { gap + ctx_w };
+    // The badge never drops; the context load is the segment that yields on a
+    // narrow terminal. The tabs live on their own row above the transcript.
+    let keep_ctx = ctx_cost > 0 && badge_w + ctx_cost <= inner.width;
+    let right_width = (badge_w + if keep_ctx { ctx_cost } else { 0 }).min(inner.width);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(right_width)])
+        .split(inner);
+
+    let mut spans = vec![Span::styled(badge, badge_style)];
     if keep_ctx {
         spans.push(Span::styled(" · ", Style::default().fg(dim())));
         spans.push(Span::styled(ctx, Style::default().fg(muted())));
-        cursor += gap;
     }
-    let _ = cursor;
     frame.render_widget(Paragraph::new(Line::from(spans)), columns[1]);
 
     let (text, color) = if app.approval.is_some() {
@@ -589,8 +605,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
                 None => "thinking".to_owned(),
             };
             let mut text = format!("{} {progress} · {elapsed:.1}s", spinner(app.spinner));
-            if let Some((in_tokens, out_tokens)) = app.stream_tokens() {
-                text.push_str(&format!(" · in {}", format_tokens(in_tokens)));
+            if let Some((_, out_tokens)) = app.stream_tokens() {
                 if out_tokens > 0 {
                     let rate = out_tokens as f64 / elapsed.max(0.2);
                     text.push_str(&format!(
@@ -669,22 +684,19 @@ mod tests {
         terminal
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
-        let row = screen_row(&terminal, 23);
+        let row = screen_row(&terminal, 1);
         for index in 1..=9u16 {
             assert!(
                 row.contains(&index.to_string()),
-                "tab {index} is missing from the footer: {row}"
+                "tab {index} is missing from the tab row: {row}"
             );
         }
         // Every tab keeps a click hit-box, so switching still reaches all of them.
         assert_eq!(app.tab_hits.len(), 9);
-        // The permission badge shares the row, and the context load sits at
-        // its right end.
-        assert!(row.contains("[ON]"), "the badge is missing: {row}");
     }
 
     /// The context load closes the footer row: with messages in the session it
-    /// is the rightmost segment, after the badge and the tabs.
+    /// sits after the permission badge, and no tab shares that row.
     #[test]
     fn the_context_load_closes_the_footer_row() {
         use crate::session::{Message, Role};
@@ -702,16 +714,18 @@ mod tests {
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
         let footer = screen_row(&terminal, 23);
-        let trimmed = footer.trim_end();
         assert!(
-            trimmed.ends_with("ctx") || trimmed.contains("ctx "),
+            footer.contains("ctx "),
             "the context load is missing from the footer: {footer}"
         );
-        // Order: badge, then tabs, then the context load.
+        // Order: badge, then the context load. The tabs moved to their own row.
         let badge = footer.find("[ON]").expect("badge");
-        let tabs = footer.find(" │ ").expect("tabs");
         let ctx = footer.find("ctx ").expect("context load");
-        assert!(badge < tabs && tabs < ctx, "wrong order: {footer}");
+        assert!(badge < ctx, "wrong order: {footer}");
+        assert!(
+            !footer.contains(" │ "),
+            "tabs still in the footer: {footer}"
+        );
     }
 
     fn screen_row(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, row: u16) -> String {
@@ -725,8 +739,55 @@ mod tests {
             .collect()
     }
 
+    /// A checklist longer than the panel follows the first unfinished task,
+    /// and an explicit wheel offset scrolls it back up.
+    #[test]
+    fn the_progress_panel_follows_the_current_task_and_scrolls() {
+        use crate::session::TaskState;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.tasks = (0..10)
+            .map(|index| TaskState {
+                text: format!("task-{index}"),
+                done: index < 5,
+            })
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).unwrap();
+        let text = |terminal: &Terminal<TestBackend>| {
+            (0..5)
+                .map(|row| screen_row(terminal, row))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        terminal
+            .draw(|frame| super::draw_progress(frame, &mut app, frame.area()))
+            .unwrap();
+        let followed = text(&terminal);
+        assert!(
+            followed.contains("task-5"),
+            "current task hidden: {followed}"
+        );
+        assert!(
+            !followed.contains("task-0"),
+            "finished work crowds out the current task: {followed}"
+        );
+        assert!(followed.contains("Progress 5/10"), "{followed}");
+
+        app.progress_scroll = Some(0);
+        terminal
+            .draw(|frame| super::draw_progress(frame, &mut app, frame.area()))
+            .unwrap();
+        let scrolled = text(&terminal);
+        assert!(
+            scrolled.contains("task-0"),
+            "the wheel cannot scroll up: {scrolled}"
+        );
+        assert!(scrolled.contains("wheel to scroll"), "{scrolled}");
+    }
+
     /// The header keeps only the mode dot and the provider line: the
-    /// permission badge and the tabs moved to the footer.
+    /// permission badge lives in the footer, the tabs on their own row.
     #[test]
     fn the_header_holds_no_badge_and_no_tabs() {
         use ratatui::{Terminal, backend::TestBackend};
@@ -738,14 +799,16 @@ mod tests {
             .draw(|frame| crate::ui::draw(frame, &mut app))
             .unwrap();
         let header = screen_row(&terminal, 0);
+        let tabs = screen_row(&terminal, 1);
         let footer = screen_row(&terminal, 23);
         assert!(!header.contains("[ON]"), "badge in header: {header}");
-        assert!(
-            !header.contains(" │ "),
-            "tab separator in header: {header}"
-        );
+        assert!(!header.contains(" │ "), "tab separator in header: {header}");
         assert!(header.contains("build"), "mode dot in header: {header}");
+        assert!(tabs.contains(" │ "), "no tabs on the tab row: {tabs}");
         assert!(footer.contains("[ON]"), "no badge in footer: {footer}");
-        assert!(footer.contains(" │ "), "no tabs in footer: {footer}");
+        assert!(
+            !footer.contains(" │ "),
+            "tabs still in the footer: {footer}"
+        );
     }
 }

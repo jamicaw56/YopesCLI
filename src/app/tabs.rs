@@ -51,6 +51,8 @@ pub(crate) struct TabState {
     pub(crate) expanded: HashSet<String>,
     pub(crate) output_rows: Vec<(u16, String)>,
     pub(crate) progress_collapsed: bool,
+    /// Progress window scroll: `None` follows the first unfinished task.
+    pub(crate) progress_scroll: Option<usize>,
     pub(crate) progress_row: Option<u16>,
     pub(crate) composer_area: Option<Rect>,
     pub(crate) diff_sides: bool,
@@ -116,6 +118,7 @@ impl Default for TabState {
             expanded: HashSet::new(),
             output_rows: Vec::new(),
             progress_collapsed: false,
+            progress_scroll: None,
             progress_row: None,
             composer_area: None,
             diff_sides: true,
@@ -168,6 +171,7 @@ impl TabState {
             expanded: std::mem::take(&mut app.expanded),
             output_rows: std::mem::take(&mut app.output_rows),
             progress_collapsed: std::mem::take(&mut app.progress_collapsed),
+            progress_scroll: app.progress_scroll.take(),
             progress_row: app.progress_row.take(),
             composer_area: app.composer_area.take(),
             diff_sides: std::mem::take(&mut app.diff_sides),
@@ -217,6 +221,7 @@ impl TabState {
         app.expanded = self.expanded;
         app.output_rows = self.output_rows;
         app.progress_collapsed = self.progress_collapsed;
+        app.progress_scroll = self.progress_scroll;
         app.progress_row = self.progress_row;
         app.composer_area = self.composer_area;
         app.diff_sides = self.diff_sides;

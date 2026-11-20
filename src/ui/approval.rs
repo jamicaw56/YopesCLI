@@ -264,8 +264,9 @@ pub(super) fn tool_result_lines(
     if body.is_empty() {
         body.push(Line::styled(" ", Style::default().fg(muted())));
     }
-    // Long output, diff included, is folded; a click on the frame reveals the rest.
-    let clickable = quiet || cut || total_lines > TOOL_OUTPUT_PREVIEW_LINES;
+    // Long output, diff included, is folded; a click on the frame reveals the
+    // rest, and an expanded frame stays clickable so the same click folds it.
+    let clickable = expanded || quiet || cut || total_lines > TOOL_OUTPUT_PREVIEW_LINES;
     if !expanded {
         if quiet {
             body.push(Line::styled(

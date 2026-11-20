@@ -296,15 +296,21 @@ fn draw_agent_cursor(
     };
     // The halo marks the pointer as the agent's, and the white outline keeps
     // the black arrow readable over a dark app.
-    let mut halo_paint = tiny_skia::Paint::default();
-    halo_paint.anti_alias = true;
+    let mut halo_paint = tiny_skia::Paint {
+        anti_alias: true,
+        ..Default::default()
+    };
     halo_paint.set_color_rgba8(255, 255, 255, 96);
     let halo = tiny_skia::PathBuilder::from_circle(1.0, 1.0, 11.0).context("building the halo")?;
-    let mut fill = tiny_skia::Paint::default();
-    fill.anti_alias = true;
+    let mut fill = tiny_skia::Paint {
+        anti_alias: true,
+        ..Default::default()
+    };
     fill.set_color_rgba8(12, 12, 12, 255);
-    let mut outline = tiny_skia::Paint::default();
-    outline.anti_alias = true;
+    let mut outline = tiny_skia::Paint {
+        anti_alias: true,
+        ..Default::default()
+    };
     outline.set_color_rgba8(255, 255, 255, 235);
     let stroke = tiny_skia::Stroke {
         width: 1.5,
@@ -1058,10 +1064,7 @@ mod tests {
         );
         // A point with no window under it fails the call instead of silently
         // acting nowhere.
-        assert!(
-            script.contains("nothing to click at (3, 4)"),
-            "{script}"
-        );
+        assert!(script.contains("nothing to click at (3, 4)"), "{script}");
     }
 
     #[test]
@@ -1153,7 +1156,7 @@ mod tests {
             .to_string();
         assert!(error.contains("at most 10000 ms"), "{error}");
         assert_eq!(MAX_WAIT_MS, 10_000);
-        assert!(DEFAULT_SETTLE_MS <= MAX_WAIT_MS);
+        const { assert!(DEFAULT_SETTLE_MS <= MAX_WAIT_MS) };
     }
 
     #[test]

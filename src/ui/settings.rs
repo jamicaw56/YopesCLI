@@ -4,7 +4,9 @@ use super::*;
 /// right, changed with the arrow keys.
 pub(super) fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width.min(54);
-    let height = (SETTING_ROWS.len() as u16).saturating_add(2).min(area.height);
+    let height = (SETTING_ROWS.len() as u16)
+        .saturating_add(2)
+        .min(area.height);
     if width < 24 || height < 4 {
         return;
     }
@@ -40,13 +42,15 @@ pub(super) fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         .max()
         .unwrap_or(0)
         .clamp(4, usize::from(inner.width).saturating_sub(20));
-    let label_width = usize::from(inner.width).saturating_sub(value_width + 4);
-    for (index, row) in SETTING_ROWS.iter().enumerate() {
-        if index as u16 >= inner.height {
-            break;
-        }
+    let label_width = usize::from(inner.width).saturating_sub(value_width + 7);
+    // A list taller than the popup shows a window of rows that moves with the
+    // selection, so no row is unreachable on a short terminal.
+    let visible = usize::from(inner.height);
+    let start = app.settings_index.saturating_sub(visible.saturating_sub(1));
+    for (offset, row) in SETTING_ROWS.iter().skip(start).take(visible).enumerate() {
+        let index = start + offset;
         let chosen = index == app.settings_index;
-        let line = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
+        let line = Rect::new(inner.x, inner.y + offset as u16, inner.width, 1);
         let marker = if chosen { "› " } else { "  " };
         let label_style = if chosen {
             Style::default().fg(text()).add_modifier(Modifier::BOLD)
@@ -101,11 +105,16 @@ mod tests {
             .join("\n");
         assert!(screen.contains(" settings "), "{screen}");
         assert!(screen.contains("Permission"), "{screen}");
+        assert!(screen.contains("Session mode"), "{screen}");
         assert!(screen.contains("Theme"), "{screen}");
         assert!(screen.contains("Reasoning effort"), "{screen}");
         assert!(screen.contains("Auto compact"), "{screen}");
+        assert!(screen.contains("Diff view"), "{screen}");
         // The values come from the live state, not from a stale copy.
         assert!(screen.contains(crate::theme::current_name()), "{screen}");
-        assert!(screen.contains("off"), "auto compact is off in the test app: {screen}");
+        assert!(
+            screen.contains("off"),
+            "auto compact is off in the test app: {screen}"
+        );
     }
 }

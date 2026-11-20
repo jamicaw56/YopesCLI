@@ -12,9 +12,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     app::{
-        App, COMMANDS, ChangeReport, CommandSpec, ConnectStage, ConnectState,
-        DEFAULT_CONTEXT_WINDOW, Input, ListPicker, ListRow, ModelRow, NoticeKind, SETTING_ROWS,
-        ToolApproval, ToolsMode, format_bytes, format_tokens, list_row_of,
+        App, COMMANDS, ChangeReport, ConnectStage, ConnectState, DEFAULT_CONTEXT_WINDOW, Input,
+        ListPicker, ListRow, ModelRow, NoticeKind, SETTING_ROWS, Suggestion, ToolApproval,
+        ToolsMode, format_bytes, format_tokens, list_row_of,
     },
     diff::{ChangeKind, DiffLine, FileDiff},
     session::{Message, Role, Usage},
@@ -107,6 +107,9 @@ pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
 const MAX_APPROVAL_LINES: usize = 4;
 /// Tool output rows shown before the rest is collapsed.
 const TOOL_OUTPUT_PREVIEW_LINES: usize = 7;
+/// Rows of the command palette shown before it scrolls: the list never eats
+/// more than this many transcript rows.
+const MAX_PALETTE_ROWS: usize = 10;
 /// The spinner frames: a braille ring whose gap turns, the terminal stand-in
 /// for a ring with an arc sweeping around it. Eight frames, one per tick.
 const SPINNER: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -123,88 +126,19 @@ pub(super) fn responsive_palette_width(area_width: u16) -> u16 {
         .min(area_width.saturating_sub(2))
 }
 
-/// One frame of the welcome mascot.
-///
-/// The cursor owl blinks, swivels its head like the block cursor it guards,
-/// and dozes off when the session sits idle. Cached per tick pair: the art
-/// redraws in pairs, so the last frame serves both ticks.
-fn mascot_frame(step: usize) -> Vec<Line<'static>> {
-    use std::cell::RefCell;
-    thread_local! {
-        static LAST: RefCell<Option<(usize, Vec<Line<'static>>)>> = const { RefCell::new(None) };
-    }
-    let key = match step % 160 {
-        70 | 135 => step,
-        _ => step & !1,
-    };
-    LAST.with(|last| {
-        let mut last = last.borrow_mut();
-        if let Some((cached_key, frame)) = last.as_ref() {
-            if *cached_key == key {
-                return frame.clone();
-            }
-        }
-        let frame = build_mascot_frame(step);
-        *last = Some((key, frame.clone()));
-        frame
-    })
-}
-
-/// The mascot's static art rows, wide enough for every animation state.
-const OWL_ROWS: [&str; 6] = [
-    "   \u{256d}\u{2500}\u{2500}\u{2500}\u{256e}    ",
-    "  \u{2502} \u{25cf} \u{25cf} \u{2502}   ",
-    "  \u{2502}  \u{2500}\u{2500}  \u{2502}  ",
-    "   \u{2570}\u{252c}\u{2500}\u{252c}\u{256f}   ",
-    "    \u{2502} \u{2502}     ",
-    "   \u{256d}\u{2534}\u{2500}\u{2534}\u{256e}    ",
-];
-/// Width of the mascot art, so every row lines up.
-const OWL_WIDTH: usize = 12;
-
-fn build_mascot_frame(step: usize) -> Vec<Line<'static>> {
-    let sleeping = step % 160 >= 135;
-    let mut rows: Vec<String> = OWL_ROWS.iter().map(|row| (*row).to_owned()).collect();
-
-    if sleeping {
-        // Dozing: the eyes close and a z floats up beside the head.
-        rows[1] = "  \u{2502} \u{2500} \u{2500} \u{2502}   ".to_owned();
-        // The z labels are 3 columns wide, so row 0 stays at OWL_WIDTH.
-        let z = match (step / 4) % 3 {
-            0 => "z  ",
-            1 => " Z ",
-            _ => "zZ ",
-        };
-        rows[0] = format!("   \u{256d}\u{2500}\u{2500}\u{2500}\u{256e} {z}");
-    } else {
-        // The pupils scan left and right on a slow triangular path; every
-        // 40th tick they blink shut for a frame.
-        let travel = (step / 2) % 8;
-        let position = if travel < 4 { travel } else { 8 - travel };
-        let eyes = if step % 40 >= 38 {
-            "\u{2500} \u{2500}"
-        } else {
-            match position {
-                0 => "\u{25CF} \u{25CF}",
-                1 => "\u{2022} \u{25CF}",
-                2 => "\u{00B7} \u{25CF}",
-                _ => "\u{2022} \u{2022}",
-            }
-        };
-        rows[1] = format!("  \u{2502} {eyes} \u{2502}   ");
-        // The brow lifts during the once-per-cycle mew.
-        if step % 160 == 70 {
-            rows[0] = "   \u{256D}\u{2500}\u{02C6}\u{02C6}\u{2500}\u{256E}   ".to_owned();
+/// The workspace path with the user's home directory shortened to `~`.
+fn workspace_label(path: &std::path::Path) -> String {
+    let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    if let Some(home) = home {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            return if rest.as_os_str().is_empty() {
+                "~".to_owned()
+            } else {
+                format!("~/{}", rest.display())
+            };
         }
     }
-
-    rows.into_iter()
-        .map(|row| {
-            let mut row = row;
-            row.push_str(&" ".repeat(OWL_WIDTH.saturating_sub(row.chars().count())));
-            Line::styled(row, Style::default().fg(accent()))
-        })
-        .collect()
+    path.display().to_string()
 }
 
 /// The streaming caret alternates on a ~300ms cadence driven by the 100ms
@@ -247,10 +181,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         app.palette_matches()
     };
+    // A long match list scrolls inside the bordered popup instead of taking
+    // the transcript's rows.
     let palette_height = if palette.is_empty() {
         0
     } else {
-        (palette.len() as u16).saturating_add(2)
+        (palette.len().clamp(1, MAX_PALETTE_ROWS) as u16).saturating_add(2)
     };
     let picker_height = if picker.is_some() {
         // A long list scrolls inside the bordered popup instead of growing.
@@ -287,7 +223,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         0
     };
 
-    let mut constraints = vec![Constraint::Length(1), Constraint::Min(2)];
+    let mut constraints = vec![Constraint::Length(1)];
+    // The session tabs get their own row under the header, so a full set of
+    // them never squeezes the footer's badge and context load.
+    let tabs_height = if app.tab_count() > 1 { 1 } else { 0 };
+    if tabs_height > 0 {
+        constraints.push(Constraint::Length(tabs_height));
+    }
+    constraints.push(Constraint::Min(2));
     if popup_height > 0 {
         constraints.push(Constraint::Length(popup_height));
     }
@@ -304,6 +247,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_header(frame, app, chunks[0]);
+    let mut index = 1;
+    if tabs_height > 0 {
+        draw_tab_bar(frame, app, chunks[index]);
+        index += 1;
+    } else {
+        app.tab_hits.clear();
+        app.tab_close_hits.clear();
+        app.tab_new_hit = None;
+    }
     // The sidebar of subagent runs takes the transcript's right edge while
     // anything still streams, and steps aside once every run has finished —
     // a finished run means finished work, not a panel parked over the
@@ -315,17 +267,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(SIDEBAR_WIDTH)])
-            .split(chunks[1]);
+            .split(chunks[index]);
         draw_agents_sidebar(frame, app, columns[1]);
         columns[0]
     } else {
         app.sidebar_hits.clear();
         app.sidebar_area = None;
-        chunks[1]
+        chunks[index]
     };
     draw_transcript(frame, app, transcript_area);
 
-    let mut index = 2;
+    index += 1;
     if popup_height > 0 {
         if let Some(revert_picker) = &revert_picker {
             draw_revert_picker(frame, app, revert_picker, chunks[index]);
@@ -434,13 +386,9 @@ pub(super) fn fit_to(text: &str, width: usize) -> String {
     }
 }
 
-/// The muted stats line under a finished reply: tokens in and out, then how long.
+/// The muted stats line under a finished reply: tokens out, then how long.
 fn usage_line(usage: Usage) -> Line<'static> {
-    let mut text = format!(
-        "in {} · out {}",
-        format_tokens(usage.prompt_tokens),
-        format_tokens(usage.completion_tokens)
-    );
+    let mut text = format!("out {}", format_tokens(usage.completion_tokens));
     let seconds = usage.elapsed_ms as f64 / 1000.0;
     if usage.elapsed_ms > 0 {
         text.push_str(&format!(" · {seconds:.1}s"));
@@ -496,11 +444,36 @@ fn reasoning_lines(message: &Message, streaming: bool, expanded: bool) -> Vec<Li
                 Span::styled(format!("… {hidden} earlier lines of thinking"), style),
             ]));
         }
+        // A fenced block in the thinking is drawn as a code box instead of raw
+        // backticks, so a model that sketches code mid-thought reads as code.
+        let mut in_code = false;
         for line in &lines[start..] {
-            output.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(muted())),
-                Span::styled((*line).to_owned(), style),
-            ]));
+            if let Some(language) = line.trim_start().strip_prefix("```") {
+                let opening = !in_code;
+                in_code = opening;
+                let language = language.trim();
+                let head = match (opening, language.is_empty()) {
+                    (true, true) => "╭─ code".to_owned(),
+                    (true, false) => format!("╭─ {language}"),
+                    (false, _) => "╰─".to_owned(),
+                };
+                output.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(muted())),
+                    Span::styled(head, Style::default().fg(code())),
+                ]));
+                continue;
+            }
+            let mut spans = vec![Span::styled("│ ", Style::default().fg(muted()))];
+            if in_code {
+                spans.push(Span::styled("│ ", Style::default().fg(dim())));
+                spans.push(Span::styled(
+                    (*line).to_owned(),
+                    Style::default().fg(code()),
+                ));
+            } else {
+                spans.push(Span::styled((*line).to_owned(), style));
+            }
+            output.push(Line::from(spans));
         }
         return output;
     }
@@ -693,6 +666,27 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_in_thinking_draws_a_code_box() {
+        let mut message = Message::new(Role::Assistant, "");
+        message.reasoning = "plan:\n```rust\nlet x = 1;\n```\ndone".to_owned();
+        let lines = reasoning_lines(&message, true, false);
+        let text = lines.iter().map(text_of).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("│ ╭─ rust"), "{text}");
+        assert!(text.contains("│ │ let x = 1;"), "{text}");
+        assert!(text.contains("│ ╰─"), "{text}");
+        assert!(!text.contains("```"), "the fence markers leaked: {text}");
+        // The code line carries the code color, the prose stays muted.
+        let code_line = lines
+            .iter()
+            .find(|line| text_of(line).contains("let x = 1;"))
+            .expect("code line");
+        assert_eq!(
+            code_line.spans.last().map(|span| span.style.fg),
+            Some(Some(crate::theme::current().code))
+        );
+    }
+
+    #[test]
     fn every_framed_line_has_the_same_width() {
         let body = vec![
             Line::raw("short"),
@@ -776,41 +770,83 @@ mod tests {
         }
     }
 
+    /// The palette is truncated to a fixed window and scrolls to follow the
+    /// selection, so a long match list never eats the transcript's rows.
     #[test]
-    fn the_mascot_animates_and_keeps_its_width() {
-        use super::mascot_frame;
+    fn the_command_palette_scrolls_instead_of_growing() {
+        use ratatui::{Terminal, backend::TestBackend};
 
-        let frames: Vec<Vec<String>> = (0..200)
-            .map(|step| {
-                let f: Vec<String> = mascot_frame(step)
-                    .into_iter()
-                    .map(|line| {
-                        line.spans
-                            .iter()
-                            .map(|span| span.content.to_string())
-                            .collect()
-                    })
-                    .collect();
-                let w: Vec<usize> = f.iter().map(|r| r.chars().count()).collect();
-                if w.iter().any(|x| *x != 12) {
-                    panic!("step {step}: {w:?} rows {f:?}");
-                }
-                f
-            })
-            .collect();
-        for frame in &frames {
-            // Every row is the same width, so the art stays aligned.
-            let widths: Vec<usize> = frame.iter().map(|row| row.chars().count()).collect();
-            assert!(
-                widths.windows(2).all(|pair| pair[0] == pair[1]),
-                "{widths:?}"
-            );
-            assert_eq!(frame.len(), 6, "the owl and its perch");
+        let mut app = crate::app::test_app();
+        app.input.set("/".to_owned());
+        let palette = app.palette_matches();
+        assert!(palette.len() > 4, "not enough commands to need scrolling");
+
+        // A popup only four rows tall: the window follows the selection
+        // instead of drawing past the border.
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        let text = |terminal: &Terminal<TestBackend>| {
+            (0..6)
+                .map(|row| {
+                    (0..40)
+                        .map(|column| {
+                            terminal.backend().buffer()[(column, row)]
+                                .symbol()
+                                .to_string()
+                        })
+                        .collect::<String>()
+                })
+                .collect::<Vec<String>>()
+                .join("\n")
+        };
+        let draw_palette = |terminal: &mut Terminal<TestBackend>, app: &crate::app::App| {
+            let palette = app.palette_matches();
+            terminal
+                .draw(|frame| {
+                    super::pickers::draw_palette(frame, app, &palette, frame.area());
+                })
+                .unwrap();
+        };
+        draw_palette(&mut terminal, &app);
+        let first = text(&terminal);
+        assert!(first.contains(" commands 1/"), "{first}");
+        assert!(first.contains(&palette[0].label), "{first}");
+
+        // The last command scrolls into the window and the first scrolls out.
+        for _ in 1..palette.len() {
+            app.palette_move(true);
         }
-        // The mascot animates across ticks.
-        let first = &frames[0];
-        let later = &frames[8];
-        assert_ne!(first, later, "the mascot should move");
+        draw_palette(&mut terminal, &app);
+        let last = text(&terminal);
+        assert!(
+            last.contains(&format!(" commands {0}/{0} ", palette.len())),
+            "{last}"
+        );
+        assert!(
+            !last.contains(&palette[0].label),
+            "the first row did not scroll away: {last}"
+        );
+    }
+
+    #[test]
+    fn the_workspace_line_shortens_home_to_a_tilde() {
+        use super::workspace_label;
+
+        let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+        else {
+            return;
+        };
+        assert_eq!(workspace_label(&home), "~");
+        let nested = home.join("Desktop").join("YopesCLI");
+        let label = workspace_label(&nested);
+        assert!(label.starts_with('~'), "{label}");
+        assert!(label.ends_with("YopesCLI"), "{label}");
+        assert!(
+            !label.contains(home.display().to_string().as_str()),
+            "home was not shortened: {label}"
+        );
+        // A path outside home renders in full.
+        let elsewhere = std::path::Path::new("/opt/somewhere");
+        assert_eq!(workspace_label(elsewhere), elsewhere.display().to_string());
     }
 
     #[test]

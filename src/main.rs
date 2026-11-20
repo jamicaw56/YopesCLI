@@ -21,7 +21,9 @@ use std::{collections::HashMap, future::Future, pin::Pin, time::Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{Event, EventStream, MouseEventKind};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use futures_util::StreamExt;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
@@ -200,6 +202,10 @@ async fn run() -> Result<()> {
     let mut redraw_now = true;
     let mut redraw_streamed = false;
     let mut last_draw = Instant::now();
+    // When the previous key arrived: a multi-line paste from a terminal
+    // without bracketed paste is recognised by its Enter keys following this
+    // closely (see `is_pasted_line_break`).
+    let mut last_key: Option<Instant> = None;
     // Frame-time trace: YOPES_TRACE=1 prints the draw count, the average and
     // the worst frame to stderr on exit, so the perf work is measured, not
     // guessed.
@@ -239,7 +245,7 @@ async fn run() -> Result<()> {
         tokio::select! {
             event = next_terminal_event(&mut terminal_events) => {
                 let dirty =
-                    handle_terminal_event(&mut app, event, &channels, &mut active_tasks, &mut ticker)?;
+                    handle_terminal_event(&mut app, event, &channels, &mut active_tasks, &mut ticker, &mut last_key)?;
                 redraw_now = dirty;
                 // Coalesce: every event already queued in the terminal is
                 // handled now, so one burst of typing costs one frame instead
@@ -259,6 +265,7 @@ async fn run() -> Result<()> {
                                 &channels,
                                 &mut active_tasks,
                                 &mut ticker,
+                                &mut last_key,
                             )? {
                                 redraw_now = true;
                             }
@@ -490,6 +497,22 @@ async fn next_terminal_event(events: &mut Option<EventStream>) -> Option<std::io
     }
 }
 
+/// How close to the previous key an Enter has to arrive to count as a pasted
+/// line break. A terminal that supports bracketed paste never needs this; a
+/// legacy one delivers a multi-line paste as characters plus Enter keys, and
+/// without the guard each line submits on its own.
+const PASTE_LINE_GAP: Duration = Duration::from_millis(20);
+
+/// Whether an Enter key is really the line break of a paste.
+fn is_pasted_line_break(key: &KeyEvent, previous: Option<Instant>, now: Instant) -> bool {
+    key.kind == KeyEventKind::Press
+        && key.code == KeyCode::Enter
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT)
+        && previous.is_some_and(|last| now.duration_since(last) < PASTE_LINE_GAP)
+}
+
 /// One terminal event through the app: returns whether the frame is dirty.
 /// Extracted so the event loop can coalesce a queue of already-arrived
 /// events into a single frame. Generic over the stream's error type, which
@@ -500,12 +523,25 @@ fn handle_terminal_event<E>(
     channels: &Channels,
     active_tasks: &mut HashMap<u64, JoinHandle<()>>,
     ticker: &mut tokio::time::Interval,
+    last_key: &mut Option<Instant>,
 ) -> Result<bool>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
     match event {
         Some(Ok(Event::Key(key))) => {
+            // A newline that follows another key within a few milliseconds is
+            // a paste from a terminal without bracketed paste: it belongs in
+            // the composer as a line break, not as one prompt per line.
+            let now = Instant::now();
+            let previous = *last_key;
+            if key.kind == KeyEventKind::Press {
+                *last_key = Some(now);
+            }
+            if is_pasted_line_break(&key, previous, now) && !app.input.value.trim().is_empty() {
+                app.handle_paste("\n");
+                return Ok(true);
+            }
             let action = app.handle_key(key);
             dispatch(action, app, channels, active_tasks);
             Ok(true)
@@ -948,60 +984,60 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 loop {
                     match crate::delegation::next_before(&mut receiver, deadline).await {
                         crate::delegation::Next::Item(event) => match event {
-                        StreamEvent::Delta { text, .. } => {
-                            answer.push_str(&text);
-                            round_text.push_str(&text);
-                            let _ = delegate_sender
-                                .send(crate::app::DelegateUpdate::Delta { run, text });
-                        }
-                        StreamEvent::Reasoning { text, .. } => {
-                            reasoning.push_str(&text);
-                            let _ = delegate_sender
-                                .send(crate::app::DelegateUpdate::Reasoning { run, text });
-                        }
-                        StreamEvent::Usage {
-                            prompt_tokens,
-                            completion_tokens,
-                            ..
-                        } => {
-                            let _ = delegate_sender.send(crate::app::DelegateUpdate::Usage {
-                                run,
+                            StreamEvent::Delta { text, .. } => {
+                                answer.push_str(&text);
+                                round_text.push_str(&text);
+                                let _ = delegate_sender
+                                    .send(crate::app::DelegateUpdate::Delta { run, text });
+                            }
+                            StreamEvent::Reasoning { text, .. } => {
+                                reasoning.push_str(&text);
+                                let _ = delegate_sender
+                                    .send(crate::app::DelegateUpdate::Reasoning { run, text });
+                            }
+                            StreamEvent::Usage {
                                 prompt_tokens,
                                 completion_tokens,
-                            });
-                        }
-                        StreamEvent::ToolCalls { calls, .. } => requested = calls,
-                        StreamEvent::Retrying {
-                            attempt,
-                            delay_secs,
-                            reason,
-                            ..
-                        } => {
-                            let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
+                                ..
+                            } => {
+                                let _ = delegate_sender.send(crate::app::DelegateUpdate::Usage {
+                                    run,
+                                    prompt_tokens,
+                                    completion_tokens,
+                                });
+                            }
+                            StreamEvent::ToolCalls { calls, .. } => requested = calls,
+                            StreamEvent::Retrying {
+                                attempt,
+                                delay_secs,
+                                reason,
+                                ..
+                            } => {
+                                let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                                 run,
                                 text: format!(
                                     "attempt {attempt} failed: {reason} — retrying in {delay_secs}s"
                                 ),
                             });
-                        }
-                        StreamEvent::Stalled { message, .. } => {
-                            failed = true;
-                            failure = message;
-                            break;
-                        }
-                        StreamEvent::Error { message, .. } => {
-                            failed = true;
-                            failure = message;
-                            break;
-                        }
-                        StreamEvent::OutputLimit { .. } => {
-                            failed = true;
-                            failure = "the reply hit the output token limit".to_owned();
-                            break;
-                        }
-                        StreamEvent::Done { .. } => break,
-                        _ => {}
-                    },
+                            }
+                            StreamEvent::Stalled { message, .. } => {
+                                failed = true;
+                                failure = message;
+                                break;
+                            }
+                            StreamEvent::Error { message, .. } => {
+                                failed = true;
+                                failure = message;
+                                break;
+                            }
+                            StreamEvent::OutputLimit { .. } => {
+                                failed = true;
+                                failure = "the reply hit the output token limit".to_owned();
+                                break;
+                            }
+                            StreamEvent::Done { .. } => break,
+                            _ => {}
+                        },
                         crate::delegation::Next::Closed => break,
                         crate::delegation::Next::TimedOut => {
                             timed_out = true;
@@ -1146,9 +1182,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                             // A refusal for lack of approval is what makes a
                             // run read as blocked instead of simply empty.
                             if needs {
-                                evidence
-                                    .blocked
-                                    .push(requested_call.function.name.clone());
+                                evidence.blocked.push(requested_call.function.name.clone());
                             }
                             let _ = delegate_sender.send(crate::app::DelegateUpdate::Note {
                                 run,
@@ -1224,13 +1258,13 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                                 }
                             }
                             if is_command {
-                                let command = crate::tools::command_text(&requested_call)
-                                    .unwrap_or_default();
-                                evidence
-                                    .commands
-                                    .push(crate::delegation::CommandRecord::from_result(
+                                let command =
+                                    crate::tools::command_text(&requested_call).unwrap_or_default();
+                                evidence.commands.push(
+                                    crate::delegation::CommandRecord::from_result(
                                         &command, &result,
-                                    ));
+                                    ),
+                                );
                                 match (before_files, crate::delegation::fingerprint(&after_root)) {
                                     (Some(before), Some(after)) => {
                                         for change in before.changed_since(&after) {
@@ -1348,10 +1382,9 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                     let args = serde_json::json!({ "command": command }).to_string();
                     let call = ToolCall::new("verify", "run_command", args);
                     let root = workspace.clone();
-                    let joined = tokio::task::spawn_blocking(move || {
-                        tools::execute(&call, None, &root)
-                    })
-                    .await;
+                    let joined =
+                        tokio::task::spawn_blocking(move || tools::execute(&call, None, &root))
+                            .await;
                     let result = match joined {
                         Ok(Ok(output)) => Ok(output),
                         Ok(Err(error)) => Err(format!("{error:#}")),
@@ -1408,5 +1441,46 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                 session_id,
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PASTE_LINE_GAP, is_pasted_line_break};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use std::time::{Duration, Instant};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn an_enter_right_after_another_key_is_a_pasted_line_break() {
+        let now = Instant::now();
+        let enter = key(KeyCode::Enter, KeyModifiers::NONE);
+        // A paste: the characters arrived microseconds ago.
+        assert!(is_pasted_line_break(
+            &enter,
+            Some(now - Duration::from_micros(200)),
+            now
+        ));
+        // Typed by a human: the gap is wide, so Enter submits.
+        assert!(!is_pasted_line_break(
+            &enter,
+            Some(now - PASTE_LINE_GAP * 4),
+            now
+        ));
+        // The first key of a session has nothing before it.
+        assert!(!is_pasted_line_break(&enter, None, now));
+        // Shift+Enter and friends keep their own meaning.
+        assert!(!is_pasted_line_break(
+            &key(KeyCode::Enter, KeyModifiers::SHIFT),
+            Some(now),
+            now
+        ));
+        // Only key presses count; a release is not a line break.
+        let mut release = enter;
+        release.kind = KeyEventKind::Release;
+        assert!(!is_pasted_line_break(&release, Some(now), now));
     }
 }

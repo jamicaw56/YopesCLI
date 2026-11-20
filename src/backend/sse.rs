@@ -198,7 +198,7 @@ impl OpenAiState {
     /// Emit a held partial tag as plain text once the stream ends.
     fn flush_think(&mut self) -> Option<ParsedEvent> {
         let text = std::mem::take(&mut self.pending_tag);
-        (!text.is_empty()).then(|| {
+        (!text.is_empty()).then_some({
             if self.in_think {
                 ParsedEvent::Reasoning(text)
             } else {
@@ -1211,9 +1211,7 @@ mod tests {
         assert!(transport_failure(&io));
 
         // A provider refusing the request is a real error, reported as one.
-        let rejected = anyhow::anyhow!(
-            "OpenAI-compatible API returned 401: invalid api key"
-        );
+        let rejected = anyhow::anyhow!("OpenAI-compatible API returned 401: invalid api key");
         assert!(!transport_failure(&rejected), "{rejected:#}");
         let bad_json = anyhow::Error::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -1221,5 +1219,4 @@ mod tests {
         ));
         assert!(!transport_failure(&bad_json));
     }
-
 }

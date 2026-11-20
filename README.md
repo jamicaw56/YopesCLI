@@ -1,18 +1,18 @@
 # YopesCLI
 
-A better coding CLI, built with Rust, Ratatui, and Tokio. [Discord](https://discord.gg/xrRAJKHAVP) Join ig if you want
+A better coding CLI, built with Rust, Ratatui, and Tokio.
+
+[![Repo size](https://img.shields.io/github/repo-size/Jamicaw56/YopesCLI)](https://github.com/Jamicaw56/YopesCLI)
+[![License](https://img.shields.io/github/license/Jamicaw56/YopesCLI)](LICENSE)
+[Discord](https://discord.gg/xrRAJKHAVP)
 
 ## Highlights
 
-- Streaming OpenAI-compatible providers, including custom endpoints.
-- Tool calling for reading, writing, editing, and running commands, with per-tool approval and a diff viewer. `apply_patch` takes a multi-file `*** Begin Patch` envelope (add, delete, update, rename) and applies it all or nothing.
-- A real delegate system: `delegate` hands a subtask to a subagent on the same provider. Runs stream live in a right-hand sidebar, stack in parallel, and every response is readable with `/agents`.
-- Image pasting: `Ctrl+V` and right-click attach clipboard images, file paths paste as attachments, and `read_image` sends screenshots to vision models.
-- Desktop control with `computer_use` (Windows): its own agent cursor, drawn into each capture as a highlighted arrow, with clicks, scrolls and drags posted to the window under the point so your system mouse never moves; typed text and key chords, plus `wait` steps and `focus_window` for slow apps and windows that are not in front, with a fresh screenshot attached after every call so a vision model sees the result. The result reports the frame origin and size in screen pixels, the desktop bounds and the agent pointer position, so a pixel in the image maps to the coordinate to click; `region` crops the capture to one part of the screen and `settle_ms` tunes the repaint wait. It asks before each call and is off in plan mode; `/set tools dangerous` drops every approval prompt, that one included.
-- A quiet interface with a popout command palette and nine built-in themes, each with a two-accent color system (`/set theme`).
-- Provider and model discovery from [models.dev](https://models.dev) plus custom endpoints with `/provider`.
-- One-command self-updates with `yopes update`.
-- Persistent sessions with `/session`, fresh session on launch, `--resume` to continue.
+- Streaming OpenAI-compatible providers, custom endpoints included, with per-tool approval and a diff viewer.
+- `delegate` hands subtasks to parallel subagents, streamed live in the sidebar and readable with `/agents`.
+- `computer_use` drives the desktop with its own agent cursor, so your mouse never moves.
+- Image pasting, thirteen themes, a popout command palette, and one-command self-updates (`yopes update`).
+- Persistent sessions and tabs: `/session`, `--resume`, Alt+1..9.
 
 ## Install
 
@@ -31,7 +31,7 @@ The script picks the latest release, verifies its SHA256SUMS checksum, installs 
 
 1. `/provider` — pick a provider and model. Keys are stored per endpoint, so connecting a second time never asks for the key again.
 2. Type a message. Tools ask for approval before they change anything; press `Enter` to allow one, `a` for the session, `Esc` to deny.
-3. `/` opens the command palette; `F1` shows keyboard help; `/set theme <name>` picks one of the nine built-in palettes (`dark`, `midnight`, `nord`, `gruvbox`, `dracula`, `tokyo`, `rose`, `catppuccin`, `light`).
+3. `/` opens the command palette; `F1` shows keyboard help; `/set theme <name>` picks one of the thirteen built-in palettes (`dark`, `midnight`, `nord`, `gruvbox`, `dracula`, `tokyo`, `rose`, `catppuccin`, `one-dark`, `solarized`, `everforest`, `kanagawa`, `light`).
 
 ## Headless runs
 
@@ -57,6 +57,17 @@ dist/
 *.log
 !keep.log
 ```
+
+## Fonts
+
+The interface is text, so the terminal's monospace font does the styling. Pick
+one with full box-drawing and braille coverage (frames, spinners, diff rulers):
+JetBrains Mono, Cascadia Code, Fira Code, or Iosevka. Any of them works out of
+the box; a Nerd Font build adds icons but is not required. In Windows Terminal
+set it under **Settings → Profiles → Appearance → Font face**, in VS Code's
+integrated terminal under `terminal.integrated.fontFamily`. A font without
+braille or CJK glyphs shows replacement boxes; that is the terminal's font, not
+the app.
 
 ## Docs
 

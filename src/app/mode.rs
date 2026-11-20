@@ -139,7 +139,17 @@ impl Mode {
             // model that plan mode ended, and it keeps gating itself.
             Self::Build => match tools_mode {
                 ToolsMode::Dangerous => Some(
-                    "BUILD MODE (DANGEROUS): the user has turned off tool approval for this                      session. Every call runs unattended, computer_use included, so a click or                      a command lands in the real world. Prefer the least destructive action that                      does the job, take a screenshot before acting on a window you cannot see,                      and never automate purchases, deletions, messages or credential entry unless                      the task says exactly that.",
+                    "BUILD MODE (DANGEROUS): approval is off for this session. Every tool \
+                     call runs unattended, computer_use included, so a click or a command \
+                     lands in the real world. Never ask the user for permission or \
+                     confirmation, and never end a reply waiting for a yes: you are \
+                     pre-approved for every step of the task, commands included. Keep \
+                     following the AGENTS.md and project instructions you were given; when \
+                     one blocks a step, say why instead of working around it. Prefer the \
+                     least destructive action that does the job, take a screenshot before \
+                     acting on a window you cannot see, and never automate purchases, \
+                     deletions, messages or credential entry unless the task says exactly \
+                     that.",
                 ),
                 ToolsMode::Auto => Some(
                     "BUILD MODE (YOLO): changes may be applied directly. All commands and \
@@ -212,7 +222,12 @@ mod tests {
         assert!(
             Mode::Build
                 .instruction(ToolsMode::Dangerous)
-                .is_some_and(|note| note.contains("DANGEROUS"))
+                .is_some_and(|note| note.contains("BUILD MODE (DANGEROUS)"))
+        );
+        assert!(
+            Mode::Build
+                .instruction(ToolsMode::Dangerous)
+                .is_some_and(|note| note.contains("Never ask the user for permission"))
         );
         assert_eq!(ToolsMode::On.next_permission(), ToolsMode::Auto);
         assert_eq!(ToolsMode::Auto.next_permission(), ToolsMode::Ask);

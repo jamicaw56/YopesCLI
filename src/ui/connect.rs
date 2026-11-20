@@ -40,7 +40,7 @@ pub(super) fn draw_connect(
             ),
         ]))
         .title_bottom(Line::styled(
-            " providers + custom · stored locally ",
+            format!(" {} ", connect.stage.hint()),
             Style::default().fg(dim()),
         ))
         .padding(Padding::new(2, 2, 1, 1));
@@ -55,30 +55,68 @@ pub(super) fn draw_connect(
         return;
     }
 
-    let mut constraints = vec![Constraint::Length(1)];
-    constraints.push(Constraint::Min(2));
-    constraints.push(Constraint::Length(1));
+    // A form, not a text dump: the connection in use, then the field with its
+    // label, a rule that closes the field, the list, and the key hints.
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(constraints)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(2),
+            Constraint::Length(1),
+        ])
         .split(inner);
-    let mut index = 0;
+    let width = usize::from(inner.width);
 
+    if let Some(current) = current_connection(app) {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("current  ", Style::default().fg(dim())),
+                Span::styled(
+                    truncate(&current, width.saturating_sub(9)),
+                    Style::default().fg(muted()),
+                ),
+            ])),
+            rows[0],
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            connect.input_label().to_owned(),
+            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
+        )),
+        rows[1],
+    );
     let mut spans = vec![
-        Span::styled(
-            format!("{}  ", connect.input_label()),
-            Style::default().fg(muted()),
-        ),
-        Span::styled(connect.input(), Style::default().fg(text())),
+        Span::styled("▸ ", Style::default().fg(accent())),
+        Span::styled(connect.input().to_owned(), Style::default().fg(text())),
     ];
     if connect.uses_cursor() {
         spans.push(Span::styled("▌", Style::default().fg(accent())));
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), rows[index]);
-    index += 1;
+    frame.render_widget(Paragraph::new(Line::from(spans)), rows[2]);
+    frame.render_widget(
+        Paragraph::new(Span::styled("─".repeat(width), Style::default().fg(dim()))),
+        rows[3],
+    );
 
-    draw_connect_list(frame, app, connect, spinner, rows[index]);
-    draw_connect_hint(frame, connect, rows[index + 1]);
+    draw_connect_list(frame, app, connect, spinner, rows[4]);
+    draw_connect_hint(frame, connect, rows[5]);
+}
+
+/// The provider and model the session is on now, so the dialog says what a
+/// change replaces.
+fn current_connection(app: &App) -> Option<String> {
+    let provider = app.backend.provider_label();
+    let model = app.backend.model();
+    match (provider.is_empty(), model.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(provider.to_owned()),
+        (true, false) => Some(model.to_owned()),
+        (false, false) => Some(format!("{provider} · {model}")),
+    }
 }
 
 fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect) {
@@ -287,10 +325,7 @@ pub(super) fn draw_connect_list(
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(spinner(step), Style::default().fg(accent())),
-                Span::styled(
-                    connect.loading_detail(),
-                    Style::default().fg(muted()),
-                ),
+                Span::styled(connect.loading_detail(), Style::default().fg(muted())),
             ])),
             area,
         );
@@ -454,4 +489,39 @@ pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area:
         Paragraph::new(text).style(Style::default().fg(muted())),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    /// The dialog is a form: the connection in use, the field's label, and the
+    /// stage's hint, not one undifferentiated text block.
+    #[test]
+    fn the_connect_dialog_reads_as_a_form() {
+        let mut app = crate::app::test_app();
+        app.begin_connect();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| {
+                if let Some(connect) = app.connect_state() {
+                    super::draw_connect(frame, &app, connect, 0, frame.area());
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen: String = (0..30)
+            .map(|row| {
+                (0..100)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("connect"), "{screen}");
+        assert!(screen.contains("provider"), "{screen}");
+        assert!(screen.contains("current"), "{screen}");
+        assert!(screen.contains("pick a provider"), "{screen}");
+        assert!(screen.contains("OpenAI"), "the live connection: {screen}");
+    }
 }

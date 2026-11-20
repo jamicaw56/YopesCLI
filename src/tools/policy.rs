@@ -209,6 +209,14 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              Keep responses short and concrete."
         )
     };
+    // How the assistant writes, whichever branch built the base prompt.
+    let base = format!(
+        "{base}\n\nWriting style: answer first, then the detail. Short sentences with \
+         concrete nouns: real paths, symbols and error text, not 'it' or 'the issue'. No \
+         filler, no self-congratulation, no recap of what was already said, no closing \
+         'let me know'. A heading or a list earns its place only when it helps the reader; \
+         a one-line answer gets one line. Never claim a result you did not verify."
+    );
     let project_instructions = load_agents_instructions(workspace);
     if project_instructions.is_empty() {
         base

@@ -22,7 +22,52 @@ All notable changes to YopesCLI are recorded here. The format follows
   row cycles on · yolo · ask · off and leaves `dangerous` out, which stays
   reachable by `/set tools dangerous` only.
 
+- Four more palettes: `one-dark`, `solarized`, `everforest` and `kanagawa`
+  join the roster (thirteen built-in themes).
+
 ### Changed
+
+- The welcome screen drops the mascot and names the workspace instead, with
+  the home directory shortened to `~`. The idle welcome no longer ticks.
+- The provider dialog was rebuilt as a form: the connection in use, a labeled
+  field with its caret, a rule under it, the list, and per-stage hints in the
+  border.
+- Fenced code inside a model's thinking draws as a code box with the language
+  named, instead of raw backticks.
+- `/set tools dangerous` now tells the model explicitly that it is pre-approved
+  for every step and must not ask for permission, while still following the
+  repository's own instructions.
+- The Progress panel follows the first unfinished task, marks it with `▶`, and
+  the mouse wheel scrolls the checklist; folding hands the window back to
+  follow mode.
+- The streaming footer and the reply stats drop the `in Nk` token count.
+- The README's highlights were trimmed to the essentials.
+- The base system prompt gained a writing-style rule: answer first, concrete
+  nouns, no filler, no recap, never claim an unverified result.
+
+### Fixed
+
+- Clicking a framed tool result or edit diff expands it again. The click map
+  treated a multi-line frame's line offsets as slot indices, so the rows it
+  registered pointed at the wrong lines or nowhere; an expanded frame now
+  stays clickable too, so the same click collapses it.
+- A multi-line paste no longer submits one prompt per line on terminals that
+  lack bracketed paste: an Enter that follows another key within 20ms is
+  inserted as a line break. Bracketed paste already inserted the whole block.
+- A failed provider request now reaches the model as a `[provider error]` note
+  in the next prompt (user role, all three request shapes) instead of being
+  hidden from it.
+
+- The session tabs moved out of the footer onto their own row under the
+  header. A bar full of sessions no longer squeezes the permission badge and
+  the context load, which keep the footer's right side to themselves.
+- `/settings` gained a session mode row and a diff view row next to
+  permission, theme, effort and auto compact: `←→` cycles build · plan · chat
+  and side-by-side · unified. A list taller than the popup scrolls with the
+  selection instead of clipping rows.
+- The command palette is capped at ten rows and scrolls to follow the
+  selection, showing its position in the border (`commands 5/12`), instead of
+  growing over the transcript.
 
 - A full visual redesign around a two-accent theme system. Every palette
   now defines two extra roles beyond the classic eight: `dim`, for

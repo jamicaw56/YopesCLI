@@ -304,12 +304,7 @@ pub(super) fn age_label(modified: Option<SystemTime>) -> String {
     }
 }
 
-pub(super) fn draw_palette(
-    frame: &mut Frame,
-    app: &App,
-    palette: &[&'static CommandSpec],
-    area: Rect,
-) {
+pub(super) fn draw_palette(frame: &mut Frame, app: &App, palette: &[Suggestion], area: Rect) {
     let width = responsive_palette_width(area.width);
     if width < 20 {
         return;
@@ -323,24 +318,36 @@ pub(super) fn draw_palette(
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(dim()))
-        .title_top(Line::styled(" commands ", Style::default().fg(dim())))
+        .title_top(Line::styled(
+            format!(
+                " commands {}/{} ",
+                app.palette_selected() + 1,
+                palette.len()
+            ),
+            Style::default().fg(dim()),
+        ))
         .title_bottom(Line::styled(
             " ↑↓ move · tab complete · enter run ",
             Style::default().fg(dim()),
         ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
 
     let selected = app.palette_selected();
+    // The rows are a window of the whole list, moving with the selection:
+    // more matches than the popup fits scroll instead of growing it.
+    let visible = usize::from(inner.height);
+    let start = selected.saturating_sub(visible.saturating_sub(1));
     let name_col_width = (usize::from(inner.width) * 35 / 100).clamp(18, 28);
-    for (index, command) in palette.iter().enumerate() {
-        if index as u16 >= inner.height {
-            break;
-        }
-        let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
+    for (offset, command) in palette.iter().skip(start).take(visible).enumerate() {
+        let index = start + offset;
+        let row = Rect::new(inner.x, inner.y + offset as u16, inner.width, 1);
         let chosen = index == selected;
         let marker = if chosen { "› " } else { "  " };
-        let name = command.display_name();
+        let name = command.label.as_str();
         let name_style = if chosen {
             Style::default().fg(accent()).add_modifier(Modifier::BOLD)
         } else {
@@ -354,7 +361,7 @@ pub(super) fn draw_palette(
         let desc_col_width = usize::from(inner.width).saturating_sub(name_col_width + 3);
         let line = Line::from(vec![
             Span::styled(marker, Style::default().fg(accent())),
-            Span::styled(fit_to(&name, name_col_width), name_style),
+            Span::styled(fit_to(name, name_col_width), name_style),
             Span::raw(" "),
             Span::styled(
                 truncate(command.description, desc_col_width),

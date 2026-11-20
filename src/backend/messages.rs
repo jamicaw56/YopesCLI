@@ -56,7 +56,7 @@ pub(super) fn request_messages(
     // turn's last tool result: every tool_call id still gets its own tool
     // message first, and the image sits in the turn it was read in.
     let mut tool_images: Vec<&crate::session::ImageAttachment> = Vec::new();
-    let system = system_prompt(tooling, custom_prompt, mode_note.as_deref(), workspace);
+    let system = system_prompt(tooling, custom_prompt, mode_note, workspace);
     request.push(serde_json::json!({
         "role": "system",
         "content": system,
@@ -64,9 +64,14 @@ pub(super) fn request_messages(
     for (index, message) in messages.iter().enumerate() {
         // Parts and Ollama branches below carry the images themselves.
         let openai_parts = image_style == ImageStyle::Parts;
-        // A provider failure is transcript decoration, not conversation:
-        // sending it back upstream would look like an assistant turn.
-        if message.error.is_some() {
+        // A provider failure goes back to the model as a user-role note: it
+        // learns its previous turn failed and why, so the next prompt can
+        // recover instead of pretending the turn never happened.
+        if let Some(error) = &message.error {
+            request.push(serde_json::json!({
+                "role": "user",
+                "content": format!("[provider error] {error}"),
+            }));
             continue;
         }
         let is_valid_tool_call = message
@@ -251,7 +256,12 @@ pub(super) fn anthropic_request_payload(
         .flat_map(|calls| calls.iter().map(|c| c.id.as_str()))
         .collect();
     for message in messages {
-        if message.error.is_some() {
+        // The same failure note, in Anthropic's content-block shape.
+        if let Some(error) = &message.error {
+            anthropic_messages.push(serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": format!("[provider error] {error}")}],
+            }));
             continue;
         }
         match message.role {
@@ -468,7 +478,12 @@ pub(super) fn gemini_request_payload(
 
     let mut contents: Vec<serde_json::Value> = Vec::new();
     for message in messages {
-        if message.error.is_some() {
+        // And in Gemini's contents shape.
+        if let Some(error) = &message.error {
+            contents.push(serde_json::json!({
+                "role": "user",
+                "parts": [{"text": format!("[provider error] {error}")}],
+            }));
             continue;
         }
         match message.role {
@@ -642,6 +657,48 @@ mod tests {
     use crate::backend::ImageStyle;
     use crate::session::{Message, Role, ToolCall};
     use std::path::Path;
+
+    /// A failed request is not dropped from history: the model gets the
+    /// provider's error as a user-role note, so the next prompt can recover.
+    #[test]
+    fn a_provider_error_reaches_the_model_as_context() {
+        let messages = vec![
+            Message::new(Role::User, "do the thing"),
+            Message::provider_error("API returned 503: timeout"),
+        ];
+        let request = request_messages(
+            &messages,
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .expect("messages");
+        let note = request
+            .iter()
+            .find(|entry| {
+                entry.get("role").and_then(|role| role.as_str()) == Some("user")
+                    && entry
+                        .get("content")
+                        .and_then(|content| content.as_str())
+                        .is_some_and(|content| content.contains("[provider error]"))
+            })
+            .expect("the failure reaches the model");
+        assert!(
+            note["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("503: timeout")),
+            "{note}"
+        );
+        // The failed turn never masquerades as an assistant reply.
+        assert!(
+            request.iter().all(|entry| {
+                entry.get("role").and_then(|role| role.as_str()) != Some("assistant")
+            }),
+            "{request:?}"
+        );
+    }
 
     #[test]
     fn request_messages_keep_tool_history_only_when_tooling_is_enabled() {

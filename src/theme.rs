@@ -28,7 +28,7 @@ pub struct Theme {
     pub code: Color,
 }
 
-pub const THEMES: [(&str, Theme); 9] = [
+pub const THEMES: [(&str, Theme); 13] = [
     (
         "dark",
         Theme {
@@ -147,6 +147,66 @@ pub const THEMES: [(&str, Theme); 9] = [
             warning: Color::Rgb(250, 179, 135),
             text: Color::Rgb(205, 214, 244),
             code: Color::Rgb(148, 226, 213),
+        },
+    ),
+    (
+        "one-dark",
+        Theme {
+            muted: Color::Rgb(92, 99, 112),
+            dim: Color::Rgb(62, 68, 81),
+            accent: Color::Rgb(97, 175, 239),
+            accent2: Color::Rgb(198, 120, 221),
+            error: Color::Rgb(224, 108, 117),
+            added: Color::Rgb(152, 195, 121),
+            removed: Color::Rgb(224, 108, 117),
+            warning: Color::Rgb(229, 192, 123),
+            text: Color::Rgb(171, 178, 191),
+            code: Color::Rgb(86, 182, 194),
+        },
+    ),
+    (
+        "solarized",
+        Theme {
+            muted: Color::Rgb(88, 110, 117),
+            dim: Color::Rgb(0, 43, 54),
+            accent: Color::Rgb(38, 139, 210),
+            accent2: Color::Rgb(131, 148, 150),
+            error: Color::Rgb(220, 50, 47),
+            added: Color::Rgb(133, 153, 0),
+            removed: Color::Rgb(220, 50, 47),
+            warning: Color::Rgb(181, 137, 0),
+            text: Color::Rgb(147, 161, 161),
+            code: Color::Rgb(42, 161, 152),
+        },
+    ),
+    (
+        "everforest",
+        Theme {
+            muted: Color::Rgb(133, 146, 137),
+            dim: Color::Rgb(75, 86, 78),
+            accent: Color::Rgb(131, 192, 146),
+            accent2: Color::Rgb(214, 153, 182),
+            error: Color::Rgb(230, 126, 128),
+            added: Color::Rgb(167, 192, 128),
+            removed: Color::Rgb(230, 126, 128),
+            warning: Color::Rgb(219, 188, 127),
+            text: Color::Rgb(211, 198, 170),
+            code: Color::Rgb(127, 187, 179),
+        },
+    ),
+    (
+        "kanagawa",
+        Theme {
+            muted: Color::Rgb(114, 113, 105),
+            dim: Color::Rgb(54, 54, 70),
+            accent: Color::Rgb(126, 156, 216),
+            accent2: Color::Rgb(149, 127, 184),
+            error: Color::Rgb(210, 126, 129),
+            added: Color::Rgb(152, 187, 108),
+            removed: Color::Rgb(210, 126, 129),
+            warning: Color::Rgb(192, 163, 110),
+            text: Color::Rgb(220, 215, 186),
+            code: Color::Rgb(127, 180, 202),
         },
     ),
     (

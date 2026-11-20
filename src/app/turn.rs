@@ -286,7 +286,9 @@ impl App {
     /// the turn forever.
     pub(crate) fn begin_turn_after_compaction(&mut self, attempts: u32) -> Action {
         let total = Session::estimate_tokens(&self.session.messages);
-        let window = self.model_context_window().unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        let window = self
+            .model_context_window()
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW);
         let keep = window / COMPACTION_KEEP_FRAC;
         if self.auto_compact && attempts < MAX_COMPACTION_ATTEMPTS {
             if let Some(split) = self.session.compaction_split(keep) {
@@ -348,9 +350,13 @@ impl App {
         if let Some(ledger) = self.delegate_ledger_note() {
             notes.push(ledger);
         }
-        let mode_note = (!notes.is_empty()).then(|| notes.join("
+        let mode_note = (!notes.is_empty()).then(|| {
+            notes.join(
+                "
 
-"));
+",
+            )
+        });
         let prompt_chars = tools::system_prompt(tools_enabled, self.working_dir())
             .chars()
             .count()
@@ -555,10 +561,16 @@ impl App {
             |prompt| prompt.chars().take(40).collect::<String>(),
         );
         let auto_compact = if self.auto_compact { "on" } else { "off" };
+        let diff = if self.diff_sides {
+            "side-by-side"
+        } else {
+            "unified"
+        };
         let message = format!(
-            "Settings · tools {} · theme {} · effort {effort} · auto compact {auto_compact} · \
-             system {system} · /set {SET_KEYS}",
+            "Settings · tools {} · mode {} · theme {} · effort {effort} · \
+             auto compact {auto_compact} · diff {diff} · system {system} · /set {SET_KEYS}",
             self.tools_mode.label(),
+            self.mode.label(),
             crate::theme::current_name(),
         );
         self.info(message);
@@ -841,7 +853,9 @@ impl App {
         // They end with what they have and report as cancelled.
         let cancelled = self.cancel_owned_runs();
         self.info(if cancelled > 0 {
-            format!("Interrupted. Running commands were stopped and {cancelled} agent run(s) cancelled.")
+            format!(
+                "Interrupted. Running commands were stopped and {cancelled} agent run(s) cancelled."
+            )
         } else {
             "Interrupted. Running commands were stopped.".to_owned()
         });

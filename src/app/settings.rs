@@ -1,9 +1,9 @@
-//! The `/settings` popup: every `/set` key as a row, changed with the arrow
-//! keys so no command name has to be remembered.
+//! The `/settings` popup: one row per user-facing setting, changed with the
+//! arrow keys so no command name or key has to be remembered.
 //!
-//! The rows drive the same setters `/set` uses, so a value changed here and a
-//! value changed by a typed command can never disagree, and the result is
-//! saved and reported the same way.
+//! The rows drive the same setters the rest of the app uses, so a value
+//! changed here and a value changed by a typed command never disagree, and
+//! the result is saved and reported the same way.
 
 use super::*;
 
@@ -13,10 +13,14 @@ pub(crate) struct SettingRow {
     pub label: &'static str,
 }
 
-pub(crate) const SETTING_ROWS: [SettingRow; 4] = [
+pub(crate) const SETTING_ROWS: [SettingRow; 6] = [
     SettingRow {
         key: "tools",
         label: "Permission",
+    },
+    SettingRow {
+        key: "mode",
+        label: "Session mode",
     },
     SettingRow {
         key: "theme",
@@ -30,6 +34,10 @@ pub(crate) const SETTING_ROWS: [SettingRow; 4] = [
         key: "compact",
         label: "Auto compact",
     },
+    SettingRow {
+        key: "diff",
+        label: "Diff view",
+    },
 ];
 
 /// The values a row cycles through, in order.
@@ -40,9 +48,11 @@ pub(crate) const SETTING_ROWS: [SettingRow; 4] = [
 fn choices(key: &str) -> Vec<&'static str> {
     match key {
         "tools" => vec!["on", "yolo", "ask", "off"],
+        "mode" => vec!["build", "plan", "chat"],
         "theme" => crate::theme::THEMES.iter().map(|(name, _)| *name).collect(),
         "effort" => vec!["off", "low", "medium", "high", "xhigh"],
         "compact" => vec!["on", "off"],
+        "diff" => vec!["side-by-side", "unified"],
         _ => Vec::new(),
     }
 }
@@ -67,6 +77,7 @@ impl App {
     pub(crate) fn setting_value(&self, key: &str) -> String {
         match key {
             "tools" => self.tools_mode.label().to_owned(),
+            "mode" => self.mode.label().to_owned(),
             "theme" => crate::theme::current_name().to_owned(),
             "effort" => self
                 .backend
@@ -74,6 +85,12 @@ impl App {
                 .unwrap_or("default")
                 .to_owned(),
             "compact" => if self.auto_compact { "on" } else { "off" }.to_owned(),
+            "diff" => if self.diff_sides {
+                "side-by-side"
+            } else {
+                "unified"
+            }
+            .to_owned(),
             _ => String::new(),
         }
     }
@@ -104,10 +121,35 @@ impl App {
         let value = choices[next].to_owned();
         match row.key {
             "tools" => self.set_tools_mode(&value),
+            "mode" => {
+                self.mode = match value.as_str() {
+                    "plan" => Mode::Plan,
+                    "chat" => Mode::Chat,
+                    _ => Mode::Build,
+                };
+                self.info(format!(
+                    "Mode: {} — Tab again to cycle build · plan · chat",
+                    self.mode.label()
+                ));
+            }
             "theme" => self.set_theme(&value),
             "effort" => self.set_effort(&value),
             "compact" => {
                 self.set_compact(&value);
+            }
+            "diff" => {
+                let sides = value == "side-by-side";
+                if sides != self.diff_sides {
+                    self.toggle_diff_view();
+                }
+                self.info(format!(
+                    "Diff view: {}",
+                    if self.diff_sides {
+                        "side-by-side"
+                    } else {
+                        "unified"
+                    }
+                ));
             }
             _ => {}
         }
@@ -143,6 +185,37 @@ mod tests {
         app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
+    /// The row driving a `/set` key, so a test names the setting instead of
+    /// hard-coding its position in the list.
+    fn row(key: &str) -> usize {
+        SETTING_ROWS
+            .iter()
+            .position(|row| row.key == key)
+            .expect("row")
+    }
+
+    #[test]
+    fn every_row_shows_a_value_and_cycles_it() {
+        let mut app = test_app();
+        app.command("/settings");
+        for (index, setting) in SETTING_ROWS.iter().enumerate() {
+            assert!(
+                !app.setting_value(setting.key).is_empty(),
+                "{} shows no value",
+                setting.key
+            );
+            let before = app.setting_value(setting.key);
+            app.settings_index = index;
+            press(&mut app, KeyCode::Right);
+            assert_ne!(
+                app.setting_value(setting.key),
+                before,
+                "{} did not cycle",
+                setting.key
+            );
+        }
+    }
+
     #[test]
     fn slash_settings_opens_the_popup_and_esc_closes_it() {
         let mut app = test_app();
@@ -163,28 +236,30 @@ mod tests {
         // Left steps back to on.
         press(&mut app, KeyCode::Left);
         assert_eq!(app.tools_mode, ToolsMode::On);
-        // Down moves to the theme row, and Right picks the next theme name.
+        // Two rows down is the theme row, and Right picks the next name.
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.settings_index, 1);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.settings_index, row("theme"));
         let before = crate::theme::current_name();
         press(&mut app, KeyCode::Right);
         assert_ne!(crate::theme::current_name(), before);
         // The selection wraps at both ends instead of sticking.
+        let theme = app.settings_index;
         for _ in 0..SETTING_ROWS.len() {
             press(&mut app, KeyCode::Down);
         }
-        assert_eq!(app.settings_index, 1);
+        assert_eq!(app.settings_index, theme);
         for _ in 0..SETTING_ROWS.len() {
             press(&mut app, KeyCode::Up);
         }
-        assert_eq!(app.settings_index, 1);
+        assert_eq!(app.settings_index, theme);
     }
 
     #[test]
     fn auto_compact_row_steps_between_on_and_off() {
         let mut app = test_app();
         app.command("/settings");
-        app.settings_index = 3;
+        app.settings_index = row("compact");
         // The test app starts with auto compact off: Right turns it on, and
         // Right again turns it back off.
         assert!(!app.auto_compact);
@@ -192,5 +267,34 @@ mod tests {
         assert!(app.auto_compact);
         press(&mut app, KeyCode::Right);
         assert!(!app.auto_compact);
+    }
+
+    #[test]
+    fn the_session_mode_row_cycles_build_plan_chat() {
+        use crate::app::Mode;
+
+        let mut app = test_app();
+        app.command("/settings");
+        app.settings_index = row("mode");
+        assert_eq!(app.mode, Mode::Build);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.mode, Mode::Plan);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.mode, Mode::Chat);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.mode, Mode::Plan);
+    }
+
+    #[test]
+    fn the_diff_view_row_switches_the_transcript_diffs() {
+        let mut app = test_app();
+        app.command("/settings");
+        app.settings_index = row("diff");
+        // The test app draws diffs side by side.
+        assert!(app.diff_sides);
+        press(&mut app, KeyCode::Right);
+        assert!(!app.diff_sides);
+        press(&mut app, KeyCode::Right);
+        assert!(app.diff_sides);
     }
 }
