@@ -231,7 +231,12 @@ impl App {
                 let token = custom.token.clone();
                 let auth = custom.auth;
                 self.fetching_models = true;
-                return Action::FetchCustomModels { url, token, auth };
+                return Action::FetchCustomModels {
+                    url,
+                    base_url: Some(custom.base_url.clone()),
+                    token,
+                    auth,
+                };
             }
             self.fetching_models = true;
             return Action::RefreshCatalog;
@@ -248,7 +253,12 @@ impl App {
             let token = custom.and_then(|c| c.token.clone());
             let auth = self.backend.auth();
             self.fetching_models = true;
-            Action::FetchCustomModels { url, token, auth }
+            Action::FetchCustomModels {
+                url,
+                base_url: Some(active_base.clone()),
+                token,
+                auth,
+            }
         } else if self.backend.provider_kind() != ProviderKind::Unconfigured {
             self.fetching_models = true;
             Action::RefreshCatalog

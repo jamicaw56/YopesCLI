@@ -8,6 +8,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- Custom provider model fetch reconciles the saved list against the `/models`
+  response: models the endpoint dropped are removed from disk too, and the
+  hand-set context window of kept models survives.
+- Credential failures stop retrying immediately instead of freezing the send screen.
 - Landing shortcuts aligned; image paste hint is `Ctrl+G`.
 - Provider errors say "provider" instead of "OpenAI-compatible".
 - README: headless, ignore rules and fonts moved out; image paste warning added.

@@ -57,8 +57,12 @@ pub enum Action {
     /// Fetch models.dev again, bypassing the cached copy.
     RefreshCatalog,
     /// Fetch a custom provider's model list from its models endpoint.
+    ///
+    /// `base_url` is the endpoint the fetched list belongs to, so the saved
+    /// model list of the right provider is reconciled against the response.
     FetchCustomModels {
         url: String,
+        base_url: Option<String>,
         token: Option<String>,
         auth: AuthKind,
     },

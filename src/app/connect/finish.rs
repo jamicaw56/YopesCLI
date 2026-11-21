@@ -519,11 +519,20 @@ impl App {
             connect.loading = true;
             connect.error = None;
         }
-        Action::FetchCustomModels { url, token, auth }
+        Action::FetchCustomModels {
+            url,
+            base_url: Some(endpoint.clone()),
+            token,
+            auth,
+        }
     }
 
     /// The custom endpoint's model list arrived: merge it into the manager.
-    pub(crate) fn on_custom_models(&mut self, result: Result<Vec<(String, String)>, String>) {
+    pub(crate) fn on_custom_models(
+        &mut self,
+        base_url: Option<String>,
+        result: Result<Vec<(String, String)>, String>,
+    ) {
         self.fetching_models = false;
         let Some(connect) = self.connect.as_mut() else {
             match result {
@@ -548,14 +557,28 @@ impl App {
                             ..SavedModel::default()
                         });
                     }
+                    // The /models response is the source of truth: keep a
+                    // context window that was set by hand for models that
+                    // remain; the saved lists are rewritten without the
+                    // ones the endpoint no longer lists.
                     let count = saved_models.len();
-                    let base_url = self.backend.base_url().to_owned();
+                    let base_url =
+                        base_url.unwrap_or_else(|| self.backend.base_url().to_owned());
+                    let previous = config::load_endpoint_models(&self.config_path, &base_url);
+                    for model in &mut saved_models {
+                        if let Some(old) = previous.iter().find(|m| m.id == model.id) {
+                            model.context_window = old.context_window;
+                        }
+                    }
                     for cp in &mut self.custom_providers {
                         if cp.base_url.trim_end_matches('/') == base_url.trim_end_matches('/') {
                             cp.models = saved_models.clone();
                         }
                     }
-                    if self.backend.provider_kind() == ProviderKind::Custom {
+                    if self.backend.base_url().trim_end_matches('/')
+                        == base_url.trim_end_matches('/')
+                        && self.backend.provider_kind() == ProviderKind::Custom
+                    {
                         self.backend.set_saved_models(saved_models.clone());
                     }
                     let _ =
@@ -594,6 +617,15 @@ impl App {
                         model.context_window = old.context_window;
                     }
                 }
+                // The endpoint is the source of truth: the same pruned list
+                // goes to the saved config, so models it no longer lists are
+                // gone from disk too, even when the manager is left without
+                // picking a model.
+                let _ = config::update_endpoint_models(
+                    &self.config_path,
+                    &connect.custom_endpoint,
+                    &fetched,
+                );
                 connect.custom_models = fetched;
                 connect.stage = ConnectStage::CustomModels;
                 connect.selected = 0;
@@ -734,5 +766,103 @@ impl App {
                 connect.move_selection(forward);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Session;
+    use crate::backend::Backend;
+    use crate::config::{AuthKind, Connection, ProviderKind, SavedModel};
+    use std::path::PathBuf;
+
+    /// A fetch from a custom provider rewrites the saved model list with what
+    /// the `/models` response holds: models the endpoint no longer lists are
+    /// gone, and a hand-set context window of a kept model survives.
+    #[test]
+    fn a_fetch_drops_saved_models_the_endpoint_no_longer_lists() {
+        let temp = crate::temp::unique_dir("fetch-models-test");
+        let config_path = temp.join("config.json");
+        let base = "http://localhost:9999/v1";
+        let connection = Connection {
+            provider: ProviderKind::Custom,
+            provider_name: "Test".to_owned(),
+            model: "model-a".to_owned(),
+            base_url: base.to_owned(),
+            api_key: None,
+            api_key_env: None,
+            auth: AuthKind::None,
+            models: vec![
+                SavedModel {
+                    id: "model-a".to_owned(),
+                    name: "Model A".to_owned(),
+                    context_window: Some(4096),
+                    ..SavedModel::default()
+                },
+                SavedModel {
+                    id: "model-b".to_owned(),
+                    name: "Model B".to_owned(),
+                    ..SavedModel::default()
+                },
+            ],
+            models_url: None,
+            custom_provider_id: None,
+            provider_id: None,
+            reuse_secret: false,
+        };
+        config::save_connection(&config_path, &connection, None).expect("saving the connection");
+
+        let app_config = crate::config::Config {
+            provider: ProviderKind::Custom,
+            provider_label: "Test".to_owned(),
+            model: "model-a".to_owned(),
+            base_url: base.to_owned(),
+            api_key: None,
+            auth: AuthKind::None,
+            models: connection.models.clone(),
+            system_prompt: None,
+            custom_providers: Vec::new(),
+            session_path: None,
+            sessions_dir: None,
+            config_path: config_path.clone(),
+            tavily_api_key: None,
+            auto_compact: false,
+            reasoning_effort: None,
+            theme: "dark".to_owned(),
+            permission: None,
+            diff_sides: None,
+        };
+        let backend = Backend::new(&app_config).expect("backend");
+        let mut app = App::new(
+            Session::new(),
+            backend,
+            None,
+            None,
+            config_path.clone(),
+            Vec::new(),
+            None,
+            false,
+        );
+
+        // The endpoint now lists only model-a.
+        app.on_custom_models(
+            Some(base.to_owned()),
+            Ok(vec![("model-a".to_owned(), "Model A".to_owned())]),
+        );
+
+        let saved = config::load_endpoint_models(&config_path, base);
+        assert_eq!(saved.len(), 1, "model-b should be gone from the saved list");
+        assert_eq!(saved[0].id, "model-a");
+        assert_eq!(saved[0].context_window, Some(4096), "hand-set window kept");
+
+        let custom = config::load_custom_providers(&config_path)
+            .into_iter()
+            .find(|provider| provider.base_url == base)
+            .expect("the custom provider entry");
+        assert_eq!(custom.models.len(), 1);
+        assert_eq!(custom.models[0].context_window, Some(4096));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

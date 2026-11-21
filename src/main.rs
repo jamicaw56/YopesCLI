@@ -57,7 +57,7 @@ struct Channels {
     delegates: mpsc::UnboundedSender<crate::app::DelegateUpdate>,
     user_commands: mpsc::UnboundedSender<(u64, Result<String, String>)>,
     catalog: mpsc::UnboundedSender<FetchResult>,
-    models: mpsc::UnboundedSender<Result<Vec<(String, String)>, String>>,
+    models: mpsc::UnboundedSender<(Option<String>, Result<Vec<(String, String)>, String>)>,
     logos: mpsc::UnboundedSender<(String, Result<crate::logos::Logo, String>)>,
     paste: mpsc::UnboundedSender<Result<(String, String), String>>,
     titles: mpsc::UnboundedSender<(u64, String)>,
@@ -127,8 +127,10 @@ async fn run() -> Result<()> {
     let (user_cmd_sender, mut user_cmd_receiver) =
         mpsc::unbounded_channel::<(u64, Result<String, String>)>();
     let (catalog_sender, mut catalog_receiver) = mpsc::unbounded_channel::<FetchResult>();
-    let (models_sender, mut models_receiver) =
-        mpsc::unbounded_channel::<Result<Vec<(String, String)>, String>>();
+    let (models_sender, mut models_receiver) = mpsc::unbounded_channel::<(
+        Option<String>,
+        Result<Vec<(String, String)>, String>,
+    )>();
     let (logo_sender, mut logo_receiver) =
         mpsc::unbounded_channel::<(String, Result<crate::logos::Logo, String>)>();
     let (paste_sender, mut paste_receiver) =
@@ -346,8 +348,8 @@ async fn run() -> Result<()> {
                 redraw_now = true;
             }
             result = models_receiver.recv() => {
-                if let Some(result) = result {
-                    app.on_custom_models(result);
+                if let Some((base_url, result)) = result {
+                    app.on_custom_models(base_url, result);
                 }
                 redraw_now = true;
             }
@@ -713,13 +715,18 @@ fn dispatch(
                 let _ = sender.send(fetch_and_cache_catalog(&config_path).await);
             });
         }
-        Action::FetchCustomModels { url, token, auth } => {
+        Action::FetchCustomModels {
+            url,
+            base_url,
+            token,
+            auth,
+        } => {
             let sender = channels.models.clone();
             tokio::spawn(async move {
                 let result = catalog::fetch_models(&url, auth, token.as_deref())
                     .await
                     .map_err(|error| format!("{error:#}"));
-                let _ = sender.send(result);
+                let _ = sender.send((base_url, result));
             });
         }
         Action::FetchLogo(provider_id) => {
