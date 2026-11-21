@@ -29,6 +29,14 @@ fn retryable_status(status: StatusCode) -> bool {
         || status == StatusCode::TOO_MANY_REQUESTS
 }
 
+fn retryable_detail(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    !detail.contains("credential")
+        && !detail.contains("unauthorized")
+        && !detail.contains("invalid api key")
+        && !detail.contains("authentication")
+}
+
 /// The `Retry-After` header, in seconds, when the provider sends one.
 fn retry_after(response: &Response) -> Option<Duration> {
     let value = response
@@ -71,7 +79,7 @@ where
                 let body = response.text().await.unwrap_or_default();
                 let detail = response_error_detail(&body);
                 let error = anyhow!("{provider} returned {}: {detail}", status.as_u16());
-                if !retryable_status(status) {
+                if !retryable_status(status) || !retryable_detail(&detail) {
                     return Err(error);
                 }
                 (error, wait)
@@ -122,7 +130,7 @@ pub(super) fn response_error_detail(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::retryable_status;
+    use super::{retryable_detail, retryable_status};
 
     #[test]
     fn rejected_requests_are_not_retried() {
@@ -146,5 +154,12 @@ mod tests {
         ] {
             assert!(retryable_status(status), "{status} should be retried");
         }
+    }
+
+    #[test]
+    fn credential_failures_are_not_retried_even_when_gateway_reports_server_error() {
+        assert!(!retryable_detail("upstream rejected the server's credentials"));
+        assert!(!retryable_detail("invalid API key"));
+        assert!(retryable_detail("upstream temporarily unavailable"));
     }
 }
