@@ -173,6 +173,9 @@ pub(super) fn send_parsed(
 #[derive(Default)]
 pub(super) struct OpenAiState {
     calls: BTreeMap<usize, ToolCallBuilder>,
+    /// A Gemini thought signature that arrived on a part before the function
+    /// call it belongs to (Gemini 2.5 puts it on the first part of the reply).
+    pending_signature: Option<String>,
     /// The provider ended the reply with `finish_reason: "length"`: it hit the
     /// output token cap, so the reply (and any tool call) is incomplete.
     pub(super) truncated: bool,
@@ -321,11 +324,14 @@ impl OpenAiState {
         &mut self,
         name: String,
         arguments: String,
+        thought_signature: Option<String>,
     ) -> Vec<ParsedEvent> {
         let index = self.calls.len();
+        let pending = self.pending_signature.take();
         let builder = self.calls.entry(index).or_default();
         builder.name = name;
         builder.arguments = arguments;
+        builder.thought_signature = thought_signature.or(pending);
         self.progress()
     }
 
@@ -347,7 +353,9 @@ impl OpenAiState {
                 } else {
                     builder.arguments
                 };
-                Some(ToolCall::new(id, name, arguments))
+                let mut call = ToolCall::new(id, name, arguments);
+                call.thought_signature = builder.thought_signature;
+                Some(call)
             })
             .collect()
     }
@@ -358,6 +366,7 @@ struct ToolCallBuilder {
     id: String,
     name: String,
     arguments: String,
+    thought_signature: Option<String>,
     progressed: bool,
     progress_bytes: u64,
 }
@@ -731,6 +740,10 @@ struct GeminiPart {
     thought: Option<bool>,
     #[serde(rename = "functionCall")]
     function_call: Option<GeminiFunctionCall>,
+    /// Encrypted reasoning state that Gemini 3+ requires replayed with the
+    /// function call in the next request. Some responses use snake_case.
+    #[serde(rename = "thoughtSignature", alias = "thought_signature")]
+    thought_signature: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -784,6 +797,7 @@ pub(super) fn parse_gemini_line(
             if let Some(content) = candidate.content {
                 if let Some(parts) = content.parts {
                     for part in parts {
+                        let signature = part.thought_signature.filter(|s| !s.is_empty());
                         if part.thought == Some(true) {
                             if let Some(text) = part.text.filter(|t| !t.is_empty()) {
                                 events.push(ParsedEvent::Reasoning(text));
@@ -799,7 +813,13 @@ pub(super) fn parse_gemini_line(
                                 }
                                 None => "{}".to_owned(),
                             };
-                            events.extend(state.record_full_tool_call(call.name, args_str));
+                            events.extend(
+                                state.record_full_tool_call(call.name, args_str, signature),
+                            );
+                        } else if signature.is_some() && state.calls.is_empty() {
+                            // Gemini 2.5 puts the signature on the first part
+                            // of the reply, which can arrive before the call.
+                            state.pending_signature = signature;
                         }
                     }
                 }
@@ -1184,9 +1204,9 @@ mod tests {
             vec![ParsedEvent::Reasoning("Thinking...".to_owned())]
         );
 
-        // functionCall
+        // functionCall, with the signature Gemini 3 requires back on replay
         parse_gemini_line(
-            r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_dir","args":{"path":"."}}}],"role":"model"},"finishReason":"STOP"}]}"#,
+            r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_dir","args":{"path":"."}},"thoughtSignature":"sig-abc"}],"role":"model"},"finishReason":"STOP"}]}"#,
             &mut state,
         )
         .unwrap();
@@ -1195,6 +1215,28 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "list_dir");
         assert!(calls[0].function.arguments.contains(r#""path":".""#));
+        assert_eq!(calls[0].thought_signature.as_deref(), Some("sig-abc"));
+    }
+
+    /// Gemini 2.5 puts the signature on the first part of the reply, which can
+    /// arrive before the function call it belongs to.
+    #[test]
+    fn a_gemini_signature_on_an_earlier_part_sticks_to_the_call() {
+        let mut state = OpenAiState::default();
+        parse_gemini_line(
+            r#"data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"Thinking...","thoughtSignature":"sig-before"}],"role":"model"}}]}"#,
+            &mut state,
+        )
+        .unwrap();
+        parse_gemini_line(
+            r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"a.txt"}}}],"role":"model"},"finishReason":"STOP"}]}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        let calls = state.finish(3);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thought_signature.as_deref(), Some("sig-before"));
     }
     /// The truncated-body error the user kept hitting must be a resumable
     /// stall, not a hard failure: a proxy or provider that closes mid-body

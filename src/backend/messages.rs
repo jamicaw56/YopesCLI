@@ -190,6 +190,7 @@ pub(super) fn request_messages(
             continue;
         }
         let mut value = serde_json::to_value(message)?;
+        strip_thought_signatures(&mut value);
         if !tooling {
             if let Some(object) = value.as_object_mut() {
                 object.remove("tool_calls");
@@ -207,6 +208,22 @@ pub(super) fn request_messages(
         request.push(value);
     }
     Ok(request)
+}
+
+/// Gemini's thought signature belongs to Gemini's request shape, not to an
+/// OpenAI tool call. Drop it when a session created on Gemini is sent to a
+/// different provider, so strict compatible servers never see the extra key.
+fn strip_thought_signatures(value: &mut serde_json::Value) {
+    if let Some(calls) = value
+        .get_mut("tool_calls")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for call in calls {
+            if let Some(object) = call.as_object_mut() {
+                object.remove("thought_signature");
+            }
+        }
+    }
 }
 
 /// The user message that hands images a tool returned to the model: one
@@ -452,6 +469,11 @@ pub(super) fn anthropic_tools() -> serde_json::Value {
     serde_json::Value::Array(tools)
 }
 
+/// Google's documented placeholder for a function call whose original
+/// signature was not stored, so history from before signatures were kept can
+/// still be replayed.
+const SKIP_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
+
 /// Shapes the conversation history into Gemini's generateContent payload:
 /// systemInstruction and contents with alternating user/model roles.
 ///
@@ -524,16 +546,36 @@ pub(super) fn gemini_request_payload(
                 }
                 if tooling {
                     if let Some(calls) = &message.tool_calls {
+                        // Gemini 3+ requires the thought signature returned
+                        // with the first function call to be replayed exactly.
+                        // A parallel batch leaves its later calls unsigned. For
+                        // history saved before signatures were kept, Google's
+                        // documented dummy signature bypasses validation.
+                        let mut signed = false;
                         for call in calls {
                             let args: serde_json::Value =
                                 serde_json::from_str(&call.function.arguments)
                                     .unwrap_or_else(|_| serde_json::json!({}));
-                            parts.push(serde_json::json!({
+                            let mut part = serde_json::json!({
                                 "functionCall": {
                                     "name": call.function.name,
                                     "args": args,
                                 }
-                            }));
+                            });
+                            match call.thought_signature.as_deref() {
+                                Some(signature) if !signature.is_empty() => {
+                                    part["thoughtSignature"] =
+                                        serde_json::Value::String(signature.to_owned());
+                                    signed = true;
+                                }
+                                _ if !signed => {
+                                    part["thoughtSignature"] = serde_json::Value::String(
+                                        SKIP_THOUGHT_SIGNATURE.to_owned(),
+                                    );
+                                }
+                                _ => {}
+                            }
+                            parts.push(part);
                         }
                     }
                 }
@@ -1019,12 +1061,10 @@ mod tests {
     fn gemini_payload_shapes_system_instruction_and_contents() {
         use super::gemini_request_payload;
 
+        let mut call = ToolCall::new("call_99", "list_dir", r#"{"path":"."}"#);
+        call.thought_signature = Some("sig-99".to_owned());
         let mut assistant = Message::new(Role::Assistant, "Running tool...");
-        assistant.tool_calls = Some(vec![ToolCall::new(
-            "call_99",
-            "list_dir",
-            r#"{"path":"."}"#,
-        )]);
+        assistant.tool_calls = Some(vec![call]);
         let messages = vec![
             Message::new(Role::User, "list files"),
             assistant,
@@ -1038,10 +1078,97 @@ mod tests {
         assert_eq!(contents[0]["role"], "user");
         assert_eq!(contents[1]["role"], "model");
         assert_eq!(contents[1]["parts"][1]["functionCall"]["name"], "list_dir");
+        assert_eq!(contents[1]["parts"][1]["thoughtSignature"], "sig-99");
         assert_eq!(contents[2]["role"], "user");
         assert_eq!(
             contents[2]["parts"][0]["functionResponse"]["name"],
             "list_dir"
+        );
+    }
+
+    /// Gemini 3 rejects a replayed function call without its thought
+    /// signature. Parallel calls keep their one signature on the first call;
+    /// history saved before signatures were kept gets the documented fallback.
+    #[test]
+    fn gemini_replays_thought_signatures_and_backfills_missing_ones() {
+        use super::{SKIP_THOUGHT_SIGNATURE, gemini_request_payload};
+
+        let mut signed = ToolCall::new("call_1", "list_dir", r#"{"path":"."}"#);
+        signed.thought_signature = Some("sig-1".to_owned());
+        let unsigned = ToolCall::new("call_2", "read_file", r#"{"path":"a.txt"}"#);
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![signed, unsigned]);
+        let messages = vec![Message::new(Role::User, "go"), assistant];
+
+        let (_, contents) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        assert_eq!(contents[1]["parts"][0]["thoughtSignature"], "sig-1");
+        assert!(contents[1]["parts"][1].get("thoughtSignature").is_none());
+
+        let mut old = Message::new(Role::Assistant, "");
+        old.tool_calls = Some(vec![ToolCall::new("call_3", "list_dir", "{}")]);
+        let messages = vec![Message::new(Role::User, "go"), old];
+        let (_, contents) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        assert_eq!(
+            contents[1]["parts"][0]["thoughtSignature"],
+            SKIP_THOUGHT_SIGNATURE
+        );
+    }
+
+    /// The exact failure from the field: a Gemini tool call is parsed from the
+    /// stream, then the follow-up request must carry its signature back.
+    #[test]
+    fn a_gemini_tool_call_round_trips_its_signature_into_the_next_request() {
+        use super::gemini_request_payload;
+        use crate::backend::sse::{OpenAiState, parse_gemini_line};
+
+        let mut state = OpenAiState::default();
+        parse_gemini_line(
+            r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_dir","args":{"path":"."}},"thoughtSignature":"sig-round-trip"}],"role":"model"},"finishReason":"STOP"}]}"#,
+            &mut state,
+        )
+        .unwrap();
+        let calls = state.finish(1);
+        assert_eq!(calls.len(), 1);
+
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(calls);
+        let messages = vec![
+            Message::new(Role::User, "list files"),
+            assistant,
+            Message::tool_result("call_1_0", "file.txt"),
+        ];
+        let (_, contents) =
+            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+        assert_eq!(
+            contents[1]["parts"][0]["thoughtSignature"],
+            "sig-round-trip"
+        );
+    }
+
+    /// The Gemini signature stays in the session but never leaks into an
+    /// OpenAI-compatible request after a provider switch.
+    #[test]
+    fn openai_requests_do_not_carry_gemini_signatures() {
+        let mut call = ToolCall::new("call_1", "list_dir", "{}");
+        call.thought_signature = Some("sig-1".to_owned());
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![call]);
+
+        let request = request_messages(
+            &[assistant],
+            true,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
+        assert!(
+            request[1]["tool_calls"][0]
+                .get("thought_signature")
+                .is_none()
         );
     }
 

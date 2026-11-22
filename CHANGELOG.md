@@ -6,6 +6,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Gemini tool calls replay their thought signature, so Google models keep working after the first tool call.
+
 ### Added
 
 - `yopes --resume` continues a session that was cut off mid-turn instead of

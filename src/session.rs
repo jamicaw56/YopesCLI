@@ -30,6 +30,10 @@ pub struct ToolCall {
     #[serde(rename = "type")]
     pub kind: String,
     pub function: FunctionCall,
+    /// Gemini's encrypted thought signature for this call. Gemini 3+ rejects
+    /// the next request unless the functionCall part carries it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 impl ToolCall {
@@ -45,6 +49,7 @@ impl ToolCall {
                 name: name.into(),
                 arguments: arguments.into(),
             },
+            thought_signature: None,
         }
     }
 }
@@ -469,6 +474,27 @@ mod tests {
             serde_json::to_string(&result).unwrap(),
             r#"{"role":"tool","content":"Wrote 12 bytes.","tool_call_id":"call_1"}"#
         );
+    }
+
+    #[test]
+    fn a_gemini_thought_signature_round_trips_through_the_session_file() {
+        let mut call = ToolCall::new("call_1", "list_dir", "{}");
+        call.thought_signature = Some("sig".to_owned());
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![call]);
+
+        let saved = serde_json::to_string(&assistant).unwrap();
+        assert!(saved.contains(r#""thought_signature":"sig""#), "{saved}");
+        let loaded: Message = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            loaded.tool_calls.unwrap()[0].thought_signature.as_deref(),
+            Some("sig")
+        );
+
+        // A session saved before signatures were kept still loads.
+        let old = r#"{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_dir","arguments":"{}"}}]}"#;
+        let loaded: Message = serde_json::from_str(old).unwrap();
+        assert!(loaded.tool_calls.unwrap()[0].thought_signature.is_none());
     }
 
     #[test]
