@@ -2,6 +2,20 @@ use super::*;
 
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(9), Constraint::Min(1)])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("◆", Style::default().fg(accent2())),
+            Span::styled(
+                " yopes",
+                Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        columns[0],
+    );
 
     // The header carries the passive provider line. The mode, the permission
     // badge and the context load sit together in the footer.
@@ -9,14 +23,14 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         app.backend.provider_label(),
         app.backend.model(),
         &app.spent_cost(),
-        inner.width as usize,
+        columns[1].width as usize,
     );
     if !right.is_empty() {
         frame.render_widget(
             Paragraph::new(right)
                 .alignment(Alignment::Right)
                 .style(Style::default().fg(muted())),
-            inner,
+            columns[1],
         );
     }
 }
@@ -785,6 +799,24 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    #[test]
+    fn the_backdrop_paints_empty_cells_without_hiding_text() {
+        use ratatui::{Terminal, backend::TestBackend, style::Color};
+
+        let mut app = crate::app::test_app();
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let cell = &terminal.backend().buffer()[(0, 0)];
+        assert_ne!(cell.bg, Color::Reset, "backdrop was not drawn");
+        let landing = (0..24)
+            .map(|row| screen_row(&terminal, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(landing.contains("quick keys"), "{landing}");
     }
 
     /// A checklist longer than the panel follows the first unfinished task,

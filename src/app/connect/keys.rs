@@ -283,12 +283,9 @@ impl App {
             KeyCode::Tab => {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::CompletionUrl,
-                    AddProviderField::CompletionUrl => AddProviderField::ModelsUrl,
-                    AddProviderField::ModelsUrl => AddProviderField::Auth,
-                    AddProviderField::Auth => AddProviderField::ModelName,
-                    AddProviderField::ModelName => AddProviderField::ModelId,
-                    AddProviderField::ModelId => AddProviderField::ContextWindow,
-                    AddProviderField::ContextWindow => AddProviderField::Done,
+                    AddProviderField::CompletionUrl => AddProviderField::ModelId,
+                    AddProviderField::ModelId => AddProviderField::Token,
+                    AddProviderField::Token => AddProviderField::Done,
                     AddProviderField::Done => AddProviderField::Name,
                 };
                 Action::None
@@ -297,12 +294,9 @@ impl App {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::Done,
                     AddProviderField::CompletionUrl => AddProviderField::Name,
-                    AddProviderField::ModelsUrl => AddProviderField::CompletionUrl,
-                    AddProviderField::Auth => AddProviderField::ModelsUrl,
-                    AddProviderField::ModelName => AddProviderField::Auth,
-                    AddProviderField::ModelId => AddProviderField::ModelName,
-                    AddProviderField::ContextWindow => AddProviderField::ModelId,
-                    AddProviderField::Done => AddProviderField::ContextWindow,
+                    AddProviderField::ModelId => AddProviderField::CompletionUrl,
+                    AddProviderField::Token => AddProviderField::ModelId,
+                    AddProviderField::Done => AddProviderField::Token,
                 };
                 Action::None
             }
@@ -310,31 +304,13 @@ impl App {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::Done,
                     AddProviderField::CompletionUrl => AddProviderField::Name,
-                    AddProviderField::ModelsUrl => AddProviderField::CompletionUrl,
-                    AddProviderField::Auth => AddProviderField::ModelsUrl,
-                    AddProviderField::ModelName | AddProviderField::ModelId => {
-                        AddProviderField::Auth
-                    }
-                    AddProviderField::ContextWindow => AddProviderField::ModelName,
-                    AddProviderField::Done => AddProviderField::ContextWindow,
+                    AddProviderField::ModelId => AddProviderField::CompletionUrl,
+                    AddProviderField::Token => AddProviderField::ModelId,
+                    AddProviderField::Done => AddProviderField::Token,
                 };
                 Action::None
             }
-            KeyCode::Down => {
-                connect.add_provider_field = match connect.add_provider_field {
-                    AddProviderField::Name => AddProviderField::CompletionUrl,
-                    AddProviderField::CompletionUrl => AddProviderField::ModelsUrl,
-                    AddProviderField::ModelsUrl => AddProviderField::Auth,
-                    AddProviderField::Auth => AddProviderField::ModelName,
-                    AddProviderField::ModelName | AddProviderField::ModelId => {
-                        AddProviderField::ContextWindow
-                    }
-                    AddProviderField::ContextWindow => AddProviderField::Done,
-                    AddProviderField::Done => AddProviderField::Name,
-                };
-                Action::None
-            }
-            KeyCode::Left if connect.add_provider_field == AddProviderField::Auth => {
+            KeyCode::Left if connect.add_provider_field == AddProviderField::Token => {
                 connect.custom_auth_explicit = true;
                 connect.custom_auth = match connect.custom_auth {
                     config::AuthKind::Bearer => config::AuthKind::None,
@@ -344,7 +320,7 @@ impl App {
                 };
                 Action::None
             }
-            KeyCode::Right if connect.add_provider_field == AddProviderField::Auth => {
+            KeyCode::Right if connect.add_provider_field == AddProviderField::Token => {
                 connect.custom_auth_explicit = true;
                 connect.custom_auth = match connect.custom_auth {
                     config::AuthKind::Bearer => config::AuthKind::Jwt,
@@ -354,12 +330,14 @@ impl App {
                 };
                 Action::None
             }
-            KeyCode::Left if connect.add_provider_field == AddProviderField::ModelId => {
-                connect.add_provider_field = AddProviderField::ModelName;
-                Action::None
-            }
-            KeyCode::Right if connect.add_provider_field == AddProviderField::ModelName => {
-                connect.add_provider_field = AddProviderField::ModelId;
+            KeyCode::Down => {
+                connect.add_provider_field = match connect.add_provider_field {
+                    AddProviderField::Name => AddProviderField::CompletionUrl,
+                    AddProviderField::CompletionUrl => AddProviderField::ModelId,
+                    AddProviderField::ModelId => AddProviderField::Token,
+                    AddProviderField::Token => AddProviderField::Done,
+                    AddProviderField::Done => AddProviderField::Name,
+                };
                 Action::None
             }
             KeyCode::Enter => {
@@ -368,12 +346,9 @@ impl App {
                 } else {
                     connect.add_provider_field = match connect.add_provider_field {
                         AddProviderField::Name => AddProviderField::CompletionUrl,
-                        AddProviderField::CompletionUrl => AddProviderField::ModelsUrl,
-                        AddProviderField::ModelsUrl => AddProviderField::Auth,
-                        AddProviderField::Auth => AddProviderField::ModelName,
-                        AddProviderField::ModelName => AddProviderField::ModelId,
-                        AddProviderField::ModelId => AddProviderField::ContextWindow,
-                        AddProviderField::ContextWindow => AddProviderField::Done,
+                        AddProviderField::CompletionUrl => AddProviderField::ModelId,
+                        AddProviderField::ModelId => AddProviderField::Token,
+                        AddProviderField::Token => AddProviderField::Done,
                         AddProviderField::Done => AddProviderField::Done,
                     };
                     Action::None

@@ -2,8 +2,11 @@
 //! that tells the model how to use the tools.
 
 use std::{
+    collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use serde_json::Value;
@@ -154,6 +157,7 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              relative paths resolve against it, and moving outside the workspace asks first. \
              To read several files in one call, batch them with multi_read: \
              with `all: true` it reads every file directly inside each folder in `paths`. \
+             Use read_all to read every text file under a directory recursively. \
              Use web_search for anything newer than your knowledge or that needs current \
              facts, and cite the URL you used. \
              Use web_fetch to read the text of a specific page, such as one surfaced by \
@@ -223,7 +227,7 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
          'let me know'. A heading or a list earns its place only when it helps the reader; \
          a one-line answer gets one line. Never claim a result you did not verify."
     );
-    let project_instructions = load_agents_instructions(workspace);
+    let project_instructions = project_instructions(workspace);
     if project_instructions.is_empty() {
         base
     } else {
@@ -233,12 +237,31 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
     }
 }
 
+/// AGENTS.md context is bounded and cached: a big workspace must not stall
+/// the key handler while the system prompt is built for every message.
+fn project_instructions(workspace: &Path) -> String {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Instant, String)>>> = OnceLock::new();
+    const TTL: Duration = Duration::from_secs(5);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some((loaded, text)) = cache.get(workspace)
+        && loaded.elapsed() < TTL
+    {
+        return text.clone();
+    }
+    let text = load_agents_instructions(workspace);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(workspace.to_path_buf(), (Instant::now(), text.clone()));
+    }
+    text
+}
+
 fn load_agents_instructions(root: &Path) -> String {
     const MAX_FILES: usize = 32;
     const MAX_TOTAL_CHARS: usize = 24_000;
     const MAX_FILE_CHARS: usize = 8_000;
     let mut files = Vec::new();
-    collect_agents_files(root, 0, &mut files);
+    collect_agents_files(root, &mut files);
     files.sort_by(|a, b| {
         let depth_a = a.parent().map_or(0, |p| {
             p.strip_prefix(root).unwrap_or(p).components().count()
@@ -266,27 +289,84 @@ fn load_agents_instructions(root: &Path) -> String {
     output
 }
 
-fn collect_agents_files(directory: &Path, depth: usize, files: &mut Vec<PathBuf>) {
-    if depth > 12 || files.len() >= 64 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    let mut entries = entries.flatten().collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name();
-        if name == ".git" || name == "target" || name == "node_modules" || name == ".venv" {
-            continue;
+/// Breadth-first with hard budgets. The old recursive walk read every
+/// directory under a workspace — on a large project that blocked the UI on
+/// every message. Shallow AGENTS.md files come first; a symlinked directory
+/// is never followed (`file_type` does not resolve links).
+fn collect_agents_files(root: &Path, files: &mut Vec<PathBuf>) {
+    const MAX_DIRS: usize = 96;
+    const MAX_ENTRIES: usize = 256;
+    let mut queue = VecDeque::from([root.to_path_buf()]);
+    let mut visited = 0;
+    while let Some(directory) = queue.pop_front() {
+        if visited >= MAX_DIRS || files.len() >= 64 {
+            break;
         }
-        if path.is_dir() {
-            collect_agents_files(&path, depth + 1, files);
-        } else if name == "AGENTS.md" {
-            // Only the instruction file counts. Collecting every Markdown file
-            // would put the README into the system prompt.
+        visited += 1;
+        // A root instruction file must never be lost to a huge directory
+        // listing, even when the entry cap cuts that listing short.
+        let root_instructions = if directory == root {
+            let path = root.join("AGENTS.md");
+            path.is_file().then_some(path)
+        } else {
+            None
+        };
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        let mut children = Vec::new();
+        for (index, entry) in entries.flatten().enumerate() {
+            if index >= MAX_ENTRIES {
+                break;
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            if name == ".git" || name == "target" || name == "node_modules" || name == ".venv" {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                children.push(path);
+            } else if kind.is_file()
+                && name == "AGENTS.md"
+                && root_instructions.as_ref() != Some(&path)
+            {
+                // Only the instruction file counts. Collecting every Markdown
+                // file would put the README into the system prompt.
+                files.push(path);
+            }
+        }
+        if let Some(path) = root_instructions {
             files.push(path);
         }
+        children.sort();
+        queue.extend(children);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agents_scan_is_bounded_and_keeps_root_instructions() {
+        let root = std::env::temp_dir().join(format!("yopes-agents-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("AGENTS.md"), "root rules").unwrap();
+        for index in 0..300 {
+            let directory = root.join(format!("d{index:03}"));
+            fs::create_dir(&directory).unwrap();
+            if index == 1 || index == 299 {
+                fs::write(directory.join("AGENTS.md"), format!("rules {index}")).unwrap();
+            }
+        }
+        let text = load_agents_instructions(&root);
+        assert!(text.contains("root rules"), "{text}");
+        assert!(text.contains("rules 1"), "{text}");
+        assert!(!text.contains("rules 299"), "{text}");
+        let _ = fs::remove_dir_all(&root);
     }
 }

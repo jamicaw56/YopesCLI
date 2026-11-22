@@ -8,10 +8,14 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- Sending a message in a large directory no longer freezes the CLI: AGENTS.md discovery is bounded and cached.
 - Gemini tool calls replay their thought signature, so Google models keep working after the first tool call.
 
 ### Added
 
+- Custom API setup is now a four-field quick form: name, completion URL, model ID, token. Models URL, auth, model name and context window default sensibly and stay editable later.
+- The UI has a theme-aware ambient backdrop (soft vertical wash, sparse dot grid) and a branded header mark.
+- `read_all` reads every text file under a directory recursively, honoring `.yopesignore`.
 - `yopes --resume` continues a session that was cut off mid-turn instead of
   waiting for a typed prompt.
 - `computer_use` tolerates partial cursor-ready signals and gives WPF 15 seconds to start.

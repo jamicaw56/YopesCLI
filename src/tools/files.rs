@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fs};
+use std::{
+    collections::{HashMap, VecDeque},
+    fs,
+};
 
 use super::preview::{edit_file_preview, preview_error, write_file_preview};
 use super::*;
@@ -277,6 +280,96 @@ pub(super) fn multi_read(arguments: &str) -> Result<String> {
     }
     if stopped {
         output.push_str("\n… output truncated");
+    }
+    Ok(truncate_output(output))
+}
+
+#[derive(Deserialize)]
+struct ReadAllArgs {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// Read every text file under a directory, recursively, in path order.
+/// `.yopesignore` applies; symlinks are not followed; non-UTF-8 and oversized
+/// files are reported instead of read. Output uses the shared tool cap.
+pub(super) fn read_all(arguments: &str) -> Result<String> {
+    let args: ReadAllArgs = parse(arguments)?;
+    let requested = args.path.as_deref().unwrap_or(".").trim();
+    let requested = if requested.is_empty() { "." } else { requested };
+    let directory = resolve(requested);
+    if !directory.is_dir() {
+        bail!("{requested} is not a directory");
+    }
+    let ignore = Ignore::load(&workspace());
+    let mut queue = VecDeque::from([directory.clone()]);
+    let mut paths = Vec::new();
+    while let Some(directory) = queue.pop_front() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => continue,
+            };
+            if ignore.skip(&path, kind.is_dir()) {
+                continue;
+            }
+            if kind.is_dir() {
+                queue.push_back(path);
+            } else if kind.is_file() {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    if paths.is_empty() {
+        return Ok(format!("{requested}/ has no files"));
+    }
+
+    let mut output = String::new();
+    let mut budget = MAX_OUTPUT_CHARS;
+    for path in paths {
+        let relative = path.strip_prefix(&directory).unwrap_or(&path);
+        let prefix = requested.trim_end_matches(|c| c == '/' || c == '\\');
+        let display = format!("{prefix}/{}", relative.display());
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                push_bounded(
+                    &mut output,
+                    &mut budget,
+                    &format!("--- {display} ---\n{error}\n"),
+                );
+                continue;
+            }
+        };
+        let content = if metadata.len() > MAX_READ_BYTES {
+            format!(
+                "[too large: {} bytes; limit {MAX_READ_BYTES}]\n",
+                metadata.len()
+            )
+        } else {
+            match fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(error) => format!("[not UTF-8 text: {error}]\n"),
+            }
+        };
+        let lines = content.lines().count();
+        push_bounded(
+            &mut output,
+            &mut budget,
+            &format!("--- {display} ({lines} lines) ---\n"),
+        );
+        push_bounded(&mut output, &mut budget, &content);
+        if !content.ends_with('\n') {
+            push_bounded(&mut output, &mut budget, "\n");
+        }
+        if budget == 0 {
+            break;
+        }
     }
     Ok(truncate_output(output))
 }
@@ -661,4 +754,25 @@ pub fn edit_targets(call: &ToolCall) -> Vec<(String, bool)> {
         }
     }
     targets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_all_walks_nested_files_and_honors_ignore() {
+        let root = std::env::temp_dir().join(format!("yopes-read-all-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("a.txt"), "alpha\n").unwrap();
+        fs::write(root.join("nested/b.txt"), "beta\n").unwrap();
+        fs::write(root.join("skip.log"), "ignored line\n").unwrap();
+        fs::write(root.join(".yopesignore"), "*.log\n").unwrap();
+        let output = super::scoped_workspace(&root, || read_all(r#"{"path":"."}"#)).unwrap();
+        assert!(output.contains("alpha"), "{output}");
+        assert!(output.contains("beta"), "{output}");
+        assert!(!output.contains("ignored line"), "{output}");
+        let _ = fs::remove_dir_all(&root);
+    }
 }

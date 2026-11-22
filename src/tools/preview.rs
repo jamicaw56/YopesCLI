@@ -33,6 +33,14 @@ pub fn preview(call: &ToolCall) -> String {
             }
         }
         "read_file" => string("path"),
+        "read_all" => {
+            let path = string("path");
+            if path.is_empty() {
+                ".".to_owned()
+            } else {
+                path
+            }
+        }
         "multi_read" => {
             let all = arguments
                 .as_ref()

@@ -66,10 +66,11 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_TIMEOUT_SECONDS: u64 = 600;
 
 #[cfg(test)]
-pub const TOOL_NAMES: [&str; 24] = [
+pub const TOOL_NAMES: [&str; 25] = [
     "list_dir",
     "read_file",
     "multi_read",
+    "read_all",
     "read_image",
     "glob",
     "grep",
@@ -152,6 +153,7 @@ pub fn workspace() -> PathBuf {
 pub(crate) fn canonical_tool_name(name: &str) -> &str {
     match name {
         "readfile" | "read" | "cat" | "open_file" => "read_file",
+        "readall" | "read_all_files" => "read_all",
         "writefile" | "write" | "create_file" => "write_file",
         "editfile" | "edit" | "str_replace" => "edit_file",
         "listdir" | "ls" | "list_files" | "list_directory" => "list_dir",
@@ -169,6 +171,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         "list_dir" => files::list_dir(&call.function.arguments),
         "read_file" => files::read_file(&call.function.arguments),
         "multi_read" => files::multi_read(&call.function.arguments),
+        "read_all" => files::read_all(&call.function.arguments),
         "read_image" => files::read_image(&call.function.arguments),
         "glob" => search::glob(&call.function.arguments),
         "grep" => search::grep(&call.function.arguments),

@@ -238,6 +238,22 @@ pub fn definitions() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "read_all",
+                "description": "Read every text file under a directory recursively, in path order. .yopesignore is honored; binary files are reported as skipped. Read-only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory to read, relative to the working directory. Defaults to ."
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "read_image",
                 "description": "Attach a PNG or JPEG image from disk to the conversation so a vision-capable model can see it. Read-only.",
                 "parameters": {

@@ -97,6 +97,57 @@ pub(crate) fn accent2() -> Color {
     crate::theme::current().accent2
 }
 
+/// A quiet ambient backdrop: a vertical wash in the active theme plus a
+/// sparse dot grid. Widgets draw over it, so empty cells stop looking like a
+/// flat void without competing with the transcript.
+fn draw_backdrop(frame: &mut Frame, area: Rect) {
+    let theme = crate::theme::current();
+    let light = match theme.dim {
+        Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b) > 420,
+        _ => false,
+    };
+    let base = if light {
+        Color::Rgb(247, 248, 251)
+    } else {
+        Color::Rgb(9, 11, 19)
+    };
+    let wash = blend(theme.accent2, base, 90);
+    let haze = blend(theme.accent, base, 94);
+    let dot = blend(theme.accent2, base, 78);
+    let rows = usize::from(area.height);
+    let columns = usize::from(area.width);
+    let mut lines = Vec::with_capacity(rows);
+    for y in 0..rows {
+        let position = y * 100 / rows.max(1);
+        let color = if position < 40 {
+            wash
+        } else if position < 75 {
+            haze
+        } else {
+            base
+        };
+        let mut spans = Vec::new();
+        let mut column = 0;
+        while column < columns {
+            if y % 3 == 0 && column % 8 == 4 {
+                spans.push(Span::styled("·", Style::default().fg(dot).bg(color)));
+                column += 1;
+            } else {
+                let end = (column + 1..columns)
+                    .find(|next| *next % 8 == 4)
+                    .unwrap_or(columns);
+                spans.push(Span::styled(
+                    " ".repeat(end - column),
+                    Style::default().bg(color),
+                ));
+                column = end;
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans
         .iter()
@@ -150,6 +201,7 @@ fn caret(spinner: usize) -> &'static str {
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    draw_backdrop(frame, area);
     if area.width < 28 || area.height < 8 {
         app.output_rows.clear();
         frame.render_widget(

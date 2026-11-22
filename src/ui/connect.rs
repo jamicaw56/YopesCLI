@@ -13,7 +13,7 @@ pub(super) fn draw_connect(
         .clamp(60, 120)
         .min(area.width.saturating_sub(2));
     let min_height = if connect.stage == ConnectStage::AddProvider {
-        20
+        14
     } else {
         16
     };
@@ -126,174 +126,81 @@ fn current_connection(app: &App) -> Option<String> {
 
 fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect) {
     connect.popup_inner.set(inner);
-    if inner.width < 30 || inner.height < 12 {
+    if inner.width < 30 || inner.height < 11 {
         return;
     }
     let active = connect.add_provider_field;
+    let width = usize::from(inner.width);
 
-    let field_line =
-        |label: &str, value: &str, is_active: bool, width: u16| -> (Line<'static>, Line<'static>) {
-            let label_style = if is_active {
-                Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(muted())
-            };
-            let label_line = Line::from(vec![Span::styled(label.to_owned(), label_style)]);
-            let bracket_style = if is_active {
-                Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(muted())
-            };
-            let text_style = if is_active {
-                Style::default().fg(text()).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(text())
-            };
-            let mut spans = vec![
-                Span::styled("[ ", bracket_style),
-                Span::styled(
-                    truncate(value, usize::from(width).saturating_sub(6)),
-                    text_style,
-                ),
-            ];
-            if is_active {
-                spans.push(Span::styled("▌", Style::default().fg(accent())));
-            }
-            spans.push(Span::styled(" ]", bracket_style));
-            (label_line, Line::from(spans))
+    // Four fields, each two rows. Rows line up with `field_at_mouse`, so a
+    // click lands on the same box Tab reaches.
+    let field = |number: &str, label: &str, value: &str, field: AddProviderField| {
+        let on = active == field;
+        let edge = if on {
+            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(dim())
         };
-
-    let mut lines = Vec::new();
-
-    // 1. Provider name:
-    let (lbl, val) = field_line(
-        "Provider name:",
-        &connect.custom_name,
-        active == AddProviderField::Name,
-        inner.width,
-    );
-    lines.push(lbl);
-    lines.push(val);
-
-    // 2. Completion URL:
-    let (lbl, val) = field_line(
-        "Completion URL:",
-        &connect.custom_endpoint,
-        active == AddProviderField::CompletionUrl,
-        inner.width,
-    );
-    lines.push(lbl);
-    lines.push(val);
-
-    // 3. (optional) Model fetching URL:
-    let (lbl, val) = field_line(
-        "(optional) Model fetching URL:",
-        &connect.custom_models_url,
-        active == AddProviderField::ModelsUrl,
-        inner.width,
-    );
-    lines.push(lbl);
-    lines.push(val);
-
-    // 4. Authentication method: left/right cycle the supported schemes.
-    let auth_active = active == AddProviderField::Auth;
-    let (lbl, val) = field_line(
-        "Authentication:",
-        connect.custom_auth.label(),
-        auth_active,
-        inner.width,
-    );
-    lines.push(lbl);
-    lines.push(val);
-
-    // 5. Models: name / modelID (two box split)
-    let models_active =
-        active == AddProviderField::ModelName || active == AddProviderField::ModelId;
-    lines.push(Line::from(vec![Span::styled(
-        "Models:",
-        if models_active {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(muted())
-        },
-    )]));
-
-    let half = inner.width.saturating_sub(4) / 2;
-    let name_active = active == AddProviderField::ModelName;
-    let id_active = active == AddProviderField::ModelId;
-
-    let mut models_spans = Vec::new();
-    models_spans.push(Span::styled(
-        "name: [ ",
-        if name_active {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(muted())
-        },
-    ));
-    models_spans.push(Span::styled(
-        truncate(
-            &connect.custom_model_name,
-            usize::from(half).saturating_sub(12),
-        ),
-        Style::default().fg(text()),
-    ));
-    if name_active {
-        models_spans.push(Span::styled("▌", Style::default().fg(accent())));
-    }
-    models_spans.push(Span::styled(
-        " ]  ",
-        if name_active {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(muted())
-        },
-    ));
-
-    models_spans.push(Span::styled(
-        "modelID: [ ",
-        if id_active {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(muted())
-        },
-    ));
-    models_spans.push(Span::styled(
-        truncate(
-            &connect.custom_model_id,
-            usize::from(half).saturating_sub(14),
-        ),
-        Style::default().fg(text()),
-    ));
-    if id_active {
-        models_spans.push(Span::styled("▌", Style::default().fg(accent())));
-    }
-    models_spans.push(Span::styled(
-        " ]",
-        if id_active {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(muted())
-        },
-    ));
-    lines.push(Line::from(models_spans));
-
-    // 6. Context Window:
-    let cw_display = if connect.custom_model_context_window.is_empty() {
-        "128000"
-    } else {
-        &connect.custom_model_context_window
+        let label_line = Line::from(vec![
+            Span::styled(
+                format!("{number}  "),
+                Style::default().fg(blend(accent2(), dim(), 35)),
+            ),
+            Span::styled(
+                label.to_owned(),
+                if on {
+                    Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(muted())
+                },
+            ),
+        ]);
+        let mut spans = vec![
+            Span::styled("   ╭ ", edge),
+            Span::styled(
+                truncate(value, width.saturating_sub(8)),
+                Style::default().fg(text()),
+            ),
+        ];
+        if on {
+            spans.push(Span::styled("▌", Style::default().fg(accent())));
+        }
+        spans.push(Span::styled(" ╮", edge));
+        vec![label_line, Line::from(spans)]
     };
-    let (lbl, val) = field_line(
-        "Context Window:",
-        cw_display,
-        active == AddProviderField::ContextWindow,
-        inner.width,
-    );
-    lines.push(lbl);
-    lines.push(val);
 
-    // 7. Done button
+    let mut lines = Vec::with_capacity(11);
+    lines.extend(field(
+        "1",
+        "Provider name",
+        &connect.custom_name,
+        AddProviderField::Name,
+    ));
+    lines.extend(field(
+        "2",
+        "Completion URL",
+        &connect.custom_endpoint,
+        AddProviderField::CompletionUrl,
+    ));
+    lines.extend(field(
+        "3",
+        "Model ID",
+        &connect.custom_model_id,
+        AddProviderField::ModelId,
+    ));
+    lines.extend(field(
+        "4",
+        "API key / token",
+        &connect.custom_token,
+        AddProviderField::Token,
+    ));
+    lines.push(Line::styled(
+        truncate(
+            "defaults · Bearer · <endpoint>/models · 128K context — edit later from the model list",
+            width,
+        ),
+        Style::default().fg(dim()),
+    ));
     let done_active = active == AddProviderField::Done;
     let done_style = if done_active {
         Style::default()
@@ -303,28 +210,26 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     } else {
         Style::default().fg(text()).add_modifier(Modifier::BOLD)
     };
-    lines.push(Line::from(vec![Span::styled(
+    lines.push(Line::from(Span::styled(
         if done_active {
-            " › [ Done ] ‹ "
+            "   ›  Connect  ‹   "
         } else {
-            "   [ Done ]   "
+            "      Connect        "
         },
         done_style,
-    )]));
-
-    // 7. Hint or error
-    if let Some(error) = &connect.error {
-        lines.push(Line::styled(
-            format!("✗ {error}"),
-            Style::default().fg(crate::theme::current().error),
-        ));
-    } else {
-        lines.push(Line::styled(
-            "Tab switch box · ←/→ auth · Enter submit · Esc cancel",
-            Style::default().fg(muted()),
-        ));
-    }
-
+    )));
+    lines.push(Line::styled(
+        connect
+            .error
+            .as_deref()
+            .map(|error| format!("✗ {error}"))
+            .unwrap_or_else(|| "Tab next · Enter continue · Esc cancel".to_owned()),
+        if connect.error.is_some() {
+            Style::default().fg(crate::theme::current().error)
+        } else {
+            Style::default().fg(muted())
+        },
+    ));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -534,5 +439,39 @@ mod tests {
         assert!(screen.contains("current"), "{screen}");
         assert!(screen.contains("pick a provider"), "{screen}");
         assert!(screen.contains("OpenAI"), "the live connection: {screen}");
+    }
+
+    #[test]
+    fn the_quick_connect_form_shows_four_fields_and_their_defaults() {
+        let mut app = crate::app::test_app();
+        app.begin_connect();
+        app.select_connect_item();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| {
+                if let Some(connect) = app.connect_state() {
+                    super::draw_connect(frame, &app, connect, 0, frame.area());
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen: String = (0..30)
+            .map(|row| {
+                (0..100)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for label in [
+            "Provider name",
+            "Completion URL",
+            "Model ID",
+            "API key / token",
+            "defaults",
+            "Connect",
+        ] {
+            assert!(screen.contains(label), "missing {label}: {screen}");
+        }
     }
 }

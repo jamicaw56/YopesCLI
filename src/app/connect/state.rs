@@ -35,12 +35,9 @@ pub(super) const CUSTOM_CONTEXT_WINDOW_ID: &str = "__action:custom-context__";
 pub enum AddProviderField {
     Name = 0,
     CompletionUrl = 1,
-    ModelsUrl = 2,
-    Auth = 3,
-    ModelName = 4,
-    ModelId = 5,
-    ContextWindow = 6,
-    Done = 7,
+    ModelId = 2,
+    Token = 3,
+    Done = 4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,7 +95,7 @@ impl ConnectStage {
             Self::CustomModels => "pick a saved model",
             Self::Password => "set a passphrase",
             Self::Unlock => "unlock the stored key",
-            Self::AddProvider => "fill the provider form",
+            Self::AddProvider => "4 fields · the rest defaults",
             Self::RenameProvider => "rename the provider",
         }
     }
@@ -516,18 +513,9 @@ impl ConnectState {
         match rel_y {
             0 | 1 => Some(AddProviderField::Name),
             2 | 3 => Some(AddProviderField::CompletionUrl),
-            4 | 5 => Some(AddProviderField::ModelsUrl),
-            6 | 7 => Some(AddProviderField::Auth),
-            8 => Some(AddProviderField::ModelName),
-            9 => {
-                if col < inner.x.saturating_add(inner.width / 2) {
-                    Some(AddProviderField::ModelName)
-                } else {
-                    Some(AddProviderField::ModelId)
-                }
-            }
-            10 | 11 => Some(AddProviderField::ContextWindow),
-            12..=14 => Some(AddProviderField::Done),
+            4 | 5 => Some(AddProviderField::ModelId),
+            6 | 7 => Some(AddProviderField::Token),
+            9 | 10 => Some(AddProviderField::Done),
             _ => None,
         }
     }
@@ -608,11 +596,8 @@ impl ConnectState {
         match self.add_provider_field {
             AddProviderField::Name => Some(&mut self.custom_name),
             AddProviderField::CompletionUrl => Some(&mut self.custom_endpoint),
-            AddProviderField::ModelsUrl => Some(&mut self.custom_models_url),
-            AddProviderField::Auth => None,
-            AddProviderField::ModelName => Some(&mut self.custom_model_name),
             AddProviderField::ModelId => Some(&mut self.custom_model_id),
-            AddProviderField::ContextWindow => Some(&mut self.custom_model_context_window),
+            AddProviderField::Token => Some(&mut self.custom_token),
             AddProviderField::Done => None,
         }
     }
@@ -851,27 +836,14 @@ mod tests {
             Some(AddProviderField::CompletionUrl)
         );
         assert_eq!(
-            connect.field_at_mouse(15, 14),
-            Some(AddProviderField::ModelsUrl)
-        );
-        assert_eq!(connect.field_at_mouse(20, 16), Some(AddProviderField::Auth));
-        assert_eq!(
-            connect.field_at_mouse(20, 18),
-            Some(AddProviderField::ModelName)
-        );
-        assert_eq!(
-            connect.field_at_mouse(20, 19),
-            Some(AddProviderField::ModelName)
-        );
-        assert_eq!(
-            connect.field_at_mouse(60, 19),
+            connect.field_at_mouse(20, 14),
             Some(AddProviderField::ModelId)
         );
         assert_eq!(
-            connect.field_at_mouse(15, 20),
-            Some(AddProviderField::ContextWindow)
+            connect.field_at_mouse(20, 16),
+            Some(AddProviderField::Token)
         );
-        assert_eq!(connect.field_at_mouse(15, 22), Some(AddProviderField::Done));
+        assert_eq!(connect.field_at_mouse(15, 19), Some(AddProviderField::Done));
 
         connect.add_provider_field = AddProviderField::Name;
         connect
@@ -880,12 +852,12 @@ mod tests {
             .push_str("LocalLLM");
         assert_eq!(connect.custom_name, "LocalLLM");
 
-        connect.add_provider_field = AddProviderField::ContextWindow;
+        connect.add_provider_field = AddProviderField::Token;
         connect
             .active_add_provider_field_mut()
             .unwrap()
-            .push_str("128000");
-        assert_eq!(connect.custom_model_context_window, "128000");
+            .push_str("sk-test");
+        assert_eq!(connect.custom_token, "sk-test");
     }
 
     #[test]
