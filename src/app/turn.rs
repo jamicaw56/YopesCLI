@@ -390,6 +390,9 @@ impl App {
             tool_progress: None,
             compacting,
         });
+        // The request is in flight now: the saved file says so until the turn
+        // chain finishes, which is what makes `yopes --resume` continue it.
+        self.session.interrupted = true;
         self.save_session();
         Action::Start {
             request_id,
@@ -1098,12 +1101,17 @@ impl App {
         if active.compacting.is_some() {
             // The queued turn never started, so there is nothing to finish.
             self.info("Compaction stopped. Send another message to continue.");
+            // The user asked to stop: no turn is owed, so a resume must not
+            // continue this session on its own.
+            self.session.interrupted = false;
             self.save_session();
             return Action::Cancel(active.id);
         }
         self.discard_pending_tools("The user stopped the response before this tool could run.");
         self.remove_empty_response();
         self.info("Response stopped. Partial output was kept.");
+        // Stopping is a decision, not an interruption to recover from.
+        self.session.interrupted = false;
         self.save_session();
         // A subagent that finished while the turn streamed reports now.
         if !self.is_busy() && self.flush_parked_messages() {
@@ -1505,6 +1513,32 @@ pub(crate) mod tests {
         assert_eq!(last_message.role, Role::Assistant);
         let usage = last_message.usage.expect("usage recorded");
         assert!(usage.elapsed_ms >= 500);
+    }
+
+    #[test]
+    fn a_finished_turn_clears_the_interrupted_marker_a_resume_reads() {
+        let mut app = test_app();
+        app.input.set("finish the task");
+        assert!(matches!(app.submit(), Action::Start { .. }));
+        // In flight: a process that dies here leaves a file that says so, and
+        // that is what `yopes --resume` continues from.
+        assert!(app.session.interrupted);
+
+        let req_id = app.active_request_id().unwrap();
+        app.on_stream_event(StreamEvent::Done { request_id: req_id });
+        assert!(!app.session.interrupted);
+    }
+
+    #[test]
+    fn stopping_a_response_clears_the_interrupted_marker() {
+        let mut app = test_app();
+        app.input.set("write the long version");
+        assert!(matches!(app.submit(), Action::Start { .. }));
+        assert!(app.session.interrupted);
+
+        app.stop_streaming();
+        // Stopping is a decision, not a crash to recover from.
+        assert!(!app.session.interrupted);
     }
 
     #[test]

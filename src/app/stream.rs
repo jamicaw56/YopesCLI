@@ -175,6 +175,9 @@ impl App {
                 }
                 self.active = None;
                 if self.pending_tools.is_empty() {
+                    // The turn chain is over, so nothing is owed: a later
+                    // `--resume` waits for a prompt instead of continuing.
+                    self.session.interrupted = false;
                     // A provider can end the stream without sending anything;
                     // the placeholder is dropped, but the user is told why no
                     // reply appeared instead of seeing nothing.

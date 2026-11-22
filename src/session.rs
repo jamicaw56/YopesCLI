@@ -177,6 +177,18 @@ pub struct Session {
     /// system note until `/goal clear`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
+    /// A request was in flight when this file was last written. Only a turn
+    /// that actually finished clears it, so a file that still says so on the
+    /// next start was cut off mid-task: the state `yopes --resume` continues
+    /// from instead of waiting for a typed prompt.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub interrupted: bool,
+}
+
+/// Serde skip predicate: finished work saves no `interrupted` field at all,
+/// so a clean session file never carries a key that means nothing.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Default for Session {
@@ -210,6 +222,7 @@ impl Session {
             auto_named: false,
             delegations: Vec::new(),
             goal: None,
+            interrupted: false,
         }
     }
 
@@ -411,6 +424,22 @@ mod tests {
         session.update_title(&"é".repeat(60));
         assert_eq!(session.title.chars().count(), 43);
         assert!(session.title.ends_with('…'));
+    }
+
+    #[test]
+    fn the_interrupted_marker_round_trips_and_defaults_off() {
+        let mut session = Session::new();
+        assert!(!session.interrupted);
+        // A clean session saves no marker at all, so a finished session and an
+        // older file both read as "nothing owed".
+        let clean = serde_json::to_string(&session).unwrap();
+        assert!(!clean.contains("interrupted"), "{clean}");
+
+        session.interrupted = true;
+        let saved = serde_json::to_string(&session).unwrap();
+        assert!(saved.contains(r#""interrupted":true"#), "{saved}");
+        let loaded: Session = serde_json::from_str(&saved).unwrap();
+        assert!(loaded.interrupted);
     }
 
     #[test]

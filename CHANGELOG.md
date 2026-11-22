@@ -6,6 +6,12 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `yopes --resume` continues a session that was cut off mid-turn instead of
+  waiting for a typed prompt.
+- `computer_use` tolerates partial cursor-ready signals and gives WPF 15 seconds to start.
+
 ### Changed
 
 - Provider setup is custom-API-only; the first-run screen and installers direct users to configure their own compatible API.

@@ -41,6 +41,14 @@ pub struct Cli {
     pub(super) system_prompt: Option<String>,
 }
 
+impl Cli {
+    /// Whether `--resume` was asked for. The flag itself stays private to the
+    /// config module; `main` needs the answer to continue a cut-off session.
+    pub fn resume_requested(&self) -> bool {
+        self.resume
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Check for updates, install the latest release, and restart.

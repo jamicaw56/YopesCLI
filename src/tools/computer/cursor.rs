@@ -86,17 +86,25 @@ pub(super) fn ensure(initial: Option<(i32, i32)>) -> anyhow::Result<()> {
         .spawn()
         .context("starting the agent cursor overlay")?;
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // WPF can take several seconds to initialize on a busy desktop. The script
+    // writes the ready file directly, so seeing it is not proof that the whole
+    // signal has been written; tolerate partial reads while waiting.
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if ready.is_file() {
             let message = fs::read_to_string(&ready).unwrap_or_default();
-            if message.trim() == "ready" {
-                *process = Some(child);
-                return Ok(());
+            match startup_signal(&message) {
+                StartupSignal::Ready => {
+                    *process = Some(child);
+                    return Ok(());
+                }
+                StartupSignal::Error(detail) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    anyhow::bail!("could not show the agent cursor: {detail}");
+                }
+                StartupSignal::Pending => {}
             }
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!("could not show the agent cursor: {}", message.trim());
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -120,9 +128,39 @@ pub(super) fn ensure(initial: Option<(i32, i32)>) -> anyhow::Result<()> {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!("agent cursor startup timed out; no mouse actions were run");
+            let detail = startup_detail(&log);
+            anyhow::bail!(
+                "agent cursor startup timed out; no mouse actions were run{}",
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("; PowerShell log: {detail}")
+                }
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg(any(windows, test))]
+enum StartupSignal {
+    Ready,
+    Error(String),
+    Pending,
+}
+
+/// The ready file is written directly by PowerShell: tolerate a transient
+/// empty/partial read, and only treat an explicit error signal as failure.
+#[cfg(any(windows, test))]
+fn startup_signal(message: &str) -> StartupSignal {
+    let message = message.trim();
+    if message == "ready" {
+        StartupSignal::Ready
+    } else if let Some(detail) = message.strip_prefix("error:") {
+        StartupSignal::Error(detail.trim().to_owned())
+    } else {
+        StartupSignal::Pending
     }
 }
 
@@ -282,6 +320,26 @@ public static class YopesCursorWindow {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ready_handshake_waits_for_complete_signal_and_reports_explicit_error() {
+        use super::{StartupSignal, startup_signal};
+
+        assert_eq!(startup_signal(""), StartupSignal::Pending);
+        assert_eq!(startup_signal("rea"), StartupSignal::Pending);
+        assert_eq!(startup_signal(" ready\n"), StartupSignal::Ready);
+        assert_eq!(
+            startup_signal("error: WPF initialization failed"),
+            StartupSignal::Error("WPF initialization failed".to_owned())
+        );
+    }
+
+    #[test]
+    fn startup_timeout_is_longer_than_the_previous_five_second_window() {
+        let source = include_str!("cursor.rs");
+        assert!(source.contains("Duration::from_secs(15)"));
+        assert!(source.contains("PowerShell log: {detail}"));
+    }
+
     #[test]
     fn the_overlay_is_visible_click_through_and_owner_scoped() {
         let script = super::SCRIPT;
