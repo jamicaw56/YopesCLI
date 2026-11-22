@@ -8,7 +8,7 @@ A better coding CLI, built with Rust, Ratatui, and Tokio.
 
 ## Highlights
 
-- Streaming OpenAI-compatible providers, custom endpoints included, with per-tool approval and a diff viewer.
+- Streaming custom OpenAI-compatible APIs, with per-tool approval and a diff viewer.
 - `delegate` hands subtasks to parallel subagents, streamed live in the sidebar and readable with `/agents`.
 - `computer_use` drives the desktop with a visible, click-through agent cursor, so your mouse never moves.
 - Image pasting, thirteen themes, a popout command palette, and one-command self-updates (`yopes update`).
@@ -29,7 +29,9 @@ The script picks the latest release, verifies its SHA256SUMS checksum, installs 
 
 ## First run
 
-1. `/provider` — pick a provider and model. Keys are stored per endpoint, so connecting a second time never asks for the key again.
+> **Provider setup supports custom APIs only.** Connect your own compatible API endpoint; there is no built-in provider directory.
+
+1. `/provider connect` — add a custom API endpoint and model. Keys are stored per endpoint, so reconnecting never asks for the key again.
 2. Type a message. Tools ask for approval before they change anything; press `Enter` to allow one, `a` for the session, `Esc` to deny.
 3. `/` opens the command palette; `F1` shows keyboard help; `/set theme <name>` picks one of the thirteen built-in palettes (`dark`, `midnight`, `nord`, `gruvbox`, `dracula`, `tokyo`, `rose`, `catppuccin`, `one-dark`, `solarized`, `everforest`, `kanagawa`, `light`).
 

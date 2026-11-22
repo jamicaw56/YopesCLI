@@ -158,7 +158,9 @@ mod tests {
 
     #[test]
     fn credential_failures_are_not_retried_even_when_gateway_reports_server_error() {
-        assert!(!retryable_detail("upstream rejected the server's credentials"));
+        assert!(!retryable_detail(
+            "upstream rejected the server's credentials"
+        ));
         assert!(!retryable_detail("invalid API key"));
         assert!(retryable_detail("upstream temporarily unavailable"));
     }

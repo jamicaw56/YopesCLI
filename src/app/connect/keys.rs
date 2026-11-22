@@ -94,29 +94,7 @@ impl App {
                     connect.selected = 0;
                 }
             }
-            KeyCode::Tab => {
-                if let Some(connect) = self.connect.as_mut() {
-                    if connect.stage == ConnectStage::Models {
-                        if let Some(item) = connect.selected_item() {
-                            if item.id != EDIT_KEY_ID {
-                                let current_context = connect
-                                    .provider()
-                                    .and_then(|p| p.models.get(&item.id))
-                                    .and_then(|m| m.limit.as_ref())
-                                    .and_then(|l| l.context);
-                                connect.model_id = Some(item.id.clone());
-                                connect.custom_model_id = item.id;
-                                connect.custom_model_name = item.title;
-                                connect.custom_model_context_window =
-                                    current_context.map(|c| c.to_string()).unwrap_or_default();
-                                connect.stage = ConnectStage::ModelContextWindow;
-                                connect.sync_context_selection();
-                                connect.error = None;
-                            }
-                        }
-                    }
-                }
-            }
+            KeyCode::Tab => {}
             KeyCode::Char(character)
                 if !key
                     .modifiers

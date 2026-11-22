@@ -83,7 +83,7 @@ impl App {
                     }
                     return self.finish_custom_connect(None);
                 }
-                return self.finish_connect_with(KeySource::Stored(api_key), None);
+                return Action::None;
             }
             KeyCode::Backspace => {
                 if let Some(connect) = self.connect.as_mut() {
@@ -102,81 +102,5 @@ impl App {
             _ => {}
         }
         Action::None
-    }
-    pub(crate) fn on_catalog(&mut self, result: catalog::FetchResult) {
-        self.fetching_models = false;
-        let Some(connect) = self.connect.as_mut() else {
-            match result {
-                Err(error) => self.error(format!("Could not refresh catalog: {error}")),
-                Ok(cat) => {
-                    for cp in config::load_connected_providers(&self.config_path) {
-                        if let Some(pid) = &cp.provider_id {
-                            if let Some(prov) = cat.providers.get(pid) {
-                                let models: Vec<SavedModel> = prov
-                                    .models
-                                    .iter()
-                                    .map(|(id, m)| SavedModel {
-                                        id: id.clone(),
-                                        name: m.name.clone(),
-                                        context_window: m.limit.as_ref().and_then(|l| l.context),
-                                        input_cost: m.cost.as_ref().map(|c| c.input),
-                                        output_cost: m.cost.as_ref().map(|c| c.output),
-                                    })
-                                    .collect();
-                                let _ = config::update_endpoint_models(
-                                    &self.config_path,
-                                    &cp.base_url,
-                                    &models,
-                                );
-                                if self.backend.base_url().trim_end_matches('/')
-                                    == cp.base_url.trim_end_matches('/')
-                                {
-                                    self.backend.set_saved_models(models);
-                                }
-                            }
-                        }
-                    }
-                    self.model_choices = self.build_model_choices();
-                    self.info("Refreshed models catalog.");
-                }
-            }
-            return;
-        };
-        connect.loading = false;
-        match result {
-            Ok(catalog) => {
-                connect.catalog = Some(catalog);
-                connect.error = None;
-                connect.selected = 0;
-            }
-            Err(error) => {
-                connect.error = Some(error);
-            }
-        }
-        // The provider list is on screen, so its logos are wanted.
-        self.request_visible_logos();
-    }
-
-    /// A logo arrived: keep it for the next draw, and cache it on disk.
-    pub(crate) fn on_logo(
-        &mut self,
-        provider_id: String,
-        result: Result<crate::logos::Logo, String>,
-    ) {
-        if let Ok(logo) = result {
-            self.logos.cache(&provider_id, &logo);
-            self.logos.insert(&provider_id, logo);
-        }
-    }
-
-    /// The logos that still have to be fetched, taken out of the queue.
-    pub(crate) fn take_pending_logos(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pending_logos)
-    }
-
-    /// Ask for the logos of the providers currently on screen (deprecated).
-    pub(crate) fn request_visible_logos(&mut self) {
-        // ponytail: provider logo fetching is deprecated to remove network overhead and TUI lag.
-        self.pending_logos.clear();
     }
 }

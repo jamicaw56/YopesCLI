@@ -102,3 +102,4 @@ if (-not $NoPath) {
     }
 }
 Write-Host "Installed yopes $($Release.tag_name)." -ForegroundColor Green
+Write-Host 'Important: provider setup supports custom APIs only. Run `yopes`, then `/provider connect` to configure your own compatible API endpoint.' -ForegroundColor Yellow

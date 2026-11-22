@@ -238,8 +238,7 @@ impl App {
                     auth,
                 };
             }
-            self.fetching_models = true;
-            return Action::RefreshCatalog;
+            return Action::None;
         }
 
         if is_custom {
@@ -260,8 +259,7 @@ impl App {
                 auth,
             }
         } else if self.backend.provider_kind() != ProviderKind::Unconfigured {
-            self.fetching_models = true;
-            Action::RefreshCatalog
+            Action::None
         } else {
             Action::None
         }

@@ -469,10 +469,7 @@ pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area:
         ConnectStage::Models => {
             "↑↓ move · type to filter · enter choose · tab context · esc back".to_owned()
         }
-        ConnectStage::ApiKey => connect.required_env().map_or_else(
-            || "enter continue · esc back · empty skips the key".to_owned(),
-            |name| format!("enter continue · esc back · empty uses ${name}"),
-        ),
+        ConnectStage::ApiKey => "enter continue · esc back · empty skips the key".to_owned(),
         ConnectStage::Endpoint => "enter continue · esc back".to_owned(),
         ConnectStage::ModelsEndpoint => "enter continue · blank uses <endpoint>/models".to_owned(),
         ConnectStage::CustomToken => "enter continue · esc back".to_owned(),

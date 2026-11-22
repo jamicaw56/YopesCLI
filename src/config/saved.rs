@@ -591,17 +591,7 @@ pub(crate) fn load_connected_providers(path: &Path) -> Vec<ConnectedProvider> {
             base_url: base_url.clone(),
             provider_id: stored.provider_id.clone(),
             provider_kind: if stored.provider_kind == ProviderKind::Unconfigured {
-                if stored.provider_id.as_deref() == Some("anthropic")
-                    || base_url.contains("anthropic.com")
-                {
-                    ProviderKind::Anthropic
-                } else if stored.provider_id.as_deref() == Some("google")
-                    || base_url.contains("googleapis.com")
-                {
-                    ProviderKind::Gemini
-                } else {
-                    ProviderKind::OpenAi
-                }
+                ProviderKind::Custom
             } else {
                 stored.provider_kind
             },

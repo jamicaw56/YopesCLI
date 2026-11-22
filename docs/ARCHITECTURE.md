@@ -16,7 +16,7 @@ loop owns all I/O, and rendering is a pure function of `App`.
 | `backend/` | HTTP client for OpenAI-compatible and Ollama endpoints: `mod.rs` (`Backend`, `StreamEvent`), `messages.rs` request bodies, `retry.rs` backoff, `sse.rs` stream parsing. |
 | `config/` | CLI arguments (`cli.rs`), `Config` and the provider types (`mod.rs`), the saved-config JSON and persistence (`saved.rs`). |
 | `credentials.rs` | Sealing and opening API keys (argon2 + chacha20poly1305). |
-| `catalog.rs` | Provider and model discovery from models.dev. |
+| `model_api.rs` | Fetching model IDs from user-configured OpenAI-compatible endpoints. |
 | `session.rs` | `Session`, `Message`, `ToolCall`, save/load, token estimation, compaction. |
 | `diff.rs` | Line diffing, hunks, and side-by-side rows. |
 | `skills.rs` | `SKILL.md` discovery, frontmatter parsing, slash expansion. |
@@ -32,10 +32,10 @@ terminal event ──► App::handle_key ──► Action
                                         │
                         ┌───────────────┼───────────────┐
                         ▼               ▼               ▼
-                   Backend::stream   tools::execute   catalog::fetch
+                   Backend::stream   tools::execute   model_api::fetch_models
                         │               │               │
                         ▼               ▼               ▼
-                   StreamEvent      ToolEvent        FetchResult
+                   StreamEvent      ToolEvent        model list
                         └───────────────┼───────────────┘
                                         ▼
                               App::on_stream_event

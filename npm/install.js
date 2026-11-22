@@ -111,6 +111,9 @@ try {
     fs.chmodSync(target, 0o755);
   }
   console.log(`Installed yopes ${version}.`);
+  console.log(
+    'Important: provider setup supports custom APIs only. Run yopes, then /provider connect to configure your own compatible API endpoint.'
+  );
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

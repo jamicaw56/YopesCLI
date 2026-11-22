@@ -1068,7 +1068,7 @@ impl App {
             }
         }
         self.connect = Some(connect);
-        Action::LoadCatalog
+        Action::None
     }
 
     pub(crate) fn new_session(&mut self) {

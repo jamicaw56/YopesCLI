@@ -8,6 +8,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- Provider setup is custom-API-only; the first-run screen and installers direct users to configure their own compatible API.
 - Custom provider model fetch reconciles the saved list against the `/models`
   response: models the endpoint dropped are removed from disk too, and the
   hand-set context window of kept models survives.
@@ -18,8 +19,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 - Common tool-name slips (`bash`, `readfile`, `ls`, ...) resolve to the real tool.
 - Permission (Shift+Tab) and diff view are saved and restored on restart.
 - Read-only `/settings` and similar commands run while a tool is busy.
-- Changelog popup after an update: the running version's `CHANGELOG.md` section,
-  shown once per build, closed with Esc or Enter.
+- Post-update popup lists the running version's changes once, with scrolling.
 - `computer_use` clicks inject real input (`SendInput`) and restore the pointer,
   so Windows Terminal and browsers respond instead of ignoring the click.
 - Context windows come from a LiteLLM snapshot (4800 ids) before the family
@@ -31,6 +31,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- Custom API-only provider setup: connect your own compatible endpoint and add or fetch model IDs.
 - Custom providers can select Bearer, JWT, X-API-Key, or no authentication.
 - MCP client: stdio servers listed in `~/.yopes/mcp.json` under `mcpServers`.
   Their tools appear as `mcp__<server>__<tool>` and ask for approval on every call.

@@ -10,7 +10,7 @@ YopesCLI is a Rust/Ratatui terminal coding agent. It can chat with OpenAI-compat
 ## Starting and setup
 
 - Launch `yopes` in the project directory.
-- If no provider is configured, use `/provider` to select a models.dev provider or configure a custom OpenAI-compatible endpoint.
+- Provider setup supports custom APIs only; when unconfigured, use `/provider connect` to add your own compatible endpoint and model.
 - Prefer environment variables or the saved connection; never ask users to paste secrets into source files or commit them.
 - Use `/provider models <name>` to switch models.
 

@@ -249,12 +249,11 @@ impl App {
                 }
             }
             ConnectStage::ModelContextWindow => {
-                let (provider_id, id, name, raw_window, custom_flow) = {
+                let (id, name, raw_window, custom_flow) = {
                     let Some(connect) = self.connect.as_ref() else {
                         return Action::None;
                     };
                     (
-                        connect.provider_id.clone(),
                         connect.custom_model_id.trim().to_owned(),
                         connect.custom_model_name.trim().to_owned(),
                         connect.custom_model_context_window.trim().to_owned(),
@@ -286,40 +285,6 @@ impl App {
                     }
                 };
                 if !custom_flow {
-                    // ponytail: in-memory catalog limit update with cached json sync; add full provider-level config override layer if catalog schema expands.
-                    if let Some(connect) = self.connect.as_mut() {
-                        let endpoint = connect.endpoint();
-                        if let Some(catalog) = connect.catalog.as_mut() {
-                            if let Some(pid) = &provider_id {
-                                if let Some(provider) = catalog.providers.get_mut(pid) {
-                                    if let Some(model) = provider.models.get_mut(&id) {
-                                        model.limit =
-                                            context_window.map(|context| catalog::Limit {
-                                                context: Some(context),
-                                            });
-                                    }
-                                }
-                            }
-                            let _ = catalog::save_cached(&self.config_path, catalog);
-                        }
-                        let _ = config::update_model_context_window(
-                            &self.config_path,
-                            &endpoint,
-                            &id,
-                            context_window,
-                        );
-                        self.backend
-                            .update_model_context_window(&id, context_window);
-                        connect.custom_model_id.clear();
-                        connect.custom_model_name.clear();
-                        connect.custom_model_context_window.clear();
-                        connect.stage = ConnectStage::Models;
-                        connect.error = None;
-                    }
-                    let desc = context_window
-                        .map(|c| format!("{c} tokens"))
-                        .unwrap_or_else(|| "default".to_owned());
-                    self.info(format!("Set context window for {id} to {desc}"));
                     return Action::None;
                 }
                 if let Some(connect) = self.connect.as_mut() {
@@ -378,16 +343,13 @@ impl App {
             KeyCode::Enter => {
                 // A key already stored for this endpoint is used as it is, so
                 // coming back to a provider does not ask for it again.
-                if let Some(key) = self.connect.as_ref().and_then(ConnectState::stored_key) {
-                    return self.finish_connect_with(KeySource::Stored(key), None);
-                }
                 let api_key = self
                     .connect
                     .as_ref()
                     .map(|connect| connect.api_key.trim().to_owned())
                     .unwrap_or_default();
                 if api_key.is_empty() {
-                    return self.finish_connect(None, None);
+                    return Action::None;
                 }
                 if let Some(connect) = self.connect.as_mut() {
                     connect.stage = ConnectStage::Password;
@@ -429,7 +391,7 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                let (password, custom_flow, api_key) = {
+                let (password, custom_flow) = {
                     let Some(connect) = self.connect.as_ref() else {
                         return Action::None;
                     };
@@ -440,16 +402,12 @@ impl App {
                             Some(connect.password.clone())
                         },
                         connect.custom_flow,
-                        connect.api_key.trim().to_owned(),
                     )
                 };
                 if custom_flow {
                     return self.finish_custom_connect(password);
                 }
-                if api_key.is_empty() {
-                    return self.finish_connect(None, None);
-                }
-                return self.finish_connect(Some(api_key), password);
+                let _ = password;
             }
             KeyCode::Backspace => {
                 if let Some(connect) = self.connect.as_mut() {

@@ -53,9 +53,6 @@ pub enum Action {
     /// Copy text to system clipboard.
     CopyClipboard(String),
     Quit,
-    LoadCatalog,
-    /// Fetch models.dev again, bypassing the cached copy.
-    RefreshCatalog,
     /// Fetch a custom provider's model list from its models endpoint.
     ///
     /// `base_url` is the endpoint the fetched list belongs to, so the saved
@@ -66,8 +63,6 @@ pub enum Action {
         token: Option<String>,
         auth: AuthKind,
     },
-    /// Fetch a provider's logo and draw it.
-    FetchLogo(String),
     /// Ask the provider for a short title after the first reply of a session.
     NameSession {
         task: String,

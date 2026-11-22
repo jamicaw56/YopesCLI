@@ -2,7 +2,6 @@
 //! helpers every handler reaches for.
 use ratatui::layout::Rect;
 
-use crate::catalog::{self, Catalog};
 use crate::config::{self, AuthKind, SavedModel};
 pub const CUSTOM_PROVIDER_ID: &str = "custom";
 /// Prefix of every reserved action row id: never a real model id.
@@ -18,10 +17,6 @@ pub(super) const EDIT_MODELS_URL_ID: &str = "__action:edit-models-url__";
 pub(super) const FETCH_MODELS_ID: &str = "__action:fetch-models__";
 /// Row that deletes an existing saved custom provider.
 pub(super) const REMOVE_PROVIDER_ID: &str = "__action:remove-provider__";
-/// Row that replaces the key of a catalog provider from its model list.
-pub(super) const EDIT_KEY_ID: &str = "__action:edit-key__";
-/// Row that forces a models.dev refetch from the provider list.
-pub(super) const REFRESH_CATALOG_ID: &str = "__action:refresh-catalog__";
 /// Context window presets the wizard offers, ascending in tokens.
 pub(super) const CONTEXT_WINDOW_PRESETS: &[(u64, &str)] = &[
     (32_000, "32K"),
@@ -108,16 +103,6 @@ impl ConnectStage {
         }
     }
 }
-/// How a connection gets its key.
-#[derive(Clone, Debug)]
-pub enum KeySource {
-    /// The user typed the key now, so it is written to disk.
-    Entered(String),
-    /// The key is already stored for this endpoint, so it is kept as it is.
-    Stored(String),
-    /// No key at all: the environment variable or the live key applies.
-    None,
-}
 #[derive(Clone, Debug)]
 pub struct ConnectItem {
     pub id: String,
@@ -147,39 +132,13 @@ pub(super) fn endpoint_host(url: &str) -> String {
     rest.split('/').next().unwrap_or_default().to_owned()
 }
 
-/// A single-glyph logo for a models.dev provider or the custom flow.
-pub fn provider_logo(id: &str) -> &'static str {
-    match id {
-        "openai" => "●",
-        "openrouter" => "⇄",
-        "anthropic" => "◇",
-        "google" => "▴",
-        "cohere" => "∞",
-        "mistral" => "↯",
-        "deepseek" => "∿",
-        "groq" => "»",
-        "fireworks" => "✦",
-        "xai" => "✕",
-        "perplexity" => "?",
-        "together" => "◈",
-        "azure" => "▣",
-        "aws" => "☁",
-        "cerebras" => "□",
-        "friendliai" => "♥",
-        "custom" => "⚙",
-        _ => "▸",
-    }
-}
 pub struct ConnectState {
     pub stage: ConnectStage,
     pub loading: bool,
     pub error: Option<String>,
     pub filter: String,
     pub selected: usize,
-    pub(crate) catalog: Option<Catalog>,
     pub(crate) saved_custom: Vec<config::CustomProvider>,
-    /// The models.dev provider being connected, when it came from the catalog.
-    pub provider_id: Option<String>,
     pub(crate) model_id: Option<String>,
     pub(crate) api_key: String,
     pub(crate) password: String,
@@ -213,13 +172,11 @@ impl ConnectState {
     pub(crate) fn loading() -> Self {
         Self {
             stage: ConnectStage::Providers,
-            loading: true,
+            loading: false,
             error: None,
             filter: String::new(),
             selected: 0,
-            catalog: Some(crate::catalog::default_catalog()),
             saved_custom: Vec::new(),
-            provider_id: None,
             model_id: None,
             api_key: String::new(),
             password: String::new(),
@@ -264,9 +221,9 @@ impl ConnectState {
                 if filter.is_empty() || "custom".contains(filter.as_str()) {
                     items.push(ConnectItem {
                         id: CUSTOM_PROVIDER_ID.to_owned(),
-                        title: "Add custom provider".to_owned(),
-                        detail: "new OpenAI-compatible endpoint".to_owned(),
-                        logo: provider_logo(CUSTOM_PROVIDER_ID),
+                        title: "Add custom API".to_owned(),
+                        detail: "connect your own API endpoint".to_owned(),
+                        logo: "⚙",
                         custom_id: None,
                         active: false,
                     });
@@ -283,107 +240,9 @@ impl ConnectState {
                         active: is_active(&saved.base_url),
                     });
                 }
-                if let Some(catalog) = &self.catalog {
-                    items.extend(
-                        catalog::connectable_providers(catalog)
-                            .into_iter()
-                            .filter(|(id, _)| *id != CUSTOM_PROVIDER_ID)
-                            .filter(|(id, provider)| {
-                                filter.is_empty()
-                                    || provider.name.to_ascii_lowercase().contains(filter.as_str())
-                                    || id.to_ascii_lowercase().contains(filter.as_str())
-                            })
-                            .map(|(id, provider)| ConnectItem {
-                                id: id.to_owned(),
-                                title: provider.name.clone(),
-                                detail: format!("{} models", provider.models.len()),
-                                logo: provider_logo(id),
-                                custom_id: None,
-                                active: is_active(provider.api.as_deref().unwrap_or("")),
-                            }),
-                    );
-                }
-                if filter.is_empty() || "refresh".contains(filter.as_str()) {
-                    items.push(ConnectItem {
-                        id: REFRESH_CATALOG_ID.to_owned(),
-                        title: "Refresh provider list".to_owned(),
-                        detail: "reload model IDs from models.dev".to_owned(),
-                        logo: "↻",
-                        custom_id: None,
-                        active: false,
-                    });
-                }
                 items
             }
-            ConnectStage::Models => {
-                let Some(provider) = self.provider() else {
-                    return Vec::new();
-                };
-                let mut items: Vec<ConnectItem> = catalog::provider_models(provider)
-                    .into_iter()
-                    .filter(|(id, model)| {
-                        filter.is_empty()
-                            || model.name.to_ascii_lowercase().contains(filter.as_str())
-                            || id.to_ascii_lowercase().contains(filter.as_str())
-                    })
-                    .map(|(id, model)| {
-                        let title = if model.name.trim().is_empty() {
-                            id.to_owned()
-                        } else {
-                            model.name.clone()
-                        };
-                        let context = model
-                            .limit
-                            .as_ref()
-                            .and_then(|limit| limit.context)
-                            .map_or_else(
-                                || id.to_owned(),
-                                |context| {
-                                    if context >= 1000 {
-                                        format!("{id} · {}k context", context / 1000)
-                                    } else {
-                                        format!("{id} · {context} context")
-                                    }
-                                },
-                            );
-                        let provider_id = self.provider_id.as_deref().unwrap_or_default();
-                        ConnectItem {
-                            id: id.to_owned(),
-                            title,
-                            detail: context,
-                            logo: provider_logo(provider_id),
-                            custom_id: None,
-                            active: !active_model.is_empty() && id == active_model,
-                        }
-                    })
-                    .collect();
-                // A stored key is reused when a model is picked, so the row
-                // that replaces it has to be there too.
-                if self
-                    .stored_secret
-                    .as_ref()
-                    .is_some_and(|secret| secret.has_key())
-                    && (filter.is_empty() || "change api key".contains(filter.as_str()))
-                {
-                    items.push(ConnectItem {
-                        id: EDIT_KEY_ID.to_owned(),
-                        title: "Change API key".to_owned(),
-                        detail: if self
-                            .stored_secret
-                            .as_ref()
-                            .is_some_and(|secret| secret.encrypted)
-                        {
-                            "set · encrypted".to_owned()
-                        } else {
-                            "set".to_owned()
-                        },
-                        logo: "✎",
-                        custom_id: None,
-                        active: false,
-                    });
-                }
-                items
-            }
+            ConnectStage::Models => Vec::new(),
             ConnectStage::CustomModels => {
                 let mut items: Vec<ConnectItem> = self
                     .custom_models
@@ -760,13 +619,7 @@ impl ConnectState {
     pub fn has_custom_models(&self) -> bool {
         !self.custom_models.is_empty()
     }
-    pub fn required_env(&self) -> Option<&str> {
-        self.provider()
-            .and_then(|provider| provider.env.first())
-            .map(String::as_str)
-    }
-    /// What the loading row of /connect names as its source: the custom
-    /// endpoint being queried, or the models.dev catalog.
+    /// What the loading row of /connect names as its source: a custom endpoint.
     pub fn loading_detail(&self) -> String {
         if self.custom_flow || self.stage == ConnectStage::CustomModels {
             let host = endpoint_host(&self.custom_endpoint);
@@ -776,34 +629,14 @@ impl ConnectState {
                 format!("  fetching models from {host}")
             }
         } else {
-            "  loading providers from models.dev".to_owned()
+            "  loading custom APIs".to_owned()
         }
-    }
-    pub(super) fn provider(&self) -> Option<&catalog::Provider> {
-        let id = self.provider_id.as_deref()?;
-        self.catalog.as_ref()?.providers.get(id)
     }
     /// The endpoint of the provider being connected.
-    pub(super) fn endpoint(&self) -> String {
-        match self.provider_id.as_deref() {
-            Some(id) => self
-                .provider()
-                .map(|provider| provider.base_url(id))
-                .unwrap_or_default(),
-            None => self.custom_endpoint.clone(),
-        }
-    }
     /// The stored key, ready to use without asking for anything.
     ///
     /// A secret saved without a password opens right away; an encrypted one
     /// needs its password first, so it is not returned here.
-    pub(super) fn stored_key(&self) -> Option<String> {
-        let secret = self.stored_secret.as_ref()?;
-        if !secret.has_key() || secret.encrypted {
-            return None;
-        }
-        secret.plaintext().map(ToOwned::to_owned)
-    }
     pub(super) fn selected_item(&self) -> Option<ConnectItem> {
         let items = self.items();
         if items.is_empty() {
@@ -828,12 +661,7 @@ impl ConnectState {
                 .find(|provider| provider.id == item.id)
                 .map(|provider| provider.base_url.clone());
         }
-        self.catalog
-            .as_ref()?
-            .providers
-            .get(&item.id)
-            .map(|provider| provider.base_url(&item.id))
-            .filter(|endpoint| !endpoint.trim().is_empty())
+        None
     }
     pub(super) fn move_selection(&mut self, forward: bool) {
         let len = self.items().len();

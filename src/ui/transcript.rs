@@ -140,11 +140,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         welcome.push(Line::raw(""));
         if !app.backend.is_configured() {
             welcome.push(Line::styled(
-                "No provider connected.",
+                "Custom API provider required — connect your own endpoint.",
                 Style::default().fg(muted()),
             ));
             welcome.push(Line::styled(
-                "Run /connect to add a provider or a custom endpoint.",
+                "Run /provider connect to configure a custom API provider.",
                 Style::default().fg(muted()),
             ));
         } else if app.backend.model().is_empty() {

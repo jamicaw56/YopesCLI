@@ -128,10 +128,10 @@ pub struct SavedModel {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    /// Dollars per million input tokens, when models.dev lists a price.
+    /// Dollars per million input tokens, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost: Option<f64>,
-    /// Dollars per million output tokens, when models.dev lists a price.
+    /// Dollars per million output tokens, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cost: Option<f64>,
     /// Manually set context-window size in tokens (e.g. 128000).
@@ -159,7 +159,6 @@ pub struct CustomProvider {
 /// to another provider.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SavedProvider {
-    /// The models.dev provider id, when the key came from the catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
     #[serde(default)]
@@ -231,7 +230,6 @@ pub struct Connection {
     pub models_url: Option<String>,
     /// Id of the saved custom provider to update; `None` creates a new entry.
     pub custom_provider_id: Option<String>,
-    /// The models.dev provider id, when the connection came from the catalog.
     pub provider_id: Option<String>,
     /// The key for this endpoint is already stored: keep that secret as it is
     /// rather than writing a new one.

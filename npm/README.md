@@ -7,6 +7,4 @@ your platform from [GitHub Releases](https://github.com/Jamicaw56/YopesCLI/relea
 verifies its SHA256 checksum against `SHA256SUMS`, and drops it next to the
 `bin` shim. Supported platforms: `win32-x64` and `linux-x64`.
 
-The `yopes` command then runs the binary directly. If the postinstall step was
-skipped (`npm install --ignore-scripts`), the shim says so and points at the
-releases page.
+The `yopes` command then runs the binary directly. Provider setup supports custom APIs only: run `yopes`, then `/provider connect` to configure your own compatible API endpoint. If the postinstall step was skipped (`npm install --ignore-scripts`), the shim says so and points at the releases page.

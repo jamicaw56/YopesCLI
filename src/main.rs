@@ -1,14 +1,13 @@
 mod app;
 mod backend;
-mod catalog;
 mod changelog;
 mod clipboard;
 mod config;
 mod credentials;
 mod delegation;
 mod diff;
-mod logos;
 mod mcp;
+mod model_api;
 mod models;
 mod session;
 mod skills;
@@ -37,7 +36,6 @@ use terminal::{TerminalGuard, ctrl_c_interrupt};
 use crate::{
     app::{Action, App, Mode, ToolEvent, ToolsMode},
     backend::{Backend, StreamEvent},
-    catalog::FetchResult,
     config::{AuthKind, Cli, Command, Config, load_session},
     session::{Message, Role, ToolCall},
 };
@@ -56,9 +54,7 @@ struct Channels {
     tools: mpsc::UnboundedSender<ToolEvent>,
     delegates: mpsc::UnboundedSender<crate::app::DelegateUpdate>,
     user_commands: mpsc::UnboundedSender<(u64, Result<String, String>)>,
-    catalog: mpsc::UnboundedSender<FetchResult>,
     models: mpsc::UnboundedSender<(Option<String>, Result<Vec<(String, String)>, String>)>,
-    logos: mpsc::UnboundedSender<(String, Result<crate::logos::Logo, String>)>,
     paste: mpsc::UnboundedSender<Result<(String, String), String>>,
     titles: mpsc::UnboundedSender<(u64, String)>,
 }
@@ -126,13 +122,8 @@ async fn run() -> Result<()> {
         mpsc::unbounded_channel::<crate::app::DelegateUpdate>();
     let (user_cmd_sender, mut user_cmd_receiver) =
         mpsc::unbounded_channel::<(u64, Result<String, String>)>();
-    let (catalog_sender, mut catalog_receiver) = mpsc::unbounded_channel::<FetchResult>();
-    let (models_sender, mut models_receiver) = mpsc::unbounded_channel::<(
-        Option<String>,
-        Result<Vec<(String, String)>, String>,
-    )>();
-    let (logo_sender, mut logo_receiver) =
-        mpsc::unbounded_channel::<(String, Result<crate::logos::Logo, String>)>();
+    let (models_sender, mut models_receiver) =
+        mpsc::unbounded_channel::<(Option<String>, Result<Vec<(String, String)>, String>)>();
     let (paste_sender, mut paste_receiver) =
         mpsc::unbounded_channel::<Result<(String, String), String>>();
     let (title_sender, mut title_receiver) = mpsc::unbounded_channel::<(u64, String)>();
@@ -147,9 +138,7 @@ async fn run() -> Result<()> {
         tools: tool_sender,
         delegates: delegate_sender,
         user_commands: user_cmd_sender,
-        catalog: catalog_sender,
         models: models_sender,
-        logos: logo_sender,
         paste: paste_sender,
         titles: title_sender,
     };
@@ -333,29 +322,10 @@ async fn run() -> Result<()> {
                 });
                 redraw_now = true;
             }
-            result = catalog_receiver.recv() => {
-                if let Some(result) = result {
-                    app.on_catalog(result);
-                }
-                for provider_id in app.take_pending_logos() {
-                    dispatch(
-                        Action::FetchLogo(provider_id),
-                        &mut app,
-                        &channels,
-                        &mut active_tasks,
-                    );
-                }
-                redraw_now = true;
-            }
             result = models_receiver.recv() => {
                 if let Some((base_url, result)) = result {
                     app.on_custom_models(base_url, result);
                 }
-                redraw_now = true;
-            }
-            result = logo_receiver.recv() => {
-                let Some((provider_id, result)) = result else { break; };
-                app.on_logo(provider_id, result);
                 redraw_now = true;
             }
             result = paste_receiver.recv() => {
@@ -695,26 +665,6 @@ fn dispatch(
                 let _ = sender.send((session_id, flatten_joined(joined, "command")));
             });
         }
-        Action::LoadCatalog => {
-            let sender = channels.catalog.clone();
-            let config_path = app.config_path().to_path_buf();
-            tokio::spawn(async move {
-                // The catalog is loaded once and kept next to the config; a
-                // later /connect reuses it instead of downloading it again.
-                if let Some(cached) = catalog::load_cached(&config_path) {
-                    let _ = sender.send(Ok(cached));
-                    return;
-                }
-                let _ = sender.send(fetch_and_cache_catalog(&config_path).await);
-            });
-        }
-        Action::RefreshCatalog => {
-            let sender = channels.catalog.clone();
-            let config_path = app.config_path().to_path_buf();
-            tokio::spawn(async move {
-                let _ = sender.send(fetch_and_cache_catalog(&config_path).await);
-            });
-        }
         Action::FetchCustomModels {
             url,
             base_url,
@@ -723,19 +673,10 @@ fn dispatch(
         } => {
             let sender = channels.models.clone();
             tokio::spawn(async move {
-                let result = catalog::fetch_models(&url, auth, token.as_deref())
+                let result = model_api::fetch_models(&url, auth, token.as_deref())
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let _ = sender.send((base_url, result));
-            });
-        }
-        Action::FetchLogo(provider_id) => {
-            let sender = channels.logos.clone();
-            tokio::spawn(async move {
-                let result = crate::logos::fetch(&provider_id)
-                    .await
-                    .map_err(|error| format!("{error:#}"));
-                let _ = sender.send((provider_id, result));
             });
         }
         Action::NameSession { task } => {
@@ -754,17 +695,6 @@ fn dispatch(
             });
         }
     }
-}
-
-/// Download the catalog and cache it next to the config. A fresh fetch must
-/// not stomp the context presets the user applied to models.
-async fn fetch_and_cache_catalog(config_path: &std::path::Path) -> FetchResult {
-    let mut result = catalog::fetch().await.map_err(|error| format!("{error:#}"));
-    if let Ok(catalog) = &mut result {
-        catalog::merge_saved_context_windows(config_path, catalog);
-        let _ = catalog::save_cached(config_path, catalog);
-    }
-    result
 }
 
 /// Flatten a blocking-pool join into the string result a channel carries.

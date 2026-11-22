@@ -17,10 +17,8 @@ use ratatui::{
 
 use crate::{
     backend::{Backend, StreamEvent},
-    catalog,
     config::{self, AuthKind, Connection, ProviderKind, SavedModel},
     diff::FileDiff,
-    logos::Logos,
     session::{self, ImageAttachment, Message, Role, Session, TaskState, ToolCall},
     skills, tools,
 };
@@ -388,10 +386,6 @@ pub struct App {
     sessions_dir: Option<PathBuf>,
     config_path: PathBuf,
     custom_providers: Vec<config::CustomProvider>,
-    /// The provider logos, drawn from the models.dev artwork.
-    pub logos: Logos,
-    /// The logos that still have to be fetched.
-    pending_logos: Vec<String>,
     /// Cache of rendered markdown blocks for completed messages, with their
     /// wrap row total: see `MarkdownBlock`.
     pub(crate) markdown_cache: HashMap<usize, MarkdownBlock>,
@@ -528,8 +522,6 @@ impl App {
             sessions_dir,
             config_path: config_path.clone(),
             custom_providers,
-            logos: Logos::new(crate::logos::cache_dir(&config_path)),
-            pending_logos: Vec::new(),
             markdown_cache: HashMap::new(),
             tool_frames: HashMap::new(),
             queued_message: None,
@@ -578,10 +570,6 @@ impl App {
 
     pub fn tavily_key(&self) -> Option<&str> {
         self.tavily_api_key.as_deref()
-    }
-
-    pub fn config_path(&self) -> &std::path::Path {
-        &self.config_path
     }
 
     pub fn connect_open(&self) -> bool {
@@ -713,8 +701,7 @@ impl App {
             return Some(window);
         }
 
-        // Cached models.dev catalog fallback
-        crate::catalog::lookup_cached_context_window(&self.config_path, model_id)
+        None
     }
 
     pub fn custom_providers(&self) -> &[config::CustomProvider] {
