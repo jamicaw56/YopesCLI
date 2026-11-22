@@ -12,8 +12,13 @@ pub(super) fn draw_connect(
     let width = (area.width.saturating_sub(4) * 92 / 100)
         .clamp(60, 120)
         .min(area.width.saturating_sub(2));
+    let min_height = if connect.stage == ConnectStage::AddProvider {
+        20
+    } else {
+        16
+    };
     let height = (area.height.saturating_sub(2) * 90 / 100)
-        .clamp(16, 40)
+        .clamp(min_height, 40)
         .min(area.height.saturating_sub(2));
     if width < 34 || height < 10 {
         return;
@@ -190,7 +195,18 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     lines.push(lbl);
     lines.push(val);
 
-    // 4. Models: name / modelID (two box split)
+    // 4. Authentication method: left/right cycle the supported schemes.
+    let auth_active = active == AddProviderField::Auth;
+    let (lbl, val) = field_line(
+        "Authentication:",
+        connect.custom_auth.label(),
+        auth_active,
+        inner.width,
+    );
+    lines.push(lbl);
+    lines.push(val);
+
+    // 5. Models: name / modelID (two box split)
     let models_active =
         active == AddProviderField::ModelName || active == AddProviderField::ModelId;
     lines.push(Line::from(vec![Span::styled(
@@ -262,7 +278,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     ));
     lines.push(Line::from(models_spans));
 
-    // 5. Context Window:
+    // 6. Context Window:
     let cw_display = if connect.custom_model_context_window.is_empty() {
         "128000"
     } else {
@@ -277,9 +293,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     lines.push(lbl);
     lines.push(val);
 
-    lines.push(Line::raw(""));
-
-    // 6. Done button
+    // 7. Done button
     let done_active = active == AddProviderField::Done;
     let done_style = if done_active {
         Style::default()
@@ -306,7 +320,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
         ));
     } else {
         lines.push(Line::styled(
-            "Tab switch box · Enter submit · Esc cancel",
+            "Tab switch box · ←/→ auth · Enter submit · Esc cancel",
             Style::default().fg(muted()),
         ));
     }
@@ -447,7 +461,7 @@ pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area:
                 .to_owned()
         }
         ConnectStage::AddProvider => {
-            "tab switch box · enter submit · esc close".to_owned()
+            "tab switch box · ←/→ auth · enter submit · esc close".to_owned()
         }
         ConnectStage::RenameProvider => {
             "enter rename · esc back".to_owned()

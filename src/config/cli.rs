@@ -70,6 +70,7 @@ mod tests {
 
     #[test]
     fn custom_auth_names_are_stable() {
+        assert_eq!(serde_json::to_string(&AuthKind::Jwt).unwrap(), "\"jwt\"");
         assert_eq!(
             serde_json::to_string(&AuthKind::XApiKey).unwrap(),
             "\"x-api-key\""

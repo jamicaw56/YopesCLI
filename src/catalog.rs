@@ -334,7 +334,9 @@ pub async fn fetch_models(
     let mut request = client.get(url.trim());
     if let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) {
         request = match auth {
-            crate::config::AuthKind::Bearer => request.bearer_auth(key),
+            crate::config::AuthKind::Bearer | crate::config::AuthKind::Jwt => {
+                request.bearer_auth(key)
+            }
             crate::config::AuthKind::XApiKey => request.header("x-api-key", key),
             crate::config::AuthKind::None => request,
         };

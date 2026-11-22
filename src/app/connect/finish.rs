@@ -90,6 +90,8 @@ impl App {
                     connect.custom_name.clear();
                     connect.custom_endpoint.clear();
                     connect.custom_token.clear();
+                    connect.custom_auth = config::AuthKind::Bearer;
+                    connect.custom_auth_explicit = false;
                     connect.custom_token_dirty = false;
                     connect.custom_models.clear();
                     connect.custom_models_url.clear();
@@ -321,20 +323,19 @@ impl App {
         };
 
         if let Some(connect) = self.connect.as_mut() {
+            let local_without_token = (endpoint.contains("://localhost")
+                || endpoint.contains("://127.0.0.1")
+                || endpoint.contains("://0.0.0.0"))
+                && connect.custom_token.trim().is_empty();
+            if !connect.custom_auth_explicit && local_without_token {
+                connect.custom_auth = config::AuthKind::None;
+            }
             connect.custom_flow = true;
             connect.custom_name = name;
-            let is_local = endpoint.contains("://localhost")
-                || endpoint.contains("://127.0.0.1")
-                || endpoint.contains("://0.0.0.0");
             connect.custom_endpoint = endpoint;
             connect.custom_models_url = models_url;
             connect.model_id = final_id;
             connect.custom_models = final_models;
-            connect.custom_auth = if !connect.custom_token.trim().is_empty() || !is_local {
-                config::AuthKind::Bearer
-            } else {
-                config::AuthKind::None
-            };
             connect.error = None;
         }
         self.finish_custom_connect(None)
@@ -562,8 +563,7 @@ impl App {
                     // remain; the saved lists are rewritten without the
                     // ones the endpoint no longer lists.
                     let count = saved_models.len();
-                    let base_url =
-                        base_url.unwrap_or_else(|| self.backend.base_url().to_owned());
+                    let base_url = base_url.unwrap_or_else(|| self.backend.base_url().to_owned());
                     let previous = config::load_endpoint_models(&self.config_path, &base_url);
                     for model in &mut saved_models {
                         if let Some(old) = previous.iter().find(|m| m.id == model.id) {
@@ -775,7 +775,6 @@ mod tests {
     use crate::app::Session;
     use crate::backend::Backend;
     use crate::config::{AuthKind, Connection, ProviderKind, SavedModel};
-    use std::path::PathBuf;
 
     /// A fetch from a custom provider rewrites the saved model list with what
     /// the `/models` response holds: models the endpoint no longer lists are

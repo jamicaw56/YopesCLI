@@ -480,7 +480,7 @@ impl Backend {
                 .json(&request);
             if let Some(api_key) = &self.api_key {
                 builder = match self.auth {
-                    AuthKind::Bearer => builder.bearer_auth(api_key),
+                    AuthKind::Bearer | AuthKind::Jwt => builder.bearer_auth(api_key),
                     AuthKind::XApiKey => builder.header("x-api-key", api_key.as_str()),
                     AuthKind::None => builder,
                 };

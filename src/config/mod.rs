@@ -81,6 +81,7 @@ impl ProviderKind {
 pub enum AuthKind {
     #[default]
     Bearer,
+    Jwt,
     XApiKey,
     None,
 }
@@ -89,13 +90,35 @@ impl AuthKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Bearer => "Bearer token",
-            Self::XApiKey => "x-api-key",
+            Self::Jwt => "JWT token",
+            Self::XApiKey => "X-API-Key",
             Self::None => "No auth",
         }
     }
 
     pub const fn requires_token(self) -> bool {
         !matches!(self, Self::None)
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::AuthKind;
+
+    #[test]
+    fn custom_auth_schemes_have_expected_labels_and_saved_names() {
+        assert_eq!(AuthKind::Bearer.label(), "Bearer token");
+        assert_eq!(AuthKind::Jwt.label(), "JWT token");
+        assert_eq!(AuthKind::XApiKey.label(), "X-API-Key");
+        assert_eq!(AuthKind::None.label(), "No auth");
+        for (auth, json) in [
+            (AuthKind::Bearer, "\"bearer\""),
+            (AuthKind::Jwt, "\"jwt\""),
+            (AuthKind::XApiKey, "\"x-api-key\""),
+            (AuthKind::None, "\"none\""),
+        ] {
+            assert_eq!(serde_json::to_string(&auth).unwrap(), json);
+        }
     }
 }
 

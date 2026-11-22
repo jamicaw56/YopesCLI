@@ -41,10 +41,11 @@ pub enum AddProviderField {
     Name = 0,
     CompletionUrl = 1,
     ModelsUrl = 2,
-    ModelName = 3,
-    ModelId = 4,
-    ContextWindow = 5,
-    Done = 6,
+    Auth = 3,
+    ModelName = 4,
+    ModelId = 5,
+    ContextWindow = 6,
+    Done = 7,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,6 +189,7 @@ pub struct ConnectState {
     pub(crate) custom_endpoint: String,
     pub(crate) custom_models_url: String,
     pub(crate) custom_auth: AuthKind,
+    pub(crate) custom_auth_explicit: bool,
     pub(crate) custom_token: String,
     /// The token was edited during this visit, so it needs saving again.
     pub(crate) custom_token_dirty: bool,
@@ -227,6 +229,7 @@ impl ConnectState {
             custom_endpoint: String::new(),
             custom_models_url: String::new(),
             custom_auth: AuthKind::Bearer,
+            custom_auth_explicit: false,
             custom_token: String::new(),
             custom_token_dirty: false,
             custom_models: Vec::new(),
@@ -655,15 +658,17 @@ impl ConnectState {
             0 | 1 => Some(AddProviderField::Name),
             2 | 3 => Some(AddProviderField::CompletionUrl),
             4 | 5 => Some(AddProviderField::ModelsUrl),
-            6 | 7 => {
+            6 | 7 => Some(AddProviderField::Auth),
+            8 => Some(AddProviderField::ModelName),
+            9 => {
                 if col < inner.x.saturating_add(inner.width / 2) {
                     Some(AddProviderField::ModelName)
                 } else {
                     Some(AddProviderField::ModelId)
                 }
             }
-            8 | 9 => Some(AddProviderField::ContextWindow),
-            10..=12 => Some(AddProviderField::Done),
+            10 | 11 => Some(AddProviderField::ContextWindow),
+            12..=14 => Some(AddProviderField::Done),
             _ => None,
         }
     }
@@ -745,6 +750,7 @@ impl ConnectState {
             AddProviderField::Name => Some(&mut self.custom_name),
             AddProviderField::CompletionUrl => Some(&mut self.custom_endpoint),
             AddProviderField::ModelsUrl => Some(&mut self.custom_models_url),
+            AddProviderField::Auth => None,
             AddProviderField::ModelName => Some(&mut self.custom_model_name),
             AddProviderField::ModelId => Some(&mut self.custom_model_id),
             AddProviderField::ContextWindow => Some(&mut self.custom_model_context_window),
@@ -1020,19 +1026,24 @@ mod tests {
             connect.field_at_mouse(15, 14),
             Some(AddProviderField::ModelsUrl)
         );
+        assert_eq!(connect.field_at_mouse(20, 16), Some(AddProviderField::Auth));
         assert_eq!(
-            connect.field_at_mouse(20, 16),
+            connect.field_at_mouse(20, 18),
             Some(AddProviderField::ModelName)
         );
         assert_eq!(
-            connect.field_at_mouse(60, 16),
+            connect.field_at_mouse(20, 19),
+            Some(AddProviderField::ModelName)
+        );
+        assert_eq!(
+            connect.field_at_mouse(60, 19),
             Some(AddProviderField::ModelId)
         );
         assert_eq!(
-            connect.field_at_mouse(15, 18),
+            connect.field_at_mouse(15, 20),
             Some(AddProviderField::ContextWindow)
         );
-        assert_eq!(connect.field_at_mouse(15, 20), Some(AddProviderField::Done));
+        assert_eq!(connect.field_at_mouse(15, 22), Some(AddProviderField::Done));
 
         connect.add_provider_field = AddProviderField::Name;
         connect

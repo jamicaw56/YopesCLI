@@ -31,6 +31,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- Custom providers can select Bearer, JWT, X-API-Key, or no authentication.
 - MCP client: stdio servers listed in `~/.yopes/mcp.json` under `mcpServers`.
   Their tools appear as `mcp__<server>__<tool>` and ask for approval on every call.
 - Global state lives in `~/.yopes/` (config, sessions, skills, `mcp.json`). The
