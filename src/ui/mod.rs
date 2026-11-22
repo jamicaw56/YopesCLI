@@ -109,7 +109,16 @@ fn draw_backdrop(frame: &mut Frame, area: Rect) {
     let base = if light {
         Color::Rgb(247, 248, 251)
     } else {
-        Color::Rgb(9, 11, 19)
+        // `auto` lifts the void with the clock: deepest at night, open and
+        // cooler at noon.
+        match crate::theme::daylight() {
+            Some(daylight) => blend(
+                Color::Rgb(9, 11, 19),
+                Color::Rgb(22, 28, 44),
+                (daylight * 100.0) as usize,
+            ),
+            None => Color::Rgb(9, 11, 19),
+        }
     };
     let wash = blend(theme.accent2, base, 90);
     let haze = blend(theme.accent, base, 94);

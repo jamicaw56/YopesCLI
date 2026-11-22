@@ -13,6 +13,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `/set theme auto` moves the background with the clock: the palette blends nine local-hour keyframes (night, dawn, morning, noon, afternoon, dusk, evening) and the ambient backdrop lifts from its night base toward noon, repainting on the minute even when the session is idle.
 - Custom API setup is now a four-field quick form: name, completion URL, model ID, token. Models URL, auth, model name and context window default sensibly and stay editable later.
 - The UI has a theme-aware ambient backdrop (soft vertical wash, sparse dot grid) and a branded header mark.
 - `read_all` reads every text file under a directory recursively, honoring `.yopesignore`.

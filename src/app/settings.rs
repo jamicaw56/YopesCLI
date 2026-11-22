@@ -49,7 +49,7 @@ fn choices(key: &str) -> Vec<&'static str> {
     match key {
         "tools" => vec!["on", "yolo", "ask", "off"],
         "mode" => vec!["build", "plan", "chat"],
-        "theme" => crate::theme::THEMES.iter().map(|(name, _)| *name).collect(),
+        "theme" => crate::theme::list(),
         "effort" => vec!["off", "low", "medium", "high", "xhigh"],
         "compact" => vec!["on", "off"],
         "diff" => vec!["side-by-side", "unified"],

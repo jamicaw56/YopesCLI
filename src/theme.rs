@@ -1,13 +1,18 @@
 //! UI color themes: built-in palettes, the active one picked by an index into
-//! the static list so every draw call can read colors lock-free.
+//! the static list so every draw call can read colors lock-free, plus `auto`,
+//! which blends a clock-driven palette on every read instead.
 //!
 //! Each palette carries two extra roles beyond the classic eight: `dim`, for
 //! rules and borders that must stay quieter than `muted` text, and
 //! `accent2`, the secondary accent for brand marks, cursors and highlights,
 //! so the primary accent stays reserved for interactive state.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use chrono::Timelike;
 use ratatui::style::Color;
 
 /// One palette. `text` of `Color::Reset` keeps the terminal's default.
@@ -227,6 +232,11 @@ pub const THEMES: [(&str, Theme); 13] = [
 ];
 
 static INDEX: AtomicUsize = AtomicUsize::new(0);
+/// On while the palette follows the local clock instead of a static one.
+static AUTO: AtomicBool = AtomicBool::new(false);
+/// The minute `auto` last asked for a repaint, so a session left alone still
+/// redraws when the clock moves instead of waiting for a keypress.
+static AUTO_SEEN: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Index of `name` in the built-in list, case-insensitive.
 pub fn by_name(name: &str) -> Option<usize> {
@@ -237,8 +247,13 @@ pub fn by_name(name: &str) -> Option<usize> {
 
 /// Activate the named theme; `false` when the name is unknown.
 pub fn set(name: &str) -> bool {
+    if name.eq_ignore_ascii_case("auto") {
+        AUTO.store(true, Ordering::Relaxed);
+        return true;
+    }
     match by_name(name) {
         Some(index) => {
+            AUTO.store(false, Ordering::Relaxed);
             INDEX.store(index, Ordering::Relaxed);
             true
         }
@@ -246,28 +261,226 @@ pub fn set(name: &str) -> bool {
     }
 }
 
-/// The active palette.
-pub fn current() -> &'static Theme {
-    &THEMES[INDEX.load(Ordering::Relaxed)].1
+/// The active palette. `auto` samples the local clock on every read, so every
+/// draw call stays lock-free while the backdrop drifts through the day; a
+/// static theme costs one atomic load and a copy.
+pub fn current() -> Theme {
+    if AUTO.load(Ordering::Relaxed) {
+        auto_at(local_hour())
+    } else {
+        THEMES[INDEX.load(Ordering::Relaxed)].1
+    }
 }
 
 /// Name of the active theme.
 pub fn current_name() -> &'static str {
-    THEMES[INDEX.load(Ordering::Relaxed)].0
+    if AUTO.load(Ordering::Relaxed) {
+        "auto"
+    } else {
+        THEMES[INDEX.load(Ordering::Relaxed)].0
+    }
 }
 
-/// Comma-separated list of the built-in names, for `/set theme`.
+/// Every name `/set theme` accepts: `auto` first, then the built-in palettes.
+pub fn list() -> Vec<&'static str> {
+    std::iter::once("auto")
+        .chain(THEMES.iter().map(|(name, _)| *name))
+        .collect()
+}
+
+/// The offered names joined up, for `/set theme`.
 pub fn names() -> String {
-    THEMES
+    list().join(" · ")
+}
+
+/// One channel triple the `auto` ramp blends between keyframes.
+type Rgb = (u8, u8, u8);
+
+/// An `auto` keyframe: the palette at one local hour.
+struct Key {
+    hour: f32,
+    muted: Rgb,
+    dim: Rgb,
+    accent: Rgb,
+    accent2: Rgb,
+    text: Rgb,
+    code: Rgb,
+}
+
+/// Local-hour keyframes for `auto`, midnight repeating so the ramp wraps.
+/// Diff and warning colors stay fixed: their meaning must not drift with the
+/// sun, and every `dim` stays under 420 so the backdrop keeps its dark base
+/// all day.
+const AUTO_KEYS: [Key; 9] = [
+    Key {
+        hour: 0.0, // midnight
+        muted: (74, 84, 116),
+        dim: (40, 46, 74),
+        accent: (124, 148, 236),
+        accent2: (158, 134, 246),
+        text: (194, 204, 228),
+        code: (114, 178, 226),
+    },
+    Key {
+        hour: 4.0, // pre-dawn
+        muted: (80, 84, 120),
+        dim: (44, 46, 78),
+        accent: (132, 144, 230),
+        accent2: (170, 136, 240),
+        text: (196, 202, 226),
+        code: (120, 172, 224),
+    },
+    Key {
+        hour: 6.0, // dawn
+        muted: (128, 104, 118),
+        dim: (74, 58, 72),
+        accent: (244, 168, 148),
+        accent2: (250, 196, 132),
+        text: (226, 214, 216),
+        code: (150, 196, 214),
+    },
+    Key {
+        hour: 8.0, // morning
+        muted: (140, 122, 100),
+        dim: (80, 70, 56),
+        accent: (248, 198, 118),
+        accent2: (250, 168, 96),
+        text: (234, 226, 212),
+        code: (110, 196, 180),
+    },
+    Key {
+        hour: 12.0, // noon
+        muted: (116, 136, 158),
+        dim: (64, 76, 92),
+        accent: (128, 206, 255),
+        accent2: (154, 232, 222),
+        text: (216, 226, 238),
+        code: (110, 214, 236),
+    },
+    Key {
+        hour: 15.0, // afternoon
+        muted: (120, 138, 140),
+        dim: (66, 78, 80),
+        accent: (134, 214, 202),
+        accent2: (246, 206, 128),
+        text: (214, 226, 224),
+        code: (120, 206, 214),
+    },
+    Key {
+        hour: 18.0, // dusk
+        muted: (142, 112, 124),
+        dim: (82, 64, 74),
+        accent: (252, 156, 116),
+        accent2: (226, 146, 206),
+        text: (234, 220, 220),
+        code: (240, 176, 140),
+    },
+    Key {
+        hour: 21.0, // evening
+        muted: (104, 104, 146),
+        dim: (52, 54, 78),
+        accent: (168, 156, 248),
+        accent2: (200, 148, 244),
+        text: (204, 206, 234),
+        code: (150, 176, 240),
+    },
+    Key {
+        hour: 24.0, // midnight again, so the ramp wraps
+        muted: (74, 84, 116),
+        dim: (40, 46, 74),
+        accent: (124, 148, 236),
+        accent2: (158, 134, 246),
+        text: (194, 204, 228),
+        code: (114, 178, 226),
+    },
+];
+
+/// `t` of the way from `from` to `to`, per channel.
+fn mix(from: Rgb, to: Rgb, t: f32) -> Rgb {
+    let step = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+    (step(from.0, to.0), step(from.1, to.1), step(from.2, to.2))
+}
+
+fn rgb(from: Rgb) -> Color {
+    Color::Rgb(from.0, from.1, from.2)
+}
+
+/// The local hour as one fractional number, so the palette moves smoothly
+/// between keyframes instead of stepping on the hour.
+fn local_hour() -> f32 {
+    let now = chrono::Local::now();
+    now.hour() as f32 + now.minute() as f32 / 60.0
+}
+
+/// The `auto` palette at a fractional local hour.
+fn auto_at(hour: f32) -> Theme {
+    let index = AUTO_KEYS
         .iter()
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>()
-        .join(" · ")
+        .skip(1)
+        .position(|key| hour < key.hour)
+        .map(|found| found + 1)
+        .unwrap_or(AUTO_KEYS.len() - 1);
+    let (low, high) = (&AUTO_KEYS[index - 1], &AUTO_KEYS[index]);
+    let t = ((hour - low.hour) / (high.hour - low.hour)).clamp(0.0, 1.0);
+    Theme {
+        muted: rgb(mix(low.muted, high.muted, t)),
+        dim: rgb(mix(low.dim, high.dim, t)),
+        accent: rgb(mix(low.accent, high.accent, t)),
+        accent2: rgb(mix(low.accent2, high.accent2, t)),
+        error: Color::Rgb(244, 113, 116),
+        added: Color::Rgb(110, 225, 158),
+        removed: Color::Rgb(244, 113, 116),
+        warning: Color::Rgb(230, 180, 110),
+        text: rgb(mix(low.text, high.text, t)),
+        code: rgb(mix(low.code, high.code, t)),
+    }
+}
+
+/// How far the clock has rolled into daylight: 0.0 at midnight, 1.0 at noon,
+/// `None` unless `auto` is active. The backdrop rides this so the void itself
+/// opens up during the day instead of only changing hue.
+pub fn daylight() -> Option<f32> {
+    AUTO.load(Ordering::Relaxed)
+        .then(|| (1.0 - (std::f32::consts::TAU * local_hour() / 24.0).cos()) / 2.0)
+}
+
+/// True once per wall-clock minute while `auto` is on: the event loop's ticker
+/// uses it to repaint a session nobody is touching.
+pub fn auto_redraw_due() -> bool {
+    if !AUTO.load(Ordering::Relaxed) {
+        return false;
+    }
+    let minute = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| (since.as_secs() / 60) as u32)
+        .unwrap_or(0);
+    AUTO_SEEN.swap(minute, Ordering::Relaxed) != minute
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `auto` holds the backdrop on its dark base, keeps dim separated from
+    /// muted, and actually moves across the day.
+    #[test]
+    fn auto_blends_the_clock_and_stays_readable() {
+        for step in 0..240 {
+            let hour = step as f32 / 10.0;
+            let theme = auto_at(hour);
+            let (Color::Rgb(mr, mg, mb), Color::Rgb(dr, dg, db)) = (theme.muted, theme.dim) else {
+                panic!("auto must define muted and dim as rgb");
+            };
+            let muted = u32::from(mr) + u32::from(mg) + u32::from(mb);
+            let dim = u32::from(dr) + u32::from(dg) + u32::from(db);
+            assert!(muted.abs_diff(dim) >= 60, "hour {hour} does not separate");
+            assert!(dim < 420, "hour {hour} lights the backdrop");
+        }
+        // The ramp is not one frozen palette: noon differs from midnight.
+        assert_ne!(auto_at(13.0).accent, auto_at(1.0).accent);
+        assert_eq!(list()[0], "auto");
+        assert!(names().starts_with("auto"));
+    }
 
     #[test]
     fn names_resolve_case_insensitively() {
@@ -276,6 +489,20 @@ mod tests {
         assert!(by_name("nope").is_none());
         assert!(set("dark"));
         assert_eq!(current_name(), "dark");
+        // `auto` is a name with no palette behind it: it flips the clock
+        // flag instead of the index, and the read that follows samples the
+        // ramp. Kept here, the one test that owns the global, so no other
+        // test can catch the flag mid-flip.
+        assert!(set("auto"));
+        assert_eq!(current_name(), "auto");
+        assert!(matches!(current().muted, Color::Rgb(..)));
+        assert!(daylight().is_some());
+        assert!(auto_redraw_due());
+        assert!(!auto_redraw_due());
+        assert!(set("dark"));
+        assert_eq!(current_name(), "dark");
+        assert!(daylight().is_none());
+        assert!(!auto_redraw_due());
     }
 
     #[test]

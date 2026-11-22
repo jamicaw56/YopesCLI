@@ -746,6 +746,9 @@ impl App {
                 .is_some_and(|mark| self.spinner.wrapping_sub(mark) < 5)
             // The model fetch spinner animates while it waits.
             || self.fetching_models
+            // `auto` repaints on the minute so a quiet session still moves
+            // from morning to night.
+            || crate::theme::auto_redraw_due()
     }
 
     /// Record whether the terminal has focus.

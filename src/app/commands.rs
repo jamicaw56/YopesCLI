@@ -150,9 +150,9 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
                 "Everything runs unattended, computer_use included",
             ),
         ]),
-        ("/set", ["theme"]) => crate::theme::THEMES
-            .iter()
-            .map(|(name, _)| ((*name).to_owned(), "Color palette"))
+        ("/set", ["theme"]) => crate::theme::list()
+            .into_iter()
+            .map(|name| (name.to_owned(), "Color palette"))
             .collect(),
         ("/set", ["effort"]) => list(&[
             ("off", "Provider default"),
