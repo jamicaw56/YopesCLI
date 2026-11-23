@@ -28,7 +28,7 @@ use messages::{
 use retry::send_with_retry;
 use sse::{
     OpenAiState, Stalled, consume_lines, parse_anthropic_line, parse_gemini_line,
-    parse_ollama_line, parse_openai_line, send_parsed,
+    parse_ollama_line, parse_openai_line, send_parsed, tool_call_rejected,
 };
 
 #[derive(Debug)]
@@ -435,6 +435,42 @@ impl Backend {
     }
 
     async fn stream_openai(
+        &self,
+        request_id: u64,
+        messages: &[Message],
+        tooling: bool,
+        mode_note: Option<String>,
+        workspace: &Path,
+        events: &mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<()> {
+        let result = self
+            .stream_openai_once(
+                request_id,
+                messages,
+                tooling,
+                mode_note.clone(),
+                workspace,
+                events,
+            )
+            .await;
+        if let Err(error) = result {
+            if tooling && tool_call_rejected(&format!("{error:#}")) {
+                let _ = events.send(StreamEvent::Retrying {
+                    request_id,
+                    attempt: 1,
+                    delay_secs: 0,
+                    reason: "provider rejected tool calls; continuing without tools".to_owned(),
+                });
+                return self
+                    .stream_openai_once(request_id, messages, false, mode_note, workspace, events)
+                    .await;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn stream_openai_once(
         &self,
         request_id: u64,
         messages: &[Message],

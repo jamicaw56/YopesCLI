@@ -8,6 +8,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- Custom providers that reject tool-call history now retry without tools instead of dumping a validation error.
 - Sending a message in a large directory no longer freezes the CLI: AGENTS.md discovery is bounded and cached.
 - Gemini tool calls replay their thought signature, so Google models keep working after the first tool call.
 

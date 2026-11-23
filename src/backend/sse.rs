@@ -479,6 +479,27 @@ fn sse_data(line: &str) -> SseLine<'_> {
     }
 }
 
+/// Whether a provider error says it rejected the OpenAI tool-call schema.
+///
+/// Custom endpoints often accept `tools` but not `tool_calls` in assistant
+/// history, or reject the `tool_call_id` on a result. Strict servers answer
+/// with a union of Pydantic errors naming those fields, so the request is
+/// worth retrying once with the tool history stripped.
+pub(super) fn tool_call_rejected(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    let names_tools = detail.contains("tool_calls")
+        || detail.contains("tool_call_id")
+        || detail.contains("tool_choice")
+        || detail.contains("tools");
+    let rejection = detail.contains("extra inputs are not permitted")
+        || detail.contains("field required")
+        || detail.contains("unrecognized request argument")
+        || detail.contains("unexpected")
+        || detail.contains("not supported")
+        || detail.contains("unsupported");
+    names_tools && rejection
+}
+
 pub(super) fn parse_openai_line(
     line: &str,
     state: &mut OpenAiState,
@@ -837,9 +858,28 @@ pub(super) fn parse_gemini_line(
 mod tests {
     use super::{
         OpenAiState, ParsedEvent, parse_anthropic_line, parse_gemini_line, parse_ollama_line,
-        parse_openai_line, progress_detail, transport_failure,
+        parse_openai_line, progress_detail, tool_call_rejected, transport_failure,
     };
     use crate::backend::retry::response_error_detail;
+
+    #[test]
+    fn recognizes_a_provider_rejecting_tool_call_history() {
+        let detail = "provider stream error: [{'type': 'extra_forbidden', \
+            'loc': ('body', 'messages', 2, 'typed-dict', 'tool_calls'), \
+            'msg': 'Extra inputs are not permitted'}, \
+            {'type': 'missing', 'loc': ('body', 'messages', 2, 'tool_call_id'), \
+            'msg': 'Field required'}]";
+        assert!(tool_call_rejected(detail));
+        assert!(tool_call_rejected(
+            "unrecognized request argument supplied: tools"
+        ));
+        assert!(!tool_call_rejected(
+            "provider stream error: invalid API key"
+        ));
+        assert!(!tool_call_rejected(
+            "provider stream error: the model timed out"
+        ));
+    }
 
     #[test]
     fn parses_openai_deltas_and_done() {
