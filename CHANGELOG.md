@@ -14,7 +14,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
-- `/set theme auto` moves the background with the clock: the palette blends nine local-hour keyframes (night, dawn, morning, noon, afternoon, dusk, evening) and the ambient backdrop lifts from its night base toward noon, repainting on the minute even when the session is idle.
+- `/set theme auto` moves the background with the clock: the palette and a sky gradient blend nine local-hour keyframes (midnight, pre-dawn, dawn, morning, noon, afternoon, sunset, evening), with stars that fade in at night, repainting on the minute even when the session is idle.
 - Custom API setup is now a four-field quick form: name, completion URL, model ID, token. Models URL, auth, model name and context window default sensibly and stay editable later.
 - The UI has a theme-aware ambient backdrop (soft vertical wash, sparse dot grid) and a branded header mark.
 - `read_all` reads every text file under a directory recursively, honoring `.yopesignore`.
@@ -24,6 +24,8 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- Images in tool results are sharper: they fit the frame width instead of being cropped on the right, and keep their aspect ratio.
+- Saved custom providers show a name-based monogram instead of identical star placeholders.
 - Provider setup is custom-API-only; the first-run screen and installers direct users to configure their own compatible API.
 - Custom provider model fetch reconciles the saved list against the `/models`
   response: models the endpoint dropped are removed from disk too, and the

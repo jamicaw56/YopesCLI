@@ -296,9 +296,14 @@ pub fn names() -> String {
 /// One channel triple the `auto` ramp blends between keyframes.
 type Rgb = (u8, u8, u8);
 
-/// An `auto` keyframe: the palette at one local hour.
+/// An `auto` keyframe: the palette and sky at one local hour.
 struct Key {
     hour: f32,
+    /// Backdrop color at the top row and at the bottom row.
+    top: Rgb,
+    horizon: Rgb,
+    /// Star strength, 0-100.
+    stars: u8,
     muted: Rgb,
     dim: Rgb,
     accent: Rgb,
@@ -310,10 +315,13 @@ struct Key {
 /// Local-hour keyframes for `auto`, midnight repeating so the ramp wraps.
 /// Diff and warning colors stay fixed: their meaning must not drift with the
 /// sun, and every `dim` stays under 420 so the backdrop keeps its dark base
-/// all day.
-const AUTO_KEYS: [Key; 9] = [
+/// all day. Sky colors stay dark too, so `muted` text keeps its contrast.
+static AUTO_KEYS: [Key; 9] = [
     Key {
         hour: 0.0, // midnight
+        top: (5, 7, 16),
+        horizon: (12, 16, 36),
+        stars: 100,
         muted: (74, 84, 116),
         dim: (40, 46, 74),
         accent: (124, 148, 236),
@@ -323,6 +331,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 4.0, // pre-dawn
+        top: (8, 10, 26),
+        horizon: (22, 24, 56),
+        stars: 80,
         muted: (80, 84, 120),
         dim: (44, 46, 78),
         accent: (132, 144, 230),
@@ -332,6 +343,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 6.0, // dawn
+        top: (20, 22, 50),
+        horizon: (70, 38, 48),
+        stars: 15,
         muted: (128, 104, 118),
         dim: (74, 58, 72),
         accent: (244, 168, 148),
@@ -341,6 +355,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 8.0, // morning
+        top: (22, 42, 78),
+        horizon: (58, 52, 54),
+        stars: 0,
         muted: (140, 122, 100),
         dim: (80, 70, 56),
         accent: (248, 198, 118),
@@ -350,6 +367,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 12.0, // noon
+        top: (14, 32, 68),
+        horizon: (28, 58, 98),
+        stars: 0,
         muted: (116, 136, 158),
         dim: (64, 76, 92),
         accent: (128, 206, 255),
@@ -359,6 +379,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 15.0, // afternoon
+        top: (16, 34, 68),
+        horizon: (36, 62, 88),
+        stars: 0,
         muted: (120, 138, 140),
         dim: (66, 78, 80),
         accent: (134, 214, 202),
@@ -367,7 +390,10 @@ const AUTO_KEYS: [Key; 9] = [
         code: (120, 206, 214),
     },
     Key {
-        hour: 18.0, // dusk
+        hour: 18.0, // sunset
+        top: (32, 26, 64),
+        horizon: (80, 40, 36),
+        stars: 0,
         muted: (142, 112, 124),
         dim: (82, 64, 74),
         accent: (252, 156, 116),
@@ -377,6 +403,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 21.0, // evening
+        top: (10, 11, 32),
+        horizon: (34, 24, 56),
+        stars: 60,
         muted: (104, 104, 146),
         dim: (52, 54, 78),
         accent: (168, 156, 248),
@@ -386,6 +415,9 @@ const AUTO_KEYS: [Key; 9] = [
     },
     Key {
         hour: 24.0, // midnight again, so the ramp wraps
+        top: (5, 7, 16),
+        horizon: (12, 16, 36),
+        stars: 100,
         muted: (74, 84, 116),
         dim: (40, 46, 74),
         accent: (124, 148, 236),
@@ -412,8 +444,8 @@ fn local_hour() -> f32 {
     now.hour() as f32 + now.minute() as f32 / 60.0
 }
 
-/// The `auto` palette at a fractional local hour.
-fn auto_at(hour: f32) -> Theme {
+/// The keyframes around a fractional hour, and how far between them (0-1).
+fn bracket(hour: f32) -> (&'static Key, &'static Key, f32) {
     let index = AUTO_KEYS
         .iter()
         .skip(1)
@@ -422,6 +454,12 @@ fn auto_at(hour: f32) -> Theme {
         .unwrap_or(AUTO_KEYS.len() - 1);
     let (low, high) = (&AUTO_KEYS[index - 1], &AUTO_KEYS[index]);
     let t = ((hour - low.hour) / (high.hour - low.hour)).clamp(0.0, 1.0);
+    (low, high, t)
+}
+
+/// The `auto` palette at a fractional local hour.
+fn auto_at(hour: f32) -> Theme {
+    let (low, high, t) = bracket(hour);
     Theme {
         muted: rgb(mix(low.muted, high.muted, t)),
         dim: rgb(mix(low.dim, high.dim, t)),
@@ -436,12 +474,21 @@ fn auto_at(hour: f32) -> Theme {
     }
 }
 
-/// How far the clock has rolled into daylight: 0.0 at midnight, 1.0 at noon,
-/// `None` unless `auto` is active. The backdrop rides this so the void itself
-/// opens up during the day instead of only changing hue.
-pub fn daylight() -> Option<f32> {
-    AUTO.load(Ordering::Relaxed)
-        .then(|| (1.0 - (std::f32::consts::TAU * local_hour() / 24.0).cos()) / 2.0)
+/// The sky at a fractional local hour: top color, bottom color, star
+/// strength 0-100.
+fn sky_at(hour: f32) -> (Color, Color, usize) {
+    let (low, high, t) = bracket(hour);
+    let stars = f32::from(low.stars) + (f32::from(high.stars) - f32::from(low.stars)) * t;
+    (
+        rgb(mix(low.top, high.top, t)),
+        rgb(mix(low.horizon, high.horizon, t)),
+        stars.round() as usize,
+    )
+}
+
+/// The sky the backdrop paints right now: `None` unless `auto` is active.
+pub fn sky() -> Option<(Color, Color, usize)> {
+    AUTO.load(Ordering::Relaxed).then(|| sky_at(local_hour()))
 }
 
 /// True once per wall-clock minute while `auto` is on: the event loop's ticker
@@ -482,6 +529,30 @@ mod tests {
         assert!(names().starts_with("auto"));
     }
 
+    /// The sky changes with the hour, stars only show at night, and no hour
+    /// gets bright enough to wash out the text drawn over it.
+    #[test]
+    fn sky_follows_the_clock_and_stays_dark() {
+        for step in 0..240 {
+            let (top, horizon, stars) = sky_at(step as f32 / 10.0);
+            for color in [top, horizon] {
+                let Color::Rgb(r, g, b) = color else {
+                    panic!("sky must be rgb")
+                };
+                assert!(
+                    r.max(g).max(b) <= 110,
+                    "hour {} too bright",
+                    step as f32 / 10.0
+                );
+            }
+            assert!(stars <= 100);
+        }
+        assert_ne!(sky_at(12.0).1, sky_at(0.0).1);
+        assert_ne!(sky_at(18.0).1, sky_at(12.0).1, "sunset needs its own glow");
+        assert_eq!(sky_at(0.0).2, 100);
+        assert_eq!(sky_at(12.0).2, 0);
+    }
+
     #[test]
     fn names_resolve_case_insensitively() {
         assert_eq!(by_name("GRUVBOX"), by_name("gruvbox"));
@@ -496,12 +567,12 @@ mod tests {
         assert!(set("auto"));
         assert_eq!(current_name(), "auto");
         assert!(matches!(current().muted, Color::Rgb(..)));
-        assert!(daylight().is_some());
+        assert!(sky().is_some());
         assert!(auto_redraw_due());
         assert!(!auto_redraw_due());
         assert!(set("dark"));
         assert_eq!(current_name(), "dark");
-        assert!(daylight().is_none());
+        assert!(sky().is_none());
         assert!(!auto_redraw_due());
     }
 

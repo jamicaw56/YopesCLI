@@ -181,7 +181,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Rows for newly seen images are rendered up front: the message loop
     // borrows the session immutably, so it can only read the finished cache.
-    app.warm_image_cache(inner.width.clamp(4, 96));
+    // The tool frame clips at width - 5 (border, padding, scrollbar column), so
+    // rows are built to that width: wider rows lose their right edge.
+    app.warm_image_cache(inner.width.saturating_sub(5).clamp(4, 96));
 
     // The transcript is assembled as slots: owned lines for the small
     // per-message pieces, shared blocks for cached markdown. A frame only

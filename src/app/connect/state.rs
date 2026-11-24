@@ -105,12 +105,22 @@ pub struct ConnectItem {
     pub id: String,
     pub title: String,
     pub detail: String,
-    pub logo: &'static str,
+    pub logo: String,
     /// Set when the item is a saved custom endpoint, holding its provider id.
     pub custom_id: Option<String>,
     /// True for the provider and model the session is currently using.
     pub active: bool,
 }
+
+/// One-letter badge for a saved custom provider: user names are arbitrary,
+/// so the first non-space character is the only reliable identity marker.
+fn provider_monogram(name: &str) -> String {
+    name.chars()
+        .find(|character| !character.is_whitespace())
+        .map(|initial| initial.to_uppercase().next().unwrap_or(initial).to_string())
+        .unwrap_or_else(|| "?".to_owned())
+}
+
 /// One rendered row of the connect list: an item, a blank spacer, or a
 /// rule line naming the section below it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,7 +230,7 @@ impl ConnectState {
                         id: CUSTOM_PROVIDER_ID.to_owned(),
                         title: "Add custom API".to_owned(),
                         detail: "connect your own API endpoint".to_owned(),
-                        logo: "⚙",
+                        logo: "⚙".to_owned(),
                         custom_id: None,
                         active: false,
                     });
@@ -232,7 +242,7 @@ impl ConnectState {
                         id: saved.id.clone(),
                         title: saved.name.clone(),
                         detail: format!("saved · {} models", saved.models.len()),
-                        logo: "★",
+                        logo: provider_monogram(&saved.name),
                         custom_id: Some(saved.id.clone()),
                         active: is_active(&saved.base_url),
                     });
@@ -269,7 +279,7 @@ impl ConnectState {
                                 model.name.clone()
                             },
                             detail,
-                            logo: "▸",
+                            logo: "▸".to_owned(),
                             custom_id: None,
                             active: !active_model.is_empty() && model.id == active_model,
                         }
@@ -280,7 +290,7 @@ impl ConnectState {
                         id: ADD_MODEL_ID.to_owned(),
                         title: "Add new model".to_owned(),
                         detail: "enter a model id".to_owned(),
-                        logo: "+",
+                        logo: "+".to_owned(),
                         custom_id: None,
                         active: false,
                     });
@@ -296,7 +306,7 @@ impl ConnectState {
                             id: EDIT_NAME_ID.to_owned(),
                             title: "Rename provider".to_owned(),
                             detail: self.custom_name.clone(),
-                            logo: "✎",
+                            logo: "✎".to_owned(),
                             custom_id: None,
                             active: false,
                         });
@@ -306,7 +316,7 @@ impl ConnectState {
                             id: EDIT_ENDPOINT_ID.to_owned(),
                             title: "Change endpoint".to_owned(),
                             detail: self.custom_endpoint.clone(),
-                            logo: "✎",
+                            logo: "✎".to_owned(),
                             custom_id: None,
                             active: false,
                         });
@@ -320,7 +330,7 @@ impl ConnectState {
                             } else {
                                 format!("set · {} chars", self.custom_token.chars().count())
                             },
-                            logo: "✎",
+                            logo: "✎".to_owned(),
                             custom_id: None,
                             active: false,
                         });
@@ -337,7 +347,7 @@ impl ConnectState {
                         } else {
                             self.custom_models_url.clone()
                         },
-                        logo: "✎",
+                        logo: "✎".to_owned(),
                         custom_id: None,
                         active: false,
                     });
@@ -347,7 +357,7 @@ impl ConnectState {
                         id: FETCH_MODELS_ID.to_owned(),
                         title: "Fetch models".to_owned(),
                         detail: "read the list from the models endpoint".to_owned(),
-                        logo: "↻",
+                        logo: "↻".to_owned(),
                         custom_id: None,
                         active: false,
                     });
@@ -359,7 +369,7 @@ impl ConnectState {
                         id: REMOVE_PROVIDER_ID.to_owned(),
                         title: "Remove provider".to_owned(),
                         detail: "delete this endpoint and its models".to_owned(),
-                        logo: "✕",
+                        logo: "✕".to_owned(),
                         custom_id: None,
                         active: false,
                     });
@@ -375,7 +385,7 @@ impl ConnectState {
                         id: tokens.to_string(),
                         title: (*label).to_owned(),
                         detail: format!("{tokens} tokens"),
-                        logo: "▸",
+                        logo: "▸".to_owned(),
                         custom_id: None,
                         active: matches_preset(*tokens),
                     })
@@ -388,7 +398,7 @@ impl ConnectState {
                     } else {
                         format!("{current} tokens")
                     },
-                    logo: "▸",
+                    logo: "▸".to_owned(),
                     custom_id: None,
                     active: !current.is_empty()
                         && !CONTEXT_WINDOW_PRESETS
@@ -729,6 +739,40 @@ pub(super) fn custom_field_mut(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_providers_show_name_monograms() {
+        use super::{ConnectStage, ConnectState};
+        use crate::config::{AuthKind, CustomProvider};
+        let base = CustomProvider {
+            id: "base".to_owned(),
+            name: "Base".to_owned(),
+            base_url: "https://example.test/v1".to_owned(),
+            auth: AuthKind::Bearer,
+            models: Vec::new(),
+            models_url: None,
+            token: None,
+            encrypted: false,
+            secret: crate::config::StoredSecret::default(),
+        };
+        let mut connect = ConnectState::loading();
+        connect.stage = ConnectStage::Providers;
+        connect.saved_custom = vec![
+            CustomProvider {
+                id: "one".to_owned(),
+                name: "  Biggie Solutions".to_owned(),
+                ..base.clone()
+            },
+            CustomProvider {
+                id: "two".to_owned(),
+                name: String::new(),
+                ..base
+            },
+        ];
+        let items = connect.items();
+        assert_eq!(items[1].logo, "B");
+        assert_eq!(items[2].logo, "?");
+    }
+
     #[test]
     fn saved_provider_row_is_identified_by_custom_id() {
         use super::{CUSTOM_PROVIDER_ID, ConnectStage, ConnectState};

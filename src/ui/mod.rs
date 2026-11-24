@@ -109,17 +109,11 @@ fn draw_backdrop(frame: &mut Frame, area: Rect) {
     let base = if light {
         Color::Rgb(247, 248, 251)
     } else {
-        // `auto` lifts the void with the clock: deepest at night, open and
-        // cooler at noon.
-        match crate::theme::daylight() {
-            Some(daylight) => blend(
-                Color::Rgb(9, 11, 19),
-                Color::Rgb(22, 28, 44),
-                (daylight * 100.0) as usize,
-            ),
-            None => Color::Rgb(9, 11, 19),
-        }
+        Color::Rgb(9, 11, 19)
     };
+    // `auto` paints the sky for the local hour: a top-to-horizon gradient
+    // (night, dawn, noon, sunset...) with stars that fade in after dusk.
+    let sky = crate::theme::sky();
     let wash = blend(theme.accent2, base, 90);
     let haze = blend(theme.accent, base, 94);
     let dot = blend(theme.accent2, base, 78);
@@ -128,29 +122,47 @@ fn draw_backdrop(frame: &mut Frame, area: Rect) {
     let mut lines = Vec::with_capacity(rows);
     for y in 0..rows {
         let position = y * 100 / rows.max(1);
-        let color = if position < 40 {
-            wash
-        } else if position < 75 {
-            haze
-        } else {
-            base
+        let color = match sky {
+            Some((top, horizon, _)) => blend(
+                theme.accent2,
+                blend(top, horizon, y * 100 / rows.saturating_sub(1).max(1)),
+                95,
+            ),
+            None if position < 40 => wash,
+            None if position < 75 => haze,
+            None => base,
+        };
+        let star_color = blend(Color::Rgb(205, 214, 255), color, 55);
+        // What one cell shows: a star, a grid dot, or nothing.
+        let glyph = |x: usize| -> Option<(&'static str, Color)> {
+            if let Some((_, _, stars)) = sky {
+                let mut h =
+                    (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA6B);
+                h ^= h >> 15;
+                h = h.wrapping_mul(0x2C1B_3C6D);
+                h ^= h >> 13;
+                if position < 70 && (h % 1000) as usize * 4 < stars {
+                    return Some((if h % 7 == 0 { "*" } else { "·" }, star_color));
+                }
+            }
+            (y % 3 == 0 && x % 8 == 4).then_some(("·", dot))
         };
         let mut spans = Vec::new();
-        let mut column = 0;
-        while column < columns {
-            if y % 3 == 0 && column % 8 == 4 {
-                spans.push(Span::styled("·", Style::default().fg(dot).bg(color)));
-                column += 1;
-            } else {
-                let end = (column + 1..columns)
-                    .find(|next| *next % 8 == 4)
-                    .unwrap_or(columns);
-                spans.push(Span::styled(
-                    " ".repeat(end - column),
-                    Style::default().bg(color),
-                ));
-                column = end;
+        let mut blank = 0;
+        for x in 0..columns {
+            match glyph(x) {
+                Some((symbol, fg)) => {
+                    if blank > 0 {
+                        spans.push(Span::styled(" ".repeat(blank), Style::default().bg(color)));
+                        blank = 0;
+                    }
+                    spans.push(Span::styled(symbol, Style::default().fg(fg).bg(color)));
+                }
+                None => blank += 1,
             }
+        }
+        if blank > 0 {
+            spans.push(Span::styled(" ".repeat(blank), Style::default().bg(color)));
         }
         lines.push(Line::from(spans));
     }

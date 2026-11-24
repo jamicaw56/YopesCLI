@@ -159,26 +159,31 @@ pub(super) fn build_rows(
     cols: u16,
     thumbnail: bool,
 ) -> Vec<Line<'static>> {
-    let cols = usize::from(cols).max(1);
-    let (width, height) = (rendered.width().max(1), rendered.height().max(1));
-    // Cells are twice as wide as tall, and one `▄` carries two pixel rows,
-    // so two pixels per cell in both directions keep the aspect square.
-    let row_pairs = ((u64::from(height) * cols as u64) / u64::from(width) / 2).clamp(1, 30) as u32;
-    let row_pairs = if thumbnail {
-        row_pairs.min(12)
+    let cols = u64::from(cols).max(1);
+    let (width, height) = (
+        u64::from(rendered.width().max(1)),
+        u64::from(rendered.height().max(1)),
+    );
+    // One `▄` is one pixel wide and carries two pixel rows, and a cell is
+    // twice as tall as wide, so pixels are square: `cols` pixels across keep
+    // the aspect. The height cap shrinks the width too, instead of squashing.
+    let max_rows: u64 = if thumbnail { 24 } else { 60 };
+    let (target_w, target_h) = if height * cols > max_rows * width {
+        ((width * max_rows / height).max(1), max_rows)
     } else {
-        row_pairs
+        (cols, (height * cols / width).max(1))
     };
     // Lanczos keeps edges readable: the fast thumbnail filter blurred text in
     // screenshots, which read as pixelation on top of the half-block limit.
     let scaled = image::imageops::resize(
         rendered,
-        (cols * 2) as u32,
-        row_pairs * 2,
+        target_w as u32,
+        target_h as u32,
         image::imageops::FilterType::Lanczos3,
     );
     let row_pairs = scaled.height().div_ceil(2);
     let mut rows = Vec::with_capacity(row_pairs as usize);
+    let cols = scaled.width() as usize;
     for pair in 0..row_pairs {
         let top_y = (pair * 2).min(scaled.height() - 1);
         let bottom_y = (top_y + 1).min(scaled.height() - 1);
@@ -433,9 +438,24 @@ mod tests {
 
         let rows = build_image_rows(&data, 2);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].spans.len(), 4);
+        assert_eq!(rows[0].spans.len(), 2);
         assert_eq!(rows[0].spans[0].content, "▄");
         assert_eq!(rows[0].spans[0].style.fg, Some(Color::Rgb(255, 0, 0)));
-        assert_eq!(rows[0].spans[3].style.fg, Some(Color::Rgb(255, 0, 0)));
+        assert_eq!(rows[0].spans[1].style.fg, Some(Color::Rgb(255, 0, 0)));
+    }
+
+    /// A row never exceeds the asked columns (the frame would clip it), and
+    /// pixels stay square: one row pair is two pixel rows of one cell width.
+    #[test]
+    fn rows_fit_the_width_and_keep_the_aspect() {
+        let wide = image::RgbaImage::from_fn(200, 100, |_, _| image::Rgba([9, 9, 9, 255]));
+        let rows = super::build_rows(&wide, 20, false);
+        assert!(rows.iter().all(|row| row.spans.len() == 20));
+        assert_eq!(rows.len(), 5, "20x10 pixels is 5 row pairs");
+        // A desktop capture caps at 12 row pairs and narrows with it.
+        let desktop = image::RgbaImage::from_fn(1920, 1080, |_, _| image::Rgba([9, 9, 9, 255]));
+        let rows = super::build_rows(&desktop, 90, true);
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[0].spans.len(), 42, "24 rows of 16:9 are 42 wide");
     }
 }
