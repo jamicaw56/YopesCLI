@@ -17,6 +17,7 @@ mod theme;
 mod tools;
 mod ui;
 mod update;
+mod weather;
 
 use std::{collections::HashMap, future::Future, pin::Pin, time::Instant};
 
@@ -82,6 +83,11 @@ async fn run() -> Result<()> {
     let config = Config::from_cli(cli)?;
     // The theme is global state read by every draw call, so set it first.
     crate::theme::set(&config.theme);
+    // Weather is opt-in: it polls only with a saved place and theme `auto`.
+    crate::weather::follow(
+        config::load_weather(&config.config_path).as_ref(),
+        crate::theme::current_name() == "auto",
+    );
     let session_path = config.session_path.clone();
     let sessions_dir = config.sessions_dir.clone();
     let config_path = config.config_path.clone();

@@ -15,6 +15,8 @@ use std::{
 use chrono::Timelike;
 use ratatui::style::Color;
 
+use crate::weather::{self, Weather};
+
 /// One palette. `text` of `Color::Reset` keeps the terminal's default.
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -266,7 +268,7 @@ pub fn set(name: &str) -> bool {
 /// static theme costs one atomic load and a copy.
 pub fn current() -> Theme {
     if AUTO.load(Ordering::Relaxed) {
-        auto_at(local_hour())
+        auto_at(local_hour(), weather::current())
     } else {
         THEMES[INDEX.load(Ordering::Relaxed)].1
     }
@@ -437,6 +439,41 @@ fn rgb(from: Rgb) -> Color {
     Color::Rgb(from.0, from.1, from.2)
 }
 
+/// How one weather bends the clock's sky.
+struct Cover {
+    /// Pull toward the color's own channel average, 0-1. The brightness stays
+    /// put, so the contrast rules the keyframes keep survive every weather.
+    gray: f32,
+    /// Then lean the sky toward this color by `push`, 0-1.
+    lean: Rgb,
+    push: f32,
+    /// Star field multiplier: cloud cover hides the stars.
+    stars: f32,
+}
+
+fn cover(weather: Weather) -> Cover {
+    let (gray, lean, push, stars) = match weather {
+        Weather::Unknown | Weather::Clear => (0.0, (0, 0, 0), 0.0, 1.0),
+        Weather::Cloudy => (0.45, (40, 46, 56), 0.20, 0.25),
+        Weather::Fog => (0.60, (78, 84, 92), 0.45, 0.0),
+        Weather::Rain => (0.55, (22, 32, 48), 0.35, 0.0),
+        Weather::Snow => (0.55, (76, 84, 98), 0.40, 0.0),
+        Weather::Storm => (0.65, (8, 10, 18), 0.55, 0.0),
+    };
+    Cover {
+        gray,
+        lean,
+        push,
+        stars,
+    }
+}
+
+/// `color` pulled `amount` of the way to the gray of its own average.
+fn gray(color: Rgb, amount: f32) -> Rgb {
+    let mean = ((u16::from(color.0) + u16::from(color.1) + u16::from(color.2)) / 3) as u8;
+    mix(color, (mean, mean, mean), amount)
+}
+
 /// The local hour as one fractional number, so the palette moves smoothly
 /// between keyframes instead of stepping on the hour.
 fn local_hour() -> f32 {
@@ -457,38 +494,81 @@ fn bracket(hour: f32) -> (&'static Key, &'static Key, f32) {
     (low, high, t)
 }
 
-/// The `auto` palette at a fractional local hour.
-fn auto_at(hour: f32) -> Theme {
+/// The `auto` palette at a fractional local hour. Weather only grays the
+/// colors: diff and warning colors keep their meaning.
+fn auto_at(hour: f32, weather: Weather) -> Theme {
     let (low, high, t) = bracket(hour);
+    let g = cover(weather).gray;
+    let blend = |a: Rgb, b: Rgb| rgb(gray(mix(a, b, t), g));
     Theme {
-        muted: rgb(mix(low.muted, high.muted, t)),
-        dim: rgb(mix(low.dim, high.dim, t)),
-        accent: rgb(mix(low.accent, high.accent, t)),
-        accent2: rgb(mix(low.accent2, high.accent2, t)),
+        muted: blend(low.muted, high.muted),
+        dim: blend(low.dim, high.dim),
+        accent: blend(low.accent, high.accent),
+        accent2: blend(low.accent2, high.accent2),
         error: Color::Rgb(244, 113, 116),
         added: Color::Rgb(110, 225, 158),
         removed: Color::Rgb(244, 113, 116),
         warning: Color::Rgb(230, 180, 110),
-        text: rgb(mix(low.text, high.text, t)),
-        code: rgb(mix(low.code, high.code, t)),
+        text: blend(low.text, high.text),
+        code: blend(low.code, high.code),
     }
 }
 
-/// The sky at a fractional local hour: top color, bottom color, star
-/// strength 0-100.
-fn sky_at(hour: f32) -> (Color, Color, usize) {
+/// The sun's glow in the backdrop: where it sits, as fractions of the
+/// screen, its color, and how strongly it tints, 0-100.
+pub struct Sun {
+    pub x: f32,
+    pub y: f32,
+    pub color: Color,
+    pub strength: usize,
+}
+
+/// What the backdrop paints: the sky gradient, the star field, the weather
+/// in front of it, and the sun when the day is clear.
+pub struct Sky {
+    pub top: Color,
+    pub horizon: Color,
+    /// Star strength, 0-100.
+    pub stars: usize,
+    pub weather: Weather,
+    pub sun: Option<Sun>,
+}
+
+/// The sun between 6:00 and 18:00: it climbs from the left edge, peaks at
+/// noon, and sets on the right. Low sun is orange, high sun is pale, and it
+/// fades in from nothing at the horizon so it never pops.
+fn sun_at(hour: f32) -> Option<Sun> {
+    let day = (hour - 6.0) / 12.0;
+    if !(0.0..1.0).contains(&day) {
+        return None;
+    }
+    let height = (std::f32::consts::PI * day).sin();
+    Some(Sun {
+        x: 0.1 + 0.8 * day,
+        y: 0.82 - 0.5 * height,
+        color: rgb(mix((150, 140, 112), (176, 92, 52), 1.0 - height)),
+        strength: (50.0 * height.sqrt()).round() as usize,
+    })
+}
+
+/// The sky at a fractional local hour under `weather`.
+fn sky_at(hour: f32, weather: Weather) -> Sky {
     let (low, high, t) = bracket(hour);
+    let cover = cover(weather);
     let stars = f32::from(low.stars) + (f32::from(high.stars) - f32::from(low.stars)) * t;
-    (
-        rgb(mix(low.top, high.top, t)),
-        rgb(mix(low.horizon, high.horizon, t)),
-        stars.round() as usize,
-    )
+    let tint = |a: Rgb, b: Rgb| rgb(mix(gray(mix(a, b, t), cover.gray), cover.lean, cover.push));
+    Sky {
+        top: tint(low.top, high.top),
+        horizon: tint(low.horizon, high.horizon),
+        stars: (stars * cover.stars).round() as usize,
+        weather,
+        sun: (weather == Weather::Clear).then(|| sun_at(hour)).flatten(),
+    }
 }
 
 /// The sky the backdrop paints right now: `None` unless `auto` is active.
-pub fn sky() -> Option<(Color, Color, usize)> {
-    AUTO.load(Ordering::Relaxed).then(|| sky_at(local_hour()))
+pub fn sky() -> Option<Sky> {
+    AUTO.load(Ordering::Relaxed).then(|| sky_at(local_hour(), weather::current()))
 }
 
 /// True once per wall-clock minute while `auto` is on: the event loop's ticker
@@ -508,23 +588,46 @@ pub fn auto_redraw_due() -> bool {
 mod tests {
     use super::*;
 
+    const WEATHERS: [Weather; 6] = [
+        Weather::Clear,
+        Weather::Cloudy,
+        Weather::Fog,
+        Weather::Rain,
+        Weather::Snow,
+        Weather::Storm,
+    ];
+
     /// `auto` holds the backdrop on its dark base, keeps dim separated from
-    /// muted, and actually moves across the day.
+    /// muted, and actually moves across the day, in every weather.
     #[test]
     fn auto_blends_the_clock_and_stays_readable() {
-        for step in 0..240 {
-            let hour = step as f32 / 10.0;
-            let theme = auto_at(hour);
-            let (Color::Rgb(mr, mg, mb), Color::Rgb(dr, dg, db)) = (theme.muted, theme.dim) else {
-                panic!("auto must define muted and dim as rgb");
-            };
-            let muted = u32::from(mr) + u32::from(mg) + u32::from(mb);
-            let dim = u32::from(dr) + u32::from(dg) + u32::from(db);
-            assert!(muted.abs_diff(dim) >= 60, "hour {hour} does not separate");
-            assert!(dim < 420, "hour {hour} lights the backdrop");
+        for weather in WEATHERS {
+            for step in 0..240 {
+                let hour = step as f32 / 10.0;
+                let theme = auto_at(hour, weather);
+                let (Color::Rgb(mr, mg, mb), Color::Rgb(dr, dg, db)) = (theme.muted, theme.dim)
+                else {
+                    panic!("auto must define muted and dim as rgb");
+                };
+                let muted = u32::from(mr) + u32::from(mg) + u32::from(mb);
+                let dim = u32::from(dr) + u32::from(dg) + u32::from(db);
+                assert!(
+                    muted.abs_diff(dim) >= 60,
+                    "hour {hour} {weather:?} does not separate"
+                );
+                assert!(dim < 420, "hour {hour} {weather:?} lights the backdrop");
+            }
         }
         // The ramp is not one frozen palette: noon differs from midnight.
-        assert_ne!(auto_at(13.0).accent, auto_at(1.0).accent);
+        assert_ne!(
+            auto_at(13.0, Weather::Clear).accent,
+            auto_at(1.0, Weather::Clear).accent
+        );
+        // Weather grays the palette: rain at noon is not clear noon.
+        assert_ne!(
+            auto_at(12.0, Weather::Rain).accent,
+            auto_at(12.0, Weather::Clear).accent
+        );
         assert_eq!(list()[0], "auto");
         assert!(names().starts_with("auto"));
     }
@@ -533,24 +636,56 @@ mod tests {
     /// gets bright enough to wash out the text drawn over it.
     #[test]
     fn sky_follows_the_clock_and_stays_dark() {
-        for step in 0..240 {
-            let (top, horizon, stars) = sky_at(step as f32 / 10.0);
-            for color in [top, horizon] {
-                let Color::Rgb(r, g, b) = color else {
-                    panic!("sky must be rgb")
-                };
-                assert!(
-                    r.max(g).max(b) <= 110,
-                    "hour {} too bright",
-                    step as f32 / 10.0
-                );
+        for weather in WEATHERS {
+            for step in 0..240 {
+                let hour = step as f32 / 10.0;
+                let sky = sky_at(hour, weather);
+                for color in [sky.top, sky.horizon] {
+                    let Color::Rgb(r, g, b) = color else {
+                        panic!("sky must be rgb")
+                    };
+                    assert!(
+                        r.max(g).max(b) <= 110,
+                        "hour {hour} {weather:?} too bright"
+                    );
+                }
+                assert!(sky.stars <= 100);
             }
-            assert!(stars <= 100);
         }
-        assert_ne!(sky_at(12.0).1, sky_at(0.0).1);
-        assert_ne!(sky_at(18.0).1, sky_at(12.0).1, "sunset needs its own glow");
-        assert_eq!(sky_at(0.0).2, 100);
-        assert_eq!(sky_at(12.0).2, 0);
+        let clear = |hour: f32| sky_at(hour, Weather::Clear);
+        assert_ne!(clear(12.0).horizon, clear(0.0).horizon);
+        assert_ne!(
+            clear(18.0).horizon,
+            clear(12.0).horizon,
+            "sunset needs its own glow"
+        );
+        assert_eq!(clear(0.0).stars, 100);
+        assert_eq!(clear(12.0).stars, 0);
+    }
+
+    /// Clouds hide the stars and the sun, rain darkens and grays the sky, and
+    /// the sun only shows on a clear day, rising and setting with the clock.
+    #[test]
+    fn weather_bends_the_sky() {
+        assert_eq!(sky_at(0.0, Weather::Cloudy).stars, 25);
+        assert_eq!(sky_at(0.0, Weather::Rain).stars, 0);
+        assert_ne!(
+            sky_at(12.0, Weather::Rain).horizon,
+            sky_at(12.0, Weather::Clear).horizon
+        );
+        // Unknown (no place saved) paints exactly the clock sky.
+        assert_eq!(
+            sky_at(9.0, Weather::Unknown).horizon,
+            sky_at(9.0, Weather::Clear).horizon
+        );
+        assert!(sky_at(12.0, Weather::Clear).sun.is_some());
+        assert!(sky_at(12.0, Weather::Cloudy).sun.is_none());
+        assert!(sky_at(12.0, Weather::Rain).sun.is_none());
+        assert!(sky_at(2.0, Weather::Clear).sun.is_none(), "no sun at night");
+        let sun = |hour: f32| sky_at(hour, Weather::Clear).sun.expect("day");
+        assert!(sun(7.0).x < sun(12.0).x && sun(12.0).x < sun(17.0).x);
+        assert!(sun(12.0).y < sun(7.0).y, "the sun climbs toward noon");
+        assert!(sun(12.0).strength > sun(6.5).strength);
     }
 
     #[test]
@@ -568,6 +703,7 @@ mod tests {
         assert_eq!(current_name(), "auto");
         assert!(matches!(current().muted, Color::Rgb(..)));
         assert!(sky().is_some());
+        assert_eq!(weather::current(), Weather::Unknown);
         assert!(auto_redraw_due());
         assert!(!auto_redraw_due());
         assert!(set("dark"));

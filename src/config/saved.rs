@@ -68,6 +68,9 @@ pub(super) struct SavedConfig {
     /// The build whose changelog popup was last shown, so it shows once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) last_seen_version: Option<String>,
+    /// The place `/set weather` saved for theme `auto`; absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) weather: Option<crate::weather::Place>,
 }
 
 fn auto_compact_default() -> bool {
@@ -111,6 +114,7 @@ impl SavedConfig {
             permission: None,
             diff_sides: None,
             last_seen_version: None,
+            weather: None,
         }
     }
 }
@@ -686,6 +690,16 @@ pub(crate) fn save_permission(path: &Path, value: &str) -> Result<()> {
 /// Store the diff view layout, in place.
 pub(crate) fn save_diff_sides(path: &Path, value: bool) -> Result<()> {
     update_saved(path, |saved| saved.diff_sides = Some(value))
+}
+
+/// The place saved for the weather backdrop, if the user opted in.
+pub(crate) fn load_weather(path: &Path) -> Option<crate::weather::Place> {
+    load_saved(path).ok().flatten().and_then(|saved| saved.weather)
+}
+
+/// Store the weather place, or clear it with `None`, in place.
+pub(crate) fn save_weather(path: &Path, value: Option<crate::weather::Place>) -> Result<()> {
+    update_saved(path, |saved| saved.weather = value)
 }
 
 /// The build whose changelog popup was last shown, if any.

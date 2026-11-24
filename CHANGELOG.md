@@ -14,6 +14,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `/set weather <city>` (opt-in, `off` to stop) makes theme `auto` follow the forecast: rain and snow fall, clouds and fog gray the sky, storms darken it, and a clear day shows a sun that rises and sets. Checked every 15 minutes through Open-Meteo; only the city's coordinates are sent, and only while theme `auto` is on.
 - `/set theme auto` moves the background with the clock: the palette and a sky gradient blend nine local-hour keyframes (midnight, pre-dawn, dawn, morning, noon, afternoon, sunset, evening), with stars that fade in at night, repainting on the minute even when the session is idle.
 - Custom API setup is now a four-field quick form: name, completion URL, model ID, token. Models URL, auth, model name and context window default sensibly and stay editable later.
 - The UI has a theme-aware ambient backdrop (soft vertical wash, sparse dot grid) and a branded header mark.

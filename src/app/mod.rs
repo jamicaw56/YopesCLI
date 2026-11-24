@@ -749,6 +749,8 @@ impl App {
             // `auto` repaints on the minute so a quiet session still moves
             // from morning to night.
             || crate::theme::auto_redraw_due()
+            // Rain and snow fall: the ticker slides them every frame.
+            || crate::weather::current().wet()
     }
 
     /// Record whether the terminal has focus.

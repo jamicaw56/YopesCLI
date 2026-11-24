@@ -500,6 +500,7 @@ impl App {
                 match key.as_str() {
                     "tools" | "permission" | "permissions" => self.set_tools_mode(&value),
                     "theme" => self.set_theme(&value),
+                    "weather" => self.set_weather(&value),
                     "system" | "prompt" => self.set_custom_system_prompt(&value),
                     "effort" | "reasoning" => self.set_effort(&value),
                     "compact" => return self.set_compact(&value),
@@ -650,9 +651,55 @@ impl App {
             if let Err(error) = config::save_theme(&self.config_path, &value) {
                 self.error(format!("Could not save the theme: {error:#}"));
             }
+            // The forecast is only fetched while `auto` is the theme.
+            crate::weather::follow(
+                config::load_weather(&self.config_path).as_ref(),
+                crate::theme::current_name() == "auto",
+            );
             self.info(format!("Theme: {}", crate::theme::current_name()));
         } else {
             self.error(format!("Usage: /set theme <{}>", crate::theme::names()));
+        }
+    }
+
+    /// `/set weather [city|off]`: opt in to weather in theme `auto`. The saved
+    /// coordinates are the only thing sent to Open-Meteo, and only while
+    /// `auto` is the theme.
+    pub(crate) fn set_weather(&mut self, value: &str) {
+        let value = value.trim();
+        let auto = crate::theme::current_name() == "auto";
+        let hint = if auto {
+            ""
+        } else {
+            " · shows under /set theme auto"
+        };
+        if value.is_empty() {
+            match config::load_weather(&self.config_path) {
+                Some(place) => self.info(format!(
+                    "Weather: {} · {} · /set weather off{hint}",
+                    place.name,
+                    crate::weather::current().label()
+                )),
+                None => self.info("Weather: off · /set weather <city> to follow the forecast"),
+            }
+        } else if matches!(value.to_ascii_lowercase().as_str(), "off" | "none") {
+            if let Err(error) = config::save_weather(&self.config_path, None) {
+                self.error(format!("Could not save the weather: {error:#}"));
+            }
+            crate::weather::stop();
+            self.info("Weather: off");
+        } else {
+            match crate::weather::locate(value) {
+                Ok(place) => {
+                    if let Err(error) = config::save_weather(&self.config_path, Some(place.clone()))
+                    {
+                        self.error(format!("Could not save the weather: {error:#}"));
+                    }
+                    crate::weather::follow(Some(&place), auto);
+                    self.info(format!("Weather: {}{hint}", place.name));
+                }
+                Err(error) => self.error(format!("Weather: {error:#} · /set weather <city>")),
+            }
         }
     }
 

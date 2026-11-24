@@ -100,7 +100,9 @@ pub(crate) fn accent2() -> Color {
 /// A quiet ambient backdrop: a vertical wash in the active theme plus a
 /// sparse dot grid. Widgets draw over it, so empty cells stop looking like a
 /// flat void without competing with the transcript.
-fn draw_backdrop(frame: &mut Frame, area: Rect) {
+///
+/// `phase` is the app's 100ms tick: it slides the rain and snow of `auto`.
+fn draw_backdrop(frame: &mut Frame, area: Rect, phase: usize) {
     let theme = crate::theme::current();
     let light = match theme.dim {
         Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b) > 420,
@@ -112,20 +114,42 @@ fn draw_backdrop(frame: &mut Frame, area: Rect) {
         Color::Rgb(9, 11, 19)
     };
     // `auto` paints the sky for the local hour: a top-to-horizon gradient
-    // (night, dawn, noon, sunset...) with stars that fade in after dusk.
+    // (night, dawn, noon, sunset...) with stars that fade in after dusk, and,
+    // once `/set weather` saved a place, the weather in front of it: a sun
+    // glow on a clear day, falling rain or snow, gray cloud and fog.
     let sky = crate::theme::sky();
+    let weather = sky
+        .as_ref()
+        .map_or(crate::weather::Weather::Unknown, |sky| sky.weather);
+    let stars = sky.as_ref().map_or(0, |sky| sky.stars);
     let wash = blend(theme.accent2, base, 90);
     let haze = blend(theme.accent, base, 94);
     let dot = blend(theme.accent2, base, 78);
     let rows = usize::from(area.height);
     let columns = usize::from(area.width);
+    // The sun's disc in cell units: center column and row, tint, strength,
+    // and glow radius. A cell is about twice as tall as wide, so row
+    // distances count double.
+    let sun = sky
+        .as_ref()
+        .and_then(|sky| sky.sun.as_ref())
+        .map(|sun| {
+            let radius = (columns as f32 * 0.16).clamp(6.0, 22.0);
+            (
+                sun.x * columns as f32,
+                sun.y * rows as f32,
+                sun.color,
+                sun.strength as f32,
+                radius,
+            )
+        });
     let mut lines = Vec::with_capacity(rows);
     for y in 0..rows {
         let position = y * 100 / rows.max(1);
-        let color = match sky {
-            Some((top, horizon, _)) => blend(
+        let color = match &sky {
+            Some(sky) => blend(
                 theme.accent2,
-                blend(top, horizon, y * 100 / rows.saturating_sub(1).max(1)),
+                blend(sky.top, sky.horizon, y * 100 / rows.saturating_sub(1).max(1)),
                 95,
             ),
             None if position < 40 => wash,
@@ -133,36 +157,70 @@ fn draw_backdrop(frame: &mut Frame, area: Rect) {
             None => base,
         };
         let star_color = blend(Color::Rgb(205, 214, 255), color, 55);
-        // What one cell shows: a star, a grid dot, or nothing.
-        let glyph = |x: usize| -> Option<(&'static str, Color)> {
-            if let Some((_, _, stars)) = sky {
+        let drop_color = blend(
+            if weather == crate::weather::Weather::Snow {
+                Color::Rgb(220, 228, 244)
+            } else {
+                Color::Rgb(140, 170, 214)
+            },
+            color,
+            45,
+        );
+        // The row's color under the sun: unchanged away from it, tinted
+        // toward the sun by a falling-off glow, with a bright core.
+        let ground = |x: usize| -> Color {
+            let Some((cx, cy, tint, strength, radius)) = sun else {
+                return color;
+            };
+            let (dx, dy) = (x as f32 - cx, (y as f32 - cy) * 2.0);
+            let distance = (dx * dx + dy * dy).sqrt();
+            if distance >= radius {
+                color
+            } else if distance < 1.5 {
+                blend(color, Color::Rgb(255, 226, 150), (strength * 1.4) as usize)
+            } else {
+                let falloff = 1.0 - distance / radius;
+                blend(color, tint, (strength * falloff * falloff) as usize)
+            }
+        };
+        // What one cell shows: a drop, a star, a grid dot, or nothing.
+        let cell = |x: usize| -> (&'static str, Style) {
+            let bg = ground(x);
+            if let Some(symbol) = crate::weather::drop_at(weather, x, y, phase) {
+                return (symbol, Style::default().fg(drop_color).bg(bg));
+            }
+            if sky.is_some() {
                 let mut h =
                     (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA6B);
                 h ^= h >> 15;
                 h = h.wrapping_mul(0x2C1B_3C6D);
                 h ^= h >> 13;
                 if position < 70 && (h % 1000) as usize * 4 < stars {
-                    return Some((if h % 7 == 0 { "*" } else { "·" }, star_color));
+                    let symbol = if h % 7 == 0 { "*" } else { "·" };
+                    return (symbol, Style::default().fg(star_color).bg(bg));
                 }
             }
-            (y % 3 == 0 && x % 8 == 4).then_some(("·", dot))
+            if y % 3 == 0 && x % 8 == 4 {
+                ("·", Style::default().fg(dot).bg(bg))
+            } else {
+                (" ", Style::default().bg(bg))
+            }
         };
+        // Neighbours with one style share a span, so a quiet row stays a
+        // handful of spans instead of one per cell.
         let mut spans = Vec::new();
-        let mut blank = 0;
+        let mut run = String::new();
+        let mut run_style = Style::default();
         for x in 0..columns {
-            match glyph(x) {
-                Some((symbol, fg)) => {
-                    if blank > 0 {
-                        spans.push(Span::styled(" ".repeat(blank), Style::default().bg(color)));
-                        blank = 0;
-                    }
-                    spans.push(Span::styled(symbol, Style::default().fg(fg).bg(color)));
-                }
-                None => blank += 1,
+            let (symbol, style) = cell(x);
+            if style != run_style && !run.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut run), run_style));
             }
+            run_style = style;
+            run.push_str(symbol);
         }
-        if blank > 0 {
-            spans.push(Span::styled(" ".repeat(blank), Style::default().bg(color)));
+        if !run.is_empty() {
+            spans.push(Span::styled(run, run_style));
         }
         lines.push(Line::from(spans));
     }
@@ -222,7 +280,7 @@ fn caret(spinner: usize) -> &'static str {
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    draw_backdrop(frame, area);
+    draw_backdrop(frame, area, app.spinner);
     if area.width < 28 || area.height < 8 {
         app.output_rows.clear();
         frame.render_widget(

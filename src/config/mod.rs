@@ -26,9 +26,9 @@ use saved::{custom_providers, load_saved, resolve_api_key};
 pub(crate) use saved::{
     delete_custom_provider, delete_saved_model, disconnect_provider, last_seen_version,
     load_connected_providers, load_custom_providers, load_endpoint_models, load_endpoint_secret,
-    rename_custom_provider, save_auto_compact, save_connection, save_diff_sides,
+    load_weather, rename_custom_provider, save_auto_compact, save_connection, save_diff_sides,
     save_last_seen_version, save_model, save_permission, save_reasoning_effort, save_system_prompt,
-    save_theme, update_endpoint_models, update_model_context_window,
+    save_theme, save_weather, update_endpoint_models, update_model_context_window,
 };
 
 const CONFIG_VERSION: u32 = 1;
