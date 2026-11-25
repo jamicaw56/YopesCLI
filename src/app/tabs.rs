@@ -637,6 +637,7 @@ mod tests {
                 prompt_tokens: 0,
                 usage: None,
                 tool_progress: None,
+                recovered: false,
                 compacting: None,
             });
         });

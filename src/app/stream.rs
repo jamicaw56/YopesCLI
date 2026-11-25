@@ -6,11 +6,66 @@ const CONTINUATION_PROMPT: &str = "Continue exactly where you stopped. Do not re
 already wrote; pick up mid-sentence if that is where the reply was cut.";
 
 impl App {
+    /// The stream is producing again, so the failure it recovered from stops
+    /// being news: the footer's retry line and error notice go, and the
+    /// provider-error block a failed attempt left in the transcript is dropped
+    /// when it sits directly above the reply that is now streaming.
+    ///
+    /// Older errors stay: an error followed by another user turn is history,
+    /// not a stale banner.
+    fn stream_recovered(&mut self) {
+        // A reply sends hundreds of deltas; the retry line and the stale error
+        // are cleared once per request, not once per token.
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        if active.recovered {
+            return;
+        }
+        active.recovered = true;
+        self.retry = None;
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|notice| notice.kind == NoticeKind::Error)
+        {
+            self.notice = None;
+        }
+        // Drop the failed attempts the reply is recovering from: an error the
+        // model has since answered past is history, but an error with no
+        // successful reply after it is the failure this stream just got past.
+        let mut removed = false;
+        while let Some(failed) = self
+            .session
+            .messages
+            .iter()
+            .rposition(|message| message.role == Role::Assistant && message.error.is_some())
+        {
+            let answered = self.session.messages[failed + 1..].iter().any(|message| {
+                message.role == Role::Assistant
+                    && message.error.is_none()
+                    && (!message.content.is_empty() || message.tool_calls.is_some())
+            });
+            if answered {
+                break;
+            }
+            self.session.messages.remove(failed);
+            removed = true;
+        }
+        if removed {
+            // Both caches are keyed by message index, and removing one shifts
+            // every index above it.
+            self.markdown_cache.clear();
+            self.tool_frames.clear();
+        }
+    }
+
     pub(crate) fn on_stream_event(&mut self, event: StreamEvent) -> Action {
         match event {
             StreamEvent::Delta { request_id, text }
                 if self.active_request_id() == Some(request_id) =>
             {
+                self.stream_recovered();
                 if let Some(compaction) = self
                     .active
                     .as_mut()
@@ -25,6 +80,7 @@ impl App {
             StreamEvent::Reasoning { request_id, text }
                 if self.active_request_id() == Some(request_id) =>
             {
+                self.stream_recovered();
                 // A compaction summary is content only; reasoning is ignored.
                 if self
                     .active
@@ -68,6 +124,9 @@ impl App {
                         .is_some_and(|active| active.compacting.is_none()) =>
             {
                 let mut calls = calls;
+                // Tool calls are the model answering: whatever failed before
+                // this attempt is no longer the state of the turn.
+                self.stream_recovered();
                 for call in &mut calls {
                     let name = crate::tools::canonical_tool_name(&call.function.name);
                     if name != call.function.name {

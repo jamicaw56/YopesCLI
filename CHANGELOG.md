@@ -8,6 +8,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- An error the turn recovered from clears itself: once the reply streams again, the provider-error block, the retry countdown and the error notice are gone.
 - Weather `auto` stops raining when the rain stops: a rainy WMO code with no measured precipitation is drawn as cloud, and a cloudy day still shows the sun behind the overcast.
 - The footer's `↑ in ↓ out` arrows move while a reply streams, the duplicate `out N` beside the thinking line is gone, and a narrow terminal drops the goal and context load before the token counts.
 - A tool result's frame label (the file or tool name) is drawn in body color instead of the border's much darker dim.

@@ -105,6 +105,9 @@ struct ActiveRequest {
     prompt_tokens: u64,
     usage: Option<(u64, u64)>,
     tool_progress: Option<(String, String, u64)>,
+    /// Set once this request has cleared the failure it recovered from, so the
+    /// transcript is swept once per reply rather than once per delta.
+    recovered: bool,
     /// Set while this request summarizes older turns instead of replying.
     compacting: Option<Compaction>,
 }

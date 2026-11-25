@@ -416,6 +416,7 @@ impl App {
             prompt_tokens: prompt_chars as u64 / 4,
             usage: None,
             tool_progress: None,
+            recovered: false,
             compacting,
         });
         // The request is in flight now: the saved file says so until the turn
@@ -1562,6 +1563,7 @@ pub(crate) mod tests {
             prompt_tokens: 10,
             usage: None,
             tool_progress: None,
+            recovered: false,
             compacting: None,
         });
         assert!(app.is_streaming());
@@ -1873,6 +1875,98 @@ pub(crate) mod tests {
         let req_id = app.active_request_id().unwrap();
         app.on_stream_event(StreamEvent::Done { request_id: req_id });
         assert!(!app.session.interrupted);
+    }
+
+    /// A failure the turn recovered from is not the state of the turn: once
+    /// the reply streams again, the error block and the retry line go.
+    #[test]
+    fn a_streaming_reply_drops_the_error_it_recovered_from() {
+        let mut app = test_app();
+        app.input.set("first try");
+        assert!(matches!(app.submit(), Action::Start { .. }));
+        let failed = app.active_request_id().unwrap();
+        app.on_stream_event(StreamEvent::Error {
+            request_id: failed,
+            message: "provider API failed after 5 attempts".to_owned(),
+        });
+        assert!(
+            app.session
+                .messages
+                .iter()
+                .any(|message| message.error.is_some()),
+            "the failure was not recorded"
+        );
+
+        // The next turn reaches the provider and starts answering.
+        app.input.set("second try");
+        assert!(matches!(app.submit(), Action::Start { .. }));
+        let request = app.active_request_id().unwrap();
+        app.retry = Some(RetryNotice {
+            attempt: 3,
+            delay_secs: 8,
+            reason: "overloaded".to_owned(),
+        });
+        app.error("Connection refused".to_owned());
+        app.on_stream_event(StreamEvent::Delta {
+            request_id: request,
+            text: "Here it is".to_owned(),
+        });
+
+        assert!(
+            !app.session
+                .messages
+                .iter()
+                .any(|message| message.error.is_some()),
+            "the stale error block survived: {:?}",
+            app.session.messages
+        );
+        assert_eq!(
+            app.session
+                .messages
+                .last()
+                .map(|message| message.content.as_str()),
+            Some("Here it is")
+        );
+        assert!(app.retry.is_none(), "the retry line survived");
+        assert!(
+            app.notice.is_none(),
+            "the error notice survived: {:?}",
+            app.notice.as_ref().map(|notice| notice.message.clone())
+        );
+    }
+
+    /// An error the model answered past is history: once a successful reply
+    /// sits below it, a later stream leaves it alone.
+    #[test]
+    fn an_older_error_stays_in_the_transcript() {
+        let mut app = test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "first question"));
+        app.session
+            .messages
+            .push(Message::provider_error("provider API failed"));
+        // The retry answered, so the failure above it is part of the record.
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "the answer that worked"));
+
+        app.input.set("second question");
+        assert!(matches!(app.submit(), Action::Start { .. }));
+        let request = app.active_request_id().unwrap();
+        app.on_stream_event(StreamEvent::Delta {
+            request_id: request,
+            text: "another answer".to_owned(),
+        });
+
+        assert!(
+            app.session
+                .messages
+                .iter()
+                .any(|message| message.error.is_some()),
+            "history was rewritten: {:?}",
+            app.session.messages
+        );
     }
 
     #[test]
