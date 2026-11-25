@@ -54,6 +54,11 @@ jobs:
       - name: Write the version into Cargo.toml
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          # main requires status checks, which the Actions token cannot satisfy
+          # for a commit it is pushing right now. An admin token can, because
+          # enforce_admins is off on the branch protection.
+          PUSH_TOKEN: ${{ secrets.BIGGIE_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
@@ -83,7 +88,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
           git commit -m "chore(release): $TAG"
-          git push
+          token="${PUSH_TOKEN:-$ACTIONS_TOKEN}"
+          git push "https://x-access-token:${token}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${GITHUB_REF_NAME}"
       - name: Record the bumped commit
         id: bump
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
