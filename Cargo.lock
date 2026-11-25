@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "yopes"
-version = "0.1.86"
+version = "0.1.87"
 dependencies = [
  "anyhow",
  "argon2",
