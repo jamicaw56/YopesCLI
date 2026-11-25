@@ -7,11 +7,13 @@
 //! the toast runs on a thread of its own, and a machine without PowerShell
 //! just gets the bell.
 
+#[cfg(not(test))]
 use std::io::Write;
 
 use crate::app::App;
 
 /// A bell is one byte on stdout; a terminal that ignores it ignores it.
+#[cfg(not(test))]
 fn bell() {
     let mut out = std::io::stdout();
     let _ = out.write_all(b"\x07");
@@ -23,7 +25,7 @@ fn bell() {
 /// PowerShell carries a registered AppUserModelID, which is what Windows
 /// requires before it will show a toast at all; the script never touches the
 /// network and exits on its own.
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 fn toast(title: &str, body: &str) {
     let script = format!(
         "$ErrorActionPreference='Stop';\
@@ -47,7 +49,7 @@ fn toast(title: &str, body: &str) {
 }
 
 /// Every other OS relies on the terminal's own notification plumbing.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(test)))]
 fn toast(_title: &str, _body: &str) {}
 
 /// Toasts take text, not markup: the workspace name is user data.
@@ -66,20 +68,16 @@ fn xml_escape(text: &str) -> String {
     escaped
 }
 
-/// One ping: bell now, toast after.
+/// One ping: bell now, toast after. Tests never ring or spawn a shell: only
+/// the wording is under test.
+#[cfg(not(test))]
 fn ping(title: &str, body: &str) {
-    #[cfg(test)]
-    {
-        // Tests never touch the terminal or spawn a shell: only the wording is
-        // under test.
-        let _ = (title, body);
-    }
-    #[cfg(not(test))]
-    {
-        bell();
-        toast(title, body);
-    }
+    bell();
+    toast(title, body);
 }
+
+#[cfg(test)]
+fn ping(_title: &str, _body: &str) {}
 
 /// The workspace name, for "what finished" in a notification that may be read
 /// far from the window.

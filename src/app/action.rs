@@ -63,6 +63,15 @@ pub enum Action {
         token: Option<String>,
         auth: AuthKind,
     },
+    /// `/generate`: one image model call. The bytes come back through the
+    /// image channel and are written to the workspace when they arrive.
+    GenerateImage {
+        base_url: String,
+        auth: AuthKind,
+        key: Option<String>,
+        model: String,
+        prompt: String,
+    },
     /// Ask the provider for a short title after the first reply of a session.
     NameSession {
         task: String,

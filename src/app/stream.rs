@@ -107,6 +107,9 @@ impl App {
                     self.spent_prompt_tokens = self.spent_prompt_tokens.saturating_add(prompt);
                     self.spent_completion_tokens =
                         self.spent_completion_tokens.saturating_add(completion);
+                    // The same numbers go into the machine-wide ledger `/stats`
+                    // reads, so the totals outlive this session.
+                    crate::usage::record(prompt, completion);
                 }
                 // A finished compaction folds the summary in, then the queued
                 // turn starts against the now-small history.

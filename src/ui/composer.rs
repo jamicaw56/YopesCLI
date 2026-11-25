@@ -677,6 +677,14 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
             format!("{} fetching models · esc stop", spinner(app.spinner)),
             accent(),
         )
+    } else if app.generating_image {
+        // An image model takes a minute: say what is being waited on instead
+        // of sitting on an idle row. There is no interrupt to offer: the
+        // request is a detached task that ends when the endpoint answers.
+        (
+            format!("{} generating image", spinner(app.spinner)),
+            accent(),
+        )
     } else if let Some(notice) = &app.notice {
         (
             notice.message.clone(),

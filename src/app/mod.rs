@@ -28,6 +28,7 @@ mod commands;
 mod connect;
 mod delegate;
 mod format;
+mod generate;
 mod images;
 mod input;
 mod keys;
@@ -380,6 +381,9 @@ pub struct App {
     pub model_choices: Vec<ModelChoice>,
     /// Whether models are actively being fetched in the background.
     pub fetching_models: bool,
+    /// An image request is in flight: the footer says so instead of looking
+    /// idle for the minute an image model takes.
+    pub generating_image: bool,
     /// Popup picker opened by `/session`.
     pub session_picker: Option<ListPicker>,
     /// The sessions directory read once per picker open: parsing every saved
@@ -546,6 +550,7 @@ impl App {
             model_picker: None,
             model_choices: Vec::new(),
             fetching_models: false,
+            generating_image: false,
             session_picker: None,
             session_entries: Vec::new(),
             revert_picker: None,
@@ -821,6 +826,7 @@ impl App {
                 .is_some_and(|mark| self.spinner.wrapping_sub(mark) < 5)
             // The model fetch spinner animates while it waits.
             || self.fetching_models
+            || self.generating_image
             // `auto` repaints on the minute so a quiet session still moves
             // from morning to night.
             || crate::theme::auto_redraw_due()

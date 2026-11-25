@@ -20,6 +20,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `/generate <prompt>` (or `/generate --model <id> <prompt>`) asks an image model on the active endpoint and saves the PNG in the workspace as `image-<stamp>.png`, never overwriting an earlier one.
 - `/stats` shows what every run on this machine has spent: totals, requests and active days from `~/.yopes/usage.json`, with a 13-week heatmap and the five busiest days; Esc closes it.
 - Done and needs-approval pings: the terminal bell plus a Windows toast, fired when a turn finishes and when the approval panel opens.
 - `assets/icon-512.png` (plus 128/256/1024 and `icon.ico`): the blue pixel-Y mark, drawn on a 16×16 grid so it stays sharp at every size. Uploaded once to the shared Discord application as `yopes_logo`.

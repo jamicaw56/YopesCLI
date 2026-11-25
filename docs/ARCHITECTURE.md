@@ -19,6 +19,7 @@ loop owns all I/O, and rendering is a pure function of `App`.
 | `discord.rs` | Rich Presence: named-pipe IPC, handshake, `SET_ACTIVITY` on a worker thread, on by default through the shared application in `SHARED_CLIENT_ID`, inert after `/set discord off`. |
 | `hooks.rs` | User hooks from `~/.yopes/hooks.json` (`PreToolUse`, `PostToolUse`, `Stop`), run through the shell runner with a timeout. |
 | `usage.rs` | The machine-wide token ledger in `~/.yopes/usage.json`, one row per local day; `/stats` reads it for totals and the 13-week heatmap. |
+| `image_api.rs` | `/generate`: an OpenAI-compatible `/images/generations` call, base64 or URL replies, and the `image-<stamp>.png` name that never overwrites an earlier image. |
 | `assets/` | The icon set (`icon-128`/`256`/`512`/`1024`, `icon.ico`), generated on a 16×16 pixel grid; `icon-512.png` is uploaded once to the shared Discord application as `yopes_logo`. |
 | `model_api.rs` | Fetching model IDs from user-configured OpenAI-compatible endpoints. |
 | `session.rs` | `Session`, `Message`, `ToolCall`, save/load, token estimation, compaction. |

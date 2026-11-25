@@ -53,7 +53,15 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
     // `/settings` and the read-only commands change nothing about the turn.
     matches!(
         name,
-        "/help" | "/agents" | "/skills" | "/quit" | "/settings" | "/goal" | "/export" | "/stats"
+        "/help"
+            | "/agents"
+            | "/skills"
+            | "/quit"
+            | "/settings"
+            | "/goal"
+            | "/export"
+            | "/stats"
+            | "/generate"
     )
 }
 
@@ -523,6 +531,10 @@ impl App {
             }
             "/settings" => self.open_settings(),
             "/stats" => self.open_stats(),
+            "/generate" => {
+                let prompt = parts.collect::<Vec<_>>().join(" ");
+                return self.generate_image(&prompt);
+            }
             "/agents" => self.open_agents_picker(),
             "/skills" => self.show_skills(),
             "/revert" => self.open_revert_picker(),

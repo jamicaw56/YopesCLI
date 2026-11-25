@@ -8,6 +8,7 @@ mod delegation;
 mod diff;
 mod discord;
 mod hooks;
+mod image_api;
 mod mcp;
 mod model_api;
 mod models;
@@ -65,6 +66,7 @@ struct Channels {
     delegates: mpsc::UnboundedSender<crate::app::DelegateUpdate>,
     user_commands: mpsc::UnboundedSender<(u64, Result<String, String>)>,
     models: mpsc::UnboundedSender<(Option<String>, Result<Vec<(String, String)>, String>)>,
+    images: mpsc::UnboundedSender<Result<Vec<u8>, String>>,
     paste: mpsc::UnboundedSender<Result<(String, String), String>>,
     titles: mpsc::UnboundedSender<(u64, String)>,
 }
@@ -142,6 +144,7 @@ async fn run() -> Result<()> {
         mpsc::unbounded_channel::<(u64, Result<String, String>)>();
     let (models_sender, mut models_receiver) =
         mpsc::unbounded_channel::<(Option<String>, Result<Vec<(String, String)>, String>)>();
+    let (image_sender, mut image_receiver) = mpsc::unbounded_channel::<Result<Vec<u8>, String>>();
     let (paste_sender, mut paste_receiver) =
         mpsc::unbounded_channel::<Result<(String, String), String>>();
     let (title_sender, mut title_receiver) = mpsc::unbounded_channel::<(u64, String)>();
@@ -157,6 +160,7 @@ async fn run() -> Result<()> {
         delegates: delegate_sender,
         user_commands: user_cmd_sender,
         models: models_sender,
+        images: image_sender,
         paste: paste_sender,
         titles: title_sender,
     };
@@ -362,6 +366,12 @@ async fn run() -> Result<()> {
             result = models_receiver.recv() => {
                 if let Some((base_url, result)) = result {
                     app.on_custom_models(base_url, result);
+                }
+                redraw_now = true;
+            }
+            result = image_receiver.recv() => {
+                if let Some(result) = result {
+                    app.on_generated_image(result);
                 }
                 redraw_now = true;
             }
@@ -714,6 +724,21 @@ fn dispatch(
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let _ = sender.send((base_url, result));
+            });
+        }
+        Action::GenerateImage {
+            base_url,
+            auth,
+            key,
+            model,
+            prompt,
+        } => {
+            let sender = channels.images.clone();
+            tokio::spawn(async move {
+                let result = image_api::generate(&base_url, auth, key.as_deref(), &model, &prompt)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = sender.send(result);
             });
         }
         Action::NameSession { task } => {
