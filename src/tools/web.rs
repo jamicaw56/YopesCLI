@@ -10,25 +10,31 @@ struct WebSearchArgs {
 }
 
 const TAVILY_SEARCH_URL: &str = "https://api.tavily.com/search";
+/// The no-JavaScript page: the plain `html/` endpoint answers a real browser
+/// with a bot challenge, `lite/` still serves the results as ordinary markup.
+const DUCKDUCKGO_SEARCH_URL: &str = "https://lite.duckduckgo.com/lite/";
 const MAX_WEB_RESULTS: usize = 10;
 
-/// Search the web with Tavily and format the top results.
+/// Search the web and format the top results: Tavily when a key is set, the
+/// DuckDuckGo HTML endpoint otherwise, so search works out of the box.
 ///
 /// Uses a blocking HTTP client because tool execution runs on
 /// `spawn_blocking`, not on the async runtime.
 pub(super) fn web_search(arguments: &str, api_key: Option<&str>) -> Result<String> {
-    let Some(api_key) = api_key.map(str::trim).filter(|key| !key.is_empty()) else {
-        bail!(
-            "web search is not configured; add tavily_api_key to the config or set \
-             TAVILY_API_KEY, then restart yopes"
-        );
-    };
     let args: WebSearchArgs = parse(arguments)?;
     let query = args.query.trim();
     if query.is_empty() {
         bail!("query cannot be empty");
     }
     let max_results = args.max_results.unwrap_or(5).clamp(1, MAX_WEB_RESULTS);
+    match api_key.map(str::trim).filter(|key| !key.is_empty()) {
+        Some(api_key) => tavily_search(query, max_results, api_key),
+        None => duckduckgo_search(query, max_results),
+    }
+}
+
+/// Tavily, when the user configured a key.
+fn tavily_search(query: &str, max_results: usize, api_key: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
@@ -79,8 +85,228 @@ pub(super) fn web_search(arguments: &str, api_key: Option<&str>) -> Result<Strin
     Ok(truncate_output(output))
 }
 
+/// DuckDuckGo's HTML endpoint: no key, no quota. It answers with ordinary
+/// markup rather than JSON, so the results are read out of the page.
+fn duckduckgo_search(query: &str, max_results: usize) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        // DuckDuckGo serves its no-JavaScript page to a browser agent only.
+        .user_agent("Mozilla/5.0 (compatible; yopes)")
+        .build()
+        .context("creating the search client")?;
+    let response = client
+        .post(DUCKDUCKGO_SEARCH_URL)
+        .form(&[("q", query)])
+        .send()
+        .context("contacting DuckDuckGo")?;
+    let status = response.status();
+    let body = response.text().context("reading the DuckDuckGo response")?;
+    if !status.is_success() {
+        bail!("DuckDuckGo returned {status}");
+    }
+    let results = duckduckgo_results(&body, max_results);
+    if results.is_empty() {
+        return Ok(format!("{query}\n(no results)"));
+    }
+    let mut output = format!("{query}\n");
+    for (index, (title, url, snippet)) in results.iter().enumerate() {
+        output.push_str(&format!("\n{}. {title}\n{url}\n{snippet}\n", index + 1));
+    }
+    Ok(truncate_output(output))
+}
+
+/// `(title, url, snippet)` out of a DuckDuckGo result page.
+///
+/// The lite page repeats this shape per result: a link carrying
+/// `class='result-link'` with the target in a plain `href`, and a
+/// `class='result-snippet'` cell right after it.
+fn duckduckgo_results(html: &str, max: usize) -> Vec<(String, String, String)> {
+    let mut results = Vec::new();
+    let mut cursor = 0usize;
+    while results.len() < max {
+        let Some(offset) = html[cursor..].find("result-link") else {
+            break;
+        };
+        let class_at = cursor + offset;
+        // The link's opening tag starts before the class attribute and ends
+        // at the first `>` after it.
+        let Some(tag_start) = html[..class_at].rfind("<a") else {
+            cursor = class_at + 1;
+            continue;
+        };
+        let Some(tag_end) = html[class_at..].find('>').map(|at| class_at + at) else {
+            break;
+        };
+        let tag = &html[tag_start..tag_end];
+        let Some(href) = attribute(tag, "href") else {
+            cursor = tag_end + 1;
+            continue;
+        };
+        let Some(url) = duckduckgo_url(&href) else {
+            cursor = tag_end + 1;
+            continue;
+        };
+        let title_end = html[tag_end..]
+            .find("</a>")
+            .map_or(html.len(), |at| tag_end + at);
+        let title = clean_text(&html[tag_end + 1..title_end]);
+        // The snippet follows the link in its own element.
+        let snippet = html[title_end..]
+            .find("result-snippet")
+            .map(|at| {
+                let start = title_end + at;
+                let text_start = html[start..].find('>').map(|gt| start + gt + 1);
+                let text_end = text_start
+                    .and_then(|from| html[from..].find("</td>").map(|end| from + end))
+                    .unwrap_or(start);
+                clean_text(&html[text_start.unwrap_or(start)..text_end])
+            })
+            .unwrap_or_default();
+        if !title.is_empty() {
+            results.push((title, url, snippet));
+        }
+        cursor = title_end.max(class_at + 1);
+    }
+    results
+}
+
+/// One attribute value out of an HTML tag, single- or double-quoted.
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    for quote in ['"', '\''] {
+        let needle = format!("{name}={quote}");
+        if let Some(at) = tag.find(&needle) {
+            let start = at + needle.len();
+            let end = tag[start..].find(quote)?;
+            return Some(tag[start..start + end].to_owned());
+        }
+    }
+    None
+}
+
+/// The real target of a DuckDuckGo result link: the page wraps it in a
+/// redirect with the URL in `uddg`, percent-encoded.
+fn duckduckgo_url(href: &str) -> Option<String> {
+    let href = if let Some(rest) = href.split("uddg=").nth(1) {
+        let encoded = rest.split('&').next().unwrap_or(rest);
+        percent_decode(encoded)
+    } else if href.starts_with("http") {
+        href.to_owned()
+    } else {
+        return None;
+    };
+    href.starts_with("http").then_some(href)
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+                match hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    None => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Result text with its tags and the entities DuckDuckGo writes stripped.
+fn clean_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+    text.replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// How many bytes one `web_fetch` may pull.
 const MAX_FETCH_BYTES: usize = 1_000_000;
+
+#[cfg(test)]
+mod search_tests {
+    use super::{clean_text, duckduckgo_results, duckduckgo_url, percent_decode};
+
+    /// The lite page's shape, trimmed to what the parser reads: two results,
+    /// the first with a snippet, exactly as `lite.duckduckgo.com/lite/` serves
+    /// them (single-quoted classes, plain `href`).
+    const PAGE: &str = r#"<table border="0">
+<tr><td valign="top">1.&nbsp;</td><td>
+<a rel="nofollow" href="https://releases.rs/" class='result-link'>Rust Versions | <b>Rust</b> Changelogs</a></td></tr>
+<tr><td>&nbsp;</td><td class='result-snippet'><b>Rust</b> Versions # Stable &amp; Beta</td></tr>
+<tr><td valign="top">2.&nbsp;</td><td>
+<a rel="nofollow" href="https://blog.rust-lang.org/" class='result-link'>The Rust Blog</a></td></tr>
+<tr><td>&nbsp;</td><td class='result-snippet'>News from the team</td></tr>
+</table>"#;
+
+    #[test]
+    fn duckduckgo_results_are_read_out_of_the_page() {
+        let results = duckduckgo_results(PAGE, 5);
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert_eq!(results[0].0, "Rust Versions | Rust Changelogs");
+        assert_eq!(results[0].1, "https://releases.rs/");
+        assert_eq!(results[0].2, "Rust Versions # Stable & Beta");
+        assert_eq!(results[1].0, "The Rust Blog");
+        assert_eq!(results[1].1, "https://blog.rust-lang.org/");
+        assert_eq!(results[1].2, "News from the team");
+        // `max` caps the rows even when the page holds more.
+        assert_eq!(duckduckgo_results(PAGE, 1).len(), 1);
+        // A page that answers with no results is not an error.
+        assert!(duckduckgo_results("<html><body>nothing</body></html>", 5).is_empty());
+    }
+
+    #[test]
+    fn redirect_links_and_entities_come_back_readable() {
+        assert_eq!(percent_decode("a%20b%2Bc+d"), "a b+c d");
+        // The lite page links straight out; the `uddg` redirect is still
+        // understood, so a page that wraps links keeps working.
+        assert_eq!(
+            duckduckgo_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F"),
+            Some("https://example.com/".to_owned())
+        );
+        // A plain link is used as given; a relative one is dropped.
+        assert_eq!(
+            duckduckgo_url("https://example.com/x"),
+            Some("https://example.com/x".to_owned())
+        );
+        assert_eq!(duckduckgo_url("/l/?rut=1"), None);
+        assert_eq!(clean_text(" a <b>b</b>  &amp; c "), "a b & c");
+    }
+}
 
 #[derive(Deserialize)]
 struct WebFetchArgs {

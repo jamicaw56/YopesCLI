@@ -641,15 +641,14 @@ mod tests {
     }
 
     #[test]
-    fn web_search_needs_a_key_and_previews_the_query() {
+    fn web_search_previews_the_query_and_rejects_an_empty_one() {
         use super::execute;
         let search = ToolCall::new("call_3", "web_search", r#"{"query":"rust 2026 release"}"#);
         assert_eq!(preview(&search), "rust 2026 release");
 
-        let error = execute(&search, None, Path::new("."))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("TAVILY_API_KEY"));
+        // No key is no longer an error: the search falls to DuckDuckGo, which
+        // needs nothing configured. That path is covered by the parser tests
+        // in `web.rs`, which do not touch the network.
         let empty = ToolCall::new("call_4", "web_search", r#"{"query":"  "}"#);
         let error = execute(&empty, Some("tvly-test"), Path::new("."))
             .unwrap_err()

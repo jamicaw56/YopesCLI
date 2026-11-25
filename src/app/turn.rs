@@ -516,6 +516,7 @@ impl App {
                     "system" | "prompt" => self.set_custom_system_prompt(&value),
                     "effort" | "reasoning" => self.set_effort(&value),
                     "compact" => return self.set_compact(&value),
+                    "discord" => self.set_discord(&value),
                     "" => self.show_settings(),
                     other => self.error(format!("Unknown setting `{other}` · /set {SET_KEYS}")),
                 }
@@ -831,6 +832,52 @@ impl App {
             self.persist_system_prompt(Some(value));
             self.info("Custom system prompt set");
         }
+    }
+
+    /// `/set discord [<application id>|off]`: Rich Presence, off until the user
+    /// gives the id of their own Discord application. Nothing is sent, and no
+    /// socket is opened, while it is off.
+    pub(crate) fn set_discord(&mut self, value: &str) {
+        let value = value.trim();
+        if value.is_empty() {
+            match &self.discord_client_id {
+                Some(id) => self.info(format!(
+                    "Discord presence: on · application {id} · /set discord off to stop"
+                )),
+                None => self
+                    .info("Discord presence: off · /set discord <application id> to show the card"),
+            }
+            return;
+        }
+        if matches!(value.to_ascii_lowercase().as_str(), "off" | "none") {
+            if let Err(error) = config::save_discord_client_id(&self.config_path, None) {
+                self.error(format!("Could not save the Discord setting: {error:#}"));
+                return;
+            }
+            self.discord_client_id = None;
+            self.info("Discord presence: off");
+            return;
+        }
+        // A Discord application id is a long decimal number; anything else is
+        // a typo worth naming instead of failing silently inside the socket.
+        if !value.chars().all(|character| character.is_ascii_digit()) || value.len() < 15 {
+            self.error(
+                "Discord presence: the application id is the numeric Client ID from the Discord \
+                 developer portal · /set discord off",
+            );
+            return;
+        }
+        if let Err(error) =
+            config::save_discord_client_id(&self.config_path, Some(value.to_owned()))
+        {
+            self.error(format!("Could not save the Discord setting: {error:#}"));
+            return;
+        }
+        self.discord_client_id = Some(value.to_owned());
+        self.info(
+            "Discord presence: on · upload the icon as `yopes_logo` (and `yopes_build`, \
+             `yopes_plan`, `yopes_chat` for the small image) in the Discord developer portal",
+        );
     }
 
     /// `/set effort [level]`: the reasoning effort, or `off` for the backend

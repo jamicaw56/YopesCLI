@@ -312,6 +312,9 @@ pub struct App {
     pub mode: Mode,
     /// Whether history is summarized automatically when the context fills.
     pub auto_compact: bool,
+    /// Discord application id for Rich Presence: `None` leaves the feature
+    /// off, which is the default until `/set discord <id>` turns it on.
+    pub discord_client_id: Option<String>,
     /// Images pasted with Ctrl+V, sent with the next submitted message.
     pub attachments: Vec<ImageAttachment>,
     /// Counter giving each pasted image a unique display name.
@@ -488,6 +491,7 @@ impl App {
             tools_mode: ToolsMode::default(),
             mode: Mode::default(),
             auto_compact,
+            discord_client_id: config::load_discord_client_id(&config_path),
             attachments: Vec::new(),
             next_image: 0,
             image_paths: HashMap::new(),

@@ -8,7 +8,7 @@
 pub(crate) const EFFORT_CHOICES: &str = "Usage: /set effort off|none|low|medium|high|xhigh";
 
 /// The keys `/set` accepts, so an unknown one can list them.
-pub(crate) const SET_KEYS: &str = "tools, theme, weather, system, compact, effort";
+pub(crate) const SET_KEYS: &str = "tools, theme, weather, system, compact, effort, discord";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandSpec {
@@ -168,6 +168,7 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
             ("system", "Custom system prompt"),
             ("compact", "Automatic context compaction"),
             ("effort", "Reasoning effort"),
+            ("discord", "Discord Rich Presence: off by default"),
         ]),
         ("/set", ["tools"]) => list(&[
             ("on", "Edits run automatically; risky commands ask"),
@@ -193,6 +194,10 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
         ("/set", ["compact"]) => list(&[
             ("on", "Summarize history when the context fills"),
             ("off", "Never compact automatically"),
+        ]),
+        ("/set", ["discord"]) => list(&[
+            ("off", "Presence off: no socket, nothing sent"),
+            ("<id>", "Discord application id from the developer portal"),
         ]),
         ("/provider", []) => list(&[
             ("connect", "Connect a provider or a custom endpoint"),
@@ -347,7 +352,9 @@ mod tests {
         };
         assert_eq!(
             labels("/set "),
-            vec!["tools", "theme", "weather", "system", "compact", "effort"]
+            vec![
+                "tools", "theme", "weather", "system", "compact", "effort", "discord"
+            ]
         );
         assert_eq!(labels("/set t"), vec!["tools", "theme"]);
         assert_eq!(labels("/set theme da"), vec!["dark"]);

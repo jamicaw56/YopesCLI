@@ -71,6 +71,19 @@ hook blocks the call and its output becomes the tool's error, `PostToolUse`
 output joins the result, and `Stop` runs (detached) when a turn ends. Each
 hook has 60 seconds.
 
+## Discord presence
+
+Off by default: nothing is sent and no socket opens until you give it the id of
+your own Discord application.
+
+1. Create an application at the [Discord developer portal](https://discord.com/developers/applications) and copy its **Application ID**.
+2. Under *Rich Presence → Art Assets*, upload [`assets/icon-512.png`](assets/icon-512.png) and name the asset **`yopes_logo`**.
+3. Run `/set discord <application id>`. `/set discord off` stops it again, and `/settings` toggles the same switch.
+
+The card shows the workspace and mode on the first line, the mode and model on
+the second, with the Y as its large image. Only that one asset is referenced:
+a missing asset key makes Discord refuse the whole card.
+
 ## Known limitations
 - **Image pasting**: `Ctrl+V` on Windows Terminal pastes text only, so a
   screenshot clipboard sends nothing. Use **`Ctrl+G`** to attach a clipboard

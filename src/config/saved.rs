@@ -53,6 +53,9 @@ pub(super) struct SavedConfig {
     /// Whether compaction summarizes older turns automatically.
     #[serde(default = "auto_compact_default")]
     pub(super) auto_compact: bool,
+    /// Discord application id for Rich Presence; `None` keeps the feature off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) discord_client_id: Option<String>,
     /// Reasoning effort sent with OpenAI-compatible requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) reasoning_effort: Option<String>,
@@ -109,6 +112,7 @@ impl SavedConfig {
             provider_keys: BTreeMap::new(),
             tavily_api_key: None,
             auto_compact: true,
+            discord_client_id: None,
             reasoning_effort: None,
             theme: None,
             permission: None,
@@ -662,6 +666,25 @@ pub(crate) fn save_system_prompt(path: &Path, value: Option<String>) -> Result<(
 
 pub(crate) fn save_auto_compact(path: &Path, value: bool) -> Result<()> {
     update_saved(path, |saved| saved.auto_compact = value)
+}
+
+/// The Discord application id Rich Presence uses, when the user turned it on.
+pub(crate) fn load_discord_client_id(path: &Path) -> Option<String> {
+    load_saved(path)
+        .ok()
+        .flatten()
+        .and_then(|saved| saved.discord_client_id)
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty())
+}
+
+/// Store or clear the Discord application id: `None` turns presence off.
+pub(crate) fn save_discord_client_id(path: &Path, value: Option<String>) -> Result<()> {
+    update_saved(path, |saved| {
+        saved.discord_client_id = value
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+    })
 }
 
 /// Store or clear the reasoning effort, in place; an empty value clears.

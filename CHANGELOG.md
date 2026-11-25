@@ -16,6 +16,8 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `assets/icon-512.png` (plus 128/256/1024 and `icon.ico`): the blue pixel-Y mark, drawn on a 16×16 grid so it stays sharp at every size. Upload it to a Discord application as `yopes_logo`.
+- Discord Rich Presence, off until `/set discord <application id>`: the card shows the workspace, mode and model, with the Y as its large image.
 - `@path` mentions: typing `@` completes paths from the workspace, and the mentioned file is attached to the message when it is sent.
 - `/models` is a top-level command again: pick a model, or switch by name.
 - `/compact` summarizes older turns now, without going through `/set compact now`.
@@ -35,6 +37,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- `web_search` works without a Tavily key: it falls back to DuckDuckGo's no-JavaScript page, and a configured Tavily key still takes precedence.
 - Images in tool results are sharper: they fit the frame width instead of being cropped on the right, and keep their aspect ratio.
 - Saved custom providers show a name-based monogram instead of identical star placeholders.
 - Provider setup is custom-API-only; the first-run screen and installers direct users to configure their own compatible API.

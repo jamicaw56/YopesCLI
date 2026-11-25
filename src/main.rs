@@ -6,6 +6,7 @@ mod config;
 mod credentials;
 mod delegation;
 mod diff;
+mod discord;
 mod hooks;
 mod mcp;
 mod model_api;
@@ -247,11 +248,21 @@ async fn run() -> Result<()> {
     let mut frames = 0u64;
     let mut total_draw_ms = 0u64;
     let mut worst_draw_ms = 0u64;
+    // Discord Rich Presence: inert until `/set discord <id>` gave an
+    // application id, so an untouched install opens no socket.
+    let mut discord = discord::Runtime::default();
 
     loop {
         if app.should_quit {
             break;
         }
+        // One comparison when nothing changed, and a write only when the card
+        // would actually differ (or the periodic re-send is due).
+        discord.sync(
+            app.discord_client_id
+                .clone()
+                .map(|id| (id, discord::presence(&app))),
+        );
         // Redrawing re-lays-out the whole transcript, so stream text redraws
         // at a fixed cadence while user input still gets an immediate frame.
         // A headless run has no terminal, so it draws nothing at all.

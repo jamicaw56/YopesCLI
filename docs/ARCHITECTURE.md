@@ -16,7 +16,9 @@ loop owns all I/O, and rendering is a pure function of `App`.
 | `backend/` | HTTP client for OpenAI-compatible and Ollama endpoints: `mod.rs` (`Backend`, `StreamEvent`), `messages.rs` request bodies, `retry.rs` backoff, `sse.rs` stream parsing. |
 | `config/` | CLI arguments (`cli.rs`), `Config` and the provider types (`mod.rs`), the saved-config JSON and persistence (`saved.rs`). |
 | `credentials.rs` | Sealing and opening API keys (argon2 + chacha20poly1305). |
+| `discord.rs` | Opt-in Rich Presence: named-pipe IPC, handshake, `SET_ACTIVITY` on a worker thread, inert until an application id is set. |
 | `hooks.rs` | User hooks from `~/.yopes/hooks.json` (`PreToolUse`, `PostToolUse`, `Stop`), run through the shell runner with a timeout. |
+| `assets/` | The icon set (`icon-128`/`256`/`512`/`1024`, `icon.ico`), generated on a 16×16 pixel grid; `icon-512.png` is the Discord `yopes_logo` asset. |
 | `model_api.rs` | Fetching model IDs from user-configured OpenAI-compatible endpoints. |
 | `session.rs` | `Session`, `Message`, `ToolCall`, save/load, token estimation, compaction. |
 | `diff.rs` | Line diffing, hunks, and side-by-side rows. |
