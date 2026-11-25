@@ -165,19 +165,22 @@ fn worker(client_id: String, updates: Receiver<Presence>) {
             }
             continue;
         };
-        if write_frame(
-            &mut connection,
-            OP_HANDSHAKE,
-            &serde_json::json!({ "v": 1, "client_id": client_id }),
-        )
-        .is_err()
-        {
+        // Discord only takes a command once it has answered the handshake
+        // with its READY frame. An activity written in the same breath as the
+        // handshake is dropped without a reply and no card ever appears, so
+        // the handshake is completed before the first update goes out.
+        if handshake(&mut connection, &client_id).is_err() {
             std::thread::sleep(Duration::from_secs(5));
+            if receiver_closed(&updates) {
+                return;
+            }
             continue;
         }
         // One connection: send every update until it fails or the feature is
         // switched off, then reconnect (a failed write means Discord went
-        // away, and the next attempt waits for it).
+        // away, and the next attempt waits for it). Idle time needs no read:
+        // Discord is only written to when the card changes or the periodic
+        // re-send is due, and it answers every command.
         loop {
             match updates.recv_timeout(Duration::from_secs(2)) {
                 Ok(presence) => {
@@ -185,12 +188,7 @@ fn worker(client_id: String, updates: Receiver<Presence>) {
                         break;
                     }
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // A ping Discord sent must be answered or it drops us.
-                    if !drain(&mut connection) {
-                        break;
-                    }
-                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
@@ -205,13 +203,20 @@ fn receiver_closed(updates: &Receiver<Presence>) -> bool {
     matches!(updates.try_recv(), Err(TryRecvError::Disconnected))
 }
 
+fn handshake(connection: &mut Connection, client_id: &str) -> std::io::Result<()> {
+    let frame = serde_json::json!({ "v": 1, "client_id": client_id });
+    write_frame(connection, OP_HANDSHAKE, &frame)?;
+    reply(connection)
+}
+
 fn send_activity(connection: &mut Connection, presence: &Presence) -> std::io::Result<()> {
     let frame = serde_json::json!({
         "cmd": "SET_ACTIVITY",
         "args": { "pid": std::process::id(), "activity": presence.activity() },
         "nonce": format!("{}", started_ms()),
     });
-    write_frame(connection, OP_FRAME, &frame)
+    write_frame(connection, OP_FRAME, &frame)?;
+    reply(connection)
 }
 
 const OP_HANDSHAKE: u32 = 0;
@@ -234,37 +239,38 @@ fn write_frame(
     connection.flush()
 }
 
-/// Read whatever Discord sent and answer its pings. `false` when the
-/// connection is gone, which is the signal to reconnect.
-fn drain(connection: &mut Connection) -> bool {
+/// Read frames until Discord answers the command just sent, answering its
+/// pings on the way. An `OP_CLOSE` frame or a read error means the connection
+/// is gone, which is the signal to reconnect.
+fn reply(connection: &mut Connection) -> std::io::Result<()> {
     loop {
-        let mut header = [0u8; 8];
-        if connection.read_exact(&mut header).is_err() {
-            return false;
-        }
-        let opcode = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-        let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-        let mut body = vec![0u8; length];
-        if connection.read_exact(&mut body).is_err() {
-            return false;
-        }
+        let (opcode, body) = read_frame(connection)?;
         match opcode {
-            OP_PING => {
-                let mut frame = Vec::with_capacity(8 + body.len());
-                frame.extend_from_slice(&OP_PONG.to_le_bytes());
-                frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
-                frame.extend_from_slice(&body);
-                if connection.write_all(&frame).is_err() || connection.flush().is_err() {
-                    return false;
-                }
+            OP_PING => write_frame(connection, OP_PONG, &body)?,
+            OP_CLOSE => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "Discord closed the connection",
+                ));
             }
-            OP_CLOSE => return false,
+            // Every command gets one answer, and that answer is the frame
+            // carrying a `cmd`: READY for the handshake, SET_ACTIVITY for an
+            // activity.
+            _ if body.get("cmd").is_some() => return Ok(()),
             _ => {}
         }
-        // `read_exact` blocks for the next frame: the caller polls this on a
-        // timeout, so one readable frame is enough per call.
-        return true;
     }
+}
+
+fn read_frame(connection: &mut Connection) -> std::io::Result<(u32, serde_json::Value)> {
+    let mut header = [0u8; 8];
+    connection.read_exact(&mut header)?;
+    let opcode = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+    let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+    let mut body = vec![0u8; length];
+    connection.read_exact(&mut body)?;
+    let body = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    Ok((opcode, body))
 }
 
 /// The IPC socket: the first `discord-ipc-N` that accepts a connection.

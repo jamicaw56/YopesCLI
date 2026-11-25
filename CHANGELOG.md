@@ -8,6 +8,8 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- Discord Rich Presence actually shows up: the card is sent only after Discord answers the handshake, instead of being dropped when it went out in the same breath, and the worker no longer stalls on an idle read that stopped every later update.
+
 - The release workflow's version bump reaches `main` again: the commit is pushed with the bot token instead of `GITHUB_TOKEN`, which branch protection refused.
 
 - An error the turn recovered from clears itself: once the reply streams again, the provider-error block, the retry countdown and the error notice are gone.
