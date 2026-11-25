@@ -31,6 +31,7 @@ mod format;
 mod images;
 mod input;
 mod keys;
+mod mentions;
 mod mode;
 mod palette;
 mod pickers;
@@ -52,7 +53,7 @@ pub(crate) use delegate::{
     ZERO_WRITE_NUDGE_ROUNDS,
 };
 pub(crate) use input::Input;
-pub(crate) use pickers::{ListPicker, ModelChoice, ModelRow};
+pub(crate) use pickers::{ListPicker, ModelChoice, ModelRow, SessionEntry};
 pub(crate) use settings::SETTING_ROWS;
 
 #[cfg(test)]
@@ -336,6 +337,9 @@ pub struct App {
     pub fetching_models: bool,
     /// Popup picker opened by `/session`.
     pub session_picker: Option<ListPicker>,
+    /// The sessions directory read once per picker open: parsing every saved
+    /// transcript per keystroke is what made `/session` lag.
+    session_entries: Vec<SessionEntry>,
     /// Popup picker opened by `/revert`, listing the prompts already sent.
     pub revert_picker: Option<ListPicker>,
     pub running_tool: Option<RunningTool>,
@@ -496,6 +500,7 @@ impl App {
             model_choices: Vec::new(),
             fetching_models: false,
             session_picker: None,
+            session_entries: Vec::new(),
             revert_picker: None,
             running_tool: None,
             user_command_running: false,
@@ -657,6 +662,14 @@ impl App {
             self.spent_completion_tokens,
             price,
         )
+    }
+
+    /// (in, out) tokens billed this session, per the setter's own usage
+    /// reports. `None` until a provider reports any, so an estimate never
+    /// poses as a bill.
+    pub fn spent_tokens(&self) -> Option<(u64, u64)> {
+        (self.spent_prompt_tokens + self.spent_completion_tokens > 0)
+            .then_some((self.spent_prompt_tokens, self.spent_completion_tokens))
     }
 
     /// Estimated tokens the next request would send, the context window load.

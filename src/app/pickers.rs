@@ -367,9 +367,10 @@ impl App {
             self.info("Finish the current turn before switching sessions.");
             return;
         }
+        self.refresh_session_entries();
         let current = self.session_path.clone().unwrap_or_default();
-        let entries = self.collect_sessions();
-        let selected = entries
+        let selected = self
+            .session_entries
             .iter()
             .position(|entry| entry.path == current)
             .unwrap_or(0);
@@ -377,6 +378,13 @@ impl App {
             selected,
             ..ListPicker::default()
         });
+    }
+
+    /// Read the sessions directory once, when the picker opens: parsing every
+    /// saved transcript on each keystroke and each frame is what made
+    /// `/session` lag in a long-lived history.
+    fn refresh_session_entries(&mut self) {
+        self.session_entries = self.collect_sessions();
     }
 
     /// `/session` rows: every file in the sessions directory, newest first,
@@ -406,12 +414,11 @@ impl App {
     }
 
     pub(crate) fn session_matches(&self) -> Vec<SessionEntry> {
-        let entries = self.collect_sessions();
         let filter = self
             .session_picker
             .as_ref()
             .map_or("", |picker| picker.filter.as_str());
-        session_matching(&entries, filter)
+        session_matching(&self.session_entries, filter)
             .into_iter()
             .cloned()
             .collect()
@@ -435,8 +442,7 @@ impl App {
         match key.code {
             KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
             KeyCode::Down => {
-                let entries = self.collect_sessions();
-                let count = session_matching(&entries, &picker.filter).len();
+                let count = session_matching(&self.session_entries, &picker.filter).len();
                 picker.selected = (picker.selected + 1).min(count.saturating_sub(1));
             }
             KeyCode::Backspace => {
@@ -452,8 +458,7 @@ impl App {
                 picker.selected = 0;
             }
             KeyCode::Enter => {
-                let entries = self.collect_sessions();
-                let matches = session_matching(&entries, &picker.filter);
+                let matches = session_matching(&self.session_entries, &picker.filter);
                 let target = matches
                     .get(picker.selected.min(matches.len().saturating_sub(1)))
                     .map(|entry| entry.path.clone());

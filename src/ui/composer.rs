@@ -513,6 +513,18 @@ pub(super) fn draw_tab_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
+/// The billed tokens as `↑12.3k ↓4.5k`, for the footer beside the context
+/// load. Empty until a provider reports usage, so no estimate poses as a
+/// bill.
+fn token_label(spent: Option<(u64, u64)>) -> String {
+    match spent {
+        Some((prompt, completion)) if prompt + completion > 0 => {
+            format!("↑{} ↓{}", format_tokens(prompt), format_tokens(completion))
+        }
+        _ => String::new(),
+    }
+}
+
 pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
     let context = app.context_tokens();
@@ -521,11 +533,14 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|w| w.max(context))
         .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
     let ctx = context_label(context, window);
+    let tokens = token_label(app.spent_tokens());
     let (badge, badge_style) = permission_badge(app.tools_mode);
     let badge_w = UnicodeWidthStr::width(badge) as u16;
     let gap: u16 = 3; // " · " between the three groups
     let ctx_w = UnicodeWidthStr::width(ctx.as_str()) as u16;
     let ctx_cost = if ctx.is_empty() { 0 } else { gap + ctx_w };
+    let tokens_w = UnicodeWidthStr::width(tokens.as_str()) as u16;
+    let tokens_cost = if tokens.is_empty() { 0 } else { gap + tokens_w };
     let mode = format!("{} {}", app.mode.icon(), app.mode.label());
     let mode_w = UnicodeWidthStr::width(mode.as_str()) as u16;
     // A goal carries its progress beside the permission badge: the checklist
@@ -535,11 +550,16 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         .as_ref()
         .map(|label| gap + UnicodeWidthStr::width(label.as_str()) as u16)
         .unwrap_or(0);
-    // The mode and the badge never drop; the context load is the segment that
-    // yields on a narrow terminal. The tabs live on their own row above the transcript.
+    // The mode and the badge never drop; the token count yields first, then
+    // the context load, so a narrow terminal keeps the permission badge. The
+    // tabs live on their own row above the transcript.
     let fixed = mode_w + gap + badge_w + goal_cost;
     let keep_ctx = ctx_cost > 0 && fixed + ctx_cost <= inner.width;
-    let right_width = (fixed + if keep_ctx { ctx_cost } else { 0 }).min(inner.width);
+    let keep_tokens =
+        tokens_cost > 0 && fixed + if keep_ctx { ctx_cost } else { 0 } + tokens_cost <= inner.width;
+    let right_width =
+        (fixed + if keep_tokens { tokens_cost } else { 0 } + if keep_ctx { ctx_cost } else { 0 })
+            .min(inner.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width)])
@@ -558,6 +578,10 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(goal) = goal {
         spans.push(Span::styled(" · ", Style::default().fg(dim())));
         spans.push(Span::styled(goal, Style::default().fg(accent2())));
+    }
+    if keep_tokens {
+        spans.push(Span::styled(" · ", Style::default().fg(dim())));
+        spans.push(Span::styled(tokens, Style::default().fg(muted())));
     }
     if keep_ctx {
         spans.push(Span::styled(" · ", Style::default().fg(dim())));
@@ -653,7 +677,15 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{context_label, header_right};
+    use super::{context_label, header_right, token_label};
+
+    #[test]
+    fn the_token_label_names_both_directions() {
+        assert_eq!(token_label(Some((12_300, 4_500))), "↑12.3k ↓4.5k");
+        // Nothing billed yet, or a provider that reports no usage: no row.
+        assert_eq!(token_label(None), "");
+        assert_eq!(token_label(Some((0, 0))), "");
+    }
 
     #[test]
     fn header_right_shows_provider_model_and_spend() {

@@ -109,6 +109,11 @@ impl Drop for BashJob {
     }
 }
 
+/// How long one hook may run before it is killed: long enough for `cargo fmt`
+/// on a big tree, short enough that a hung hook fails the turn instead of
+/// hanging the interface.
+const HOOK_TIMEOUT_SECONDS: u64 = 60;
+
 const MAX_BASH_JOBS: usize = 16;
 static BASH_JOBS: OnceLock<Mutex<HashMap<u32, BashJob>>> = OnceLock::new();
 static JOB_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -363,6 +368,57 @@ pub(super) fn bash_kill(arguments: &str) -> Result<String> {
         "Killed bash job {}. It reported no exit code.",
         args.job_id
     ))
+}
+
+/// Run one hook command in `workspace`, reporting whether it succeeded and
+/// what it printed. A hook that hangs is killed at the timeout, so a bad hook
+/// cannot wedge the turn it runs inside.
+pub(crate) fn run_hook(command: &str, workspace: &Path) -> (bool, String) {
+    if command.trim().is_empty() {
+        return (true, String::new());
+    }
+    let log_path = temporary_log_path();
+    let Ok(file) = fs::File::create(&log_path) else {
+        return (false, "hooks: could not create a log file".to_owned());
+    };
+    let Ok(stderr) = file.try_clone() else {
+        return (false, "hooks: could not open a log file".to_owned());
+    };
+    let mut process = shell_process(command);
+    process
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(file))
+        .stderr(Stdio::from(stderr));
+    let Ok(mut child) = process.spawn() else {
+        let _ = fs::remove_file(&log_path);
+        return (
+            false,
+            format!("hooks: could not start `{}`", command.trim()),
+        );
+    };
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(_) => break None,
+        }
+        if started.elapsed() >= Duration::from_secs(HOOK_TIMEOUT_SECONDS) {
+            kill_process_tree(&mut child);
+            timed_out = true;
+            break None;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    let mut output = read_log(&log_path);
+    let _ = fs::remove_file(&log_path);
+    if timed_out {
+        output.push_str(&format!("\nhook timed out after {HOOK_TIMEOUT_SECONDS}s"));
+    }
+    let ok = status.is_some_and(|status| status.success()) && !timed_out;
+    (ok, truncate_output(output))
 }
 
 fn kill_process_tree(child: &mut ProcessChild) {

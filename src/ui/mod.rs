@@ -130,26 +130,27 @@ fn draw_backdrop(frame: &mut Frame, area: Rect, phase: usize) {
     // The sun's disc in cell units: center column and row, tint, strength,
     // and glow radius. A cell is about twice as tall as wide, so row
     // distances count double.
-    let sun = sky
-        .as_ref()
-        .and_then(|sky| sky.sun.as_ref())
-        .map(|sun| {
-            let radius = (columns as f32 * 0.16).clamp(6.0, 22.0);
-            (
-                sun.x * columns as f32,
-                sun.y * rows as f32,
-                sun.color,
-                sun.strength as f32,
-                radius,
-            )
-        });
+    let sun = sky.as_ref().and_then(|sky| sky.sun.as_ref()).map(|sun| {
+        let radius = (columns as f32 * 0.16).clamp(6.0, 22.0);
+        (
+            sun.x * columns as f32,
+            sun.y * rows as f32,
+            sun.color,
+            sun.strength as f32,
+            radius,
+        )
+    });
     let mut lines = Vec::with_capacity(rows);
     for y in 0..rows {
         let position = y * 100 / rows.max(1);
         let color = match &sky {
             Some(sky) => blend(
                 theme.accent2,
-                blend(sky.top, sky.horizon, y * 100 / rows.saturating_sub(1).max(1)),
+                blend(
+                    sky.top,
+                    sky.horizon,
+                    y * 100 / rows.saturating_sub(1).max(1),
+                ),
                 95,
             ),
             None if position < 40 => wash,

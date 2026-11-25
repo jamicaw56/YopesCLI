@@ -694,7 +694,10 @@ pub(crate) fn save_diff_sides(path: &Path, value: bool) -> Result<()> {
 
 /// The place saved for the weather backdrop, if the user opted in.
 pub(crate) fn load_weather(path: &Path) -> Option<crate::weather::Place> {
-    load_saved(path).ok().flatten().and_then(|saved| saved.weather)
+    load_saved(path)
+        .ok()
+        .flatten()
+        .and_then(|saved| saved.weather)
 }
 
 /// Store the weather place, or clear it with `None`, in place.

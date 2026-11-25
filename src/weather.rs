@@ -234,10 +234,25 @@ pub fn drop_at(weather: Weather, x: usize, y: usize, phase: usize) -> Option<&'s
     h ^= h >> 13;
     let (columns, period, fall, glyph) = match weather {
         // A storm is denser and falls faster than rain.
-        Weather::Rain => (5, 7 + (h >> 4) % 6, phase * (1 + (h >> 9) as usize % 2), "│"),
-        Weather::Storm => (3, 6 + (h >> 4) % 5, phase * (2 + (h >> 9) as usize % 2), "│"),
+        Weather::Rain => (
+            5,
+            7 + (h >> 4) % 6,
+            phase * (1 + (h >> 9) as usize % 2),
+            "│",
+        ),
+        Weather::Storm => (
+            3,
+            6 + (h >> 4) % 5,
+            phase * (2 + (h >> 9) as usize % 2),
+            "│",
+        ),
         // Snow drifts: one row per three ticks.
-        Weather::Snow => (6, 9 + (h >> 4) % 6, phase / 3, if h % 5 == 0 { "*" } else { "·" }),
+        Weather::Snow => (
+            6,
+            9 + (h >> 4) % 6,
+            phase / 3,
+            if h % 5 == 0 { "*" } else { "·" },
+        ),
         _ => return None,
     };
     if h % columns != 0 {
@@ -303,6 +318,10 @@ mod tests {
         let place = lookup("Paris").expect("geocode");
         assert!(place.name.starts_with("Paris"), "{place:?}");
         let code = fetch_code(place.lat, place.lon).expect("forecast");
-        println!("{} -> code {code} -> {:?}", place.name, Weather::from_code(code));
+        println!(
+            "{} -> code {code} -> {:?}",
+            place.name,
+            Weather::from_code(code)
+        );
     }
 }

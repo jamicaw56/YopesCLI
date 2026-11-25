@@ -568,7 +568,8 @@ fn sky_at(hour: f32, weather: Weather) -> Sky {
 
 /// The sky the backdrop paints right now: `None` unless `auto` is active.
 pub fn sky() -> Option<Sky> {
-    AUTO.load(Ordering::Relaxed).then(|| sky_at(local_hour(), weather::current()))
+    AUTO.load(Ordering::Relaxed)
+        .then(|| sky_at(local_hour(), weather::current()))
 }
 
 /// True once per wall-clock minute while `auto` is on: the event loop's ticker
@@ -644,10 +645,7 @@ mod tests {
                     let Color::Rgb(r, g, b) = color else {
                         panic!("sky must be rgb")
                     };
-                    assert!(
-                        r.max(g).max(b) <= 110,
-                        "hour {hour} {weather:?} too bright"
-                    );
+                    assert!(r.max(g).max(b) <= 110, "hour {hour} {weather:?} too bright");
                 }
                 assert!(sky.stars <= 100);
             }

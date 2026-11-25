@@ -480,7 +480,6 @@ fn sse_data(line: &str) -> SseLine<'_> {
 }
 
 /// Whether a provider error says it rejected the OpenAI tool-call schema.
-///
 /// Custom endpoints often accept `tools` but not `tool_calls` in assistant
 /// history, or reject the `tool_call_id` on a result. Strict servers answer
 /// with a union of Pydantic errors naming those fields, so the request is
@@ -498,6 +497,38 @@ pub(super) fn tool_call_rejected(detail: &str) -> bool {
         || detail.contains("not supported")
         || detail.contains("unsupported");
     names_tools && rejection
+}
+
+/// The exact 400 this ladder exists for: a strict server rejecting `xhigh`.
+#[cfg(test)]
+mod reasoning_tests {
+    use super::reasoning_effort_rejected;
+
+    #[test]
+    fn a_rejected_effort_is_recognised_and_other_failures_are_not() {
+        let strict = "provider API returned 400: BadRequestError: literal_error, \
+                      loc: ('body', 'reasoning_effort'), msg: \"Input should be 'none', \
+                      'low', 'medium', 'high' or 'max'\", input: 'xhigh'";
+        assert!(reasoning_effort_rejected(strict));
+        assert!(!reasoning_effort_rejected(
+            "provider API returned 400: invalid request: messages[1] is not valid"
+        ));
+        // A plain auth failure must not drop the hint.
+        assert!(!reasoning_effort_rejected(
+            "provider API returned 401: invalid api key"
+        ));
+    }
+}
+
+/// Whether a provider error says it rejected `reasoning_effort`.
+///
+/// The vocabulary differs by endpoint: strict servers answer 400 with a
+/// Pydantic `literal_error` listing their allowed values (`xhigh` is not one
+/// everywhere), while others call the argument unsupported. Naming the field
+/// is enough: a request that fails for another reason does not mention it.
+pub(super) fn reasoning_effort_rejected(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("reasoning_effort") || detail.contains("reasoning effort")
 }
 
 pub(super) fn parse_openai_line(

@@ -190,6 +190,16 @@ pub struct Session {
     pub interrupted: bool,
 }
 
+/// The first line of `text`, cut to `width` characters.
+fn one_line(text: &str, width: usize) -> String {
+    let first = text.lines().next().unwrap_or_default().trim();
+    let mut clipped: String = first.chars().take(width).collect();
+    if first.chars().count() > width {
+        clipped.push('…');
+    }
+    clipped
+}
+
 /// Serde skip predicate: finished work saves no `interrupted` field at all,
 /// so a clean session file never carries a key that means nothing.
 fn is_false(value: &bool) -> bool {
@@ -397,6 +407,71 @@ impl Session {
         split
     }
 
+    /// The transcript as Markdown, for `/export`: pasteable into another
+    /// session or saved to a file. Reasoning is left out, and each tool call
+    /// and result folds to one line.
+    pub fn to_markdown(&self) -> String {
+        let mut out = format!("# {}\n", self.title);
+        if let Some(goal) = &self.goal {
+            out.push_str(&format!("\n**Goal:** {goal}\n"));
+        }
+        for message in &self.messages {
+            let text = message.content.trim();
+            match message.role {
+                Role::User => {
+                    out.push_str(&format!("\n## User\n\n{text}\n"));
+                    if !message.images.is_empty() {
+                        let names: Vec<&str> = message
+                            .images
+                            .iter()
+                            .map(|image| image.name.as_str())
+                            .collect();
+                        out.push_str(&format!("\n[attached images: {}]\n", names.join(", ")));
+                    }
+                }
+                Role::Assistant => {
+                    if !text.is_empty() {
+                        out.push_str(&format!("\n## Assistant\n\n{text}\n"));
+                    }
+                    let calls = message.tool_calls.as_deref().unwrap_or_default();
+                    if !calls.is_empty() {
+                        out.push('\n');
+                    }
+                    for call in calls {
+                        out.push_str(&format!(
+                            "- tool `{}` {}\n",
+                            call.function.name,
+                            one_line(&call.function.arguments, 120)
+                        ));
+                    }
+                    if let Some(error) = &message.error {
+                        out.push_str(&format!("\n> error: {error}\n"));
+                    }
+                }
+                Role::Tool => out.push_str(&format!(
+                    "- result: {} ({} lines)\n",
+                    one_line(text, 120),
+                    text.lines().count()
+                )),
+            }
+        }
+        out
+    }
+
+    /// A copy of this conversation under a new id, for `/fork`. Delegation
+    /// records stay behind: those runs report to the original session.
+    pub fn fork(&self) -> Self {
+        let mut fork = Self::new();
+        fork.title = format!("{} (fork)", self.title);
+        fork.messages = self.messages.clone();
+        fork.summary = self.summary.clone();
+        fork.tasks = self.tasks.clone();
+        fork.goal = self.goal.clone();
+        // The copy keeps its name instead of being auto-renamed.
+        fork.auto_named = true;
+        fork
+    }
+
     /// Replace everything before `split` with one user message holding the
     /// summary, so the model still sees what happened earlier.
     pub fn compact(&mut self, split: usize, summary: String) {
@@ -429,6 +504,46 @@ mod tests {
         session.update_title(&"é".repeat(60));
         assert_eq!(session.title.chars().count(), 43);
         assert!(session.title.ends_with('…'));
+    }
+
+    #[test]
+    fn markdown_export_folds_tool_calls_and_results() {
+        let mut session = Session::new();
+        session.title = "Demo".to_owned();
+        session.messages.push(Message::new(Role::User, "fix it"));
+        let mut assistant = Message::new(Role::Assistant, "Looking.");
+        assistant.tool_calls = Some(vec![ToolCall::new("c1", "read_file", r#"{"path":"a.rs"}"#)]);
+        session.messages.push(assistant);
+        session.messages.push(Message::tool_result(
+            "c1",
+            "first line\nsecond line\nthird line",
+        ));
+        let markdown = session.to_markdown();
+        assert!(markdown.starts_with("# Demo\n"), "{markdown}");
+        assert!(markdown.contains("## User\n\nfix it"), "{markdown}");
+        assert!(markdown.contains("## Assistant\n\nLooking."), "{markdown}");
+        assert!(
+            markdown.contains("- tool `read_file` {\"path\":\"a.rs\"}"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("- result: first line (3 lines)"),
+            "{markdown}"
+        );
+        assert!(!markdown.contains("second line"), "{markdown}");
+    }
+
+    #[test]
+    fn a_fork_copies_the_history_under_a_new_id() {
+        let mut session = Session::new();
+        session.title = "Work".to_owned();
+        session.messages.push(Message::new(Role::User, "hi"));
+        session.interrupted = true;
+        let fork = session.fork();
+        assert_ne!(fork.id, session.id);
+        assert_eq!(fork.title, "Work (fork)");
+        assert_eq!(fork.messages, session.messages);
+        assert!(!fork.interrupted);
     }
 
     #[test]

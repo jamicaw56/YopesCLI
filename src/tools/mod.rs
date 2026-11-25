@@ -39,6 +39,7 @@ pub(crate) use shell::BashNotice;
 pub(crate) use shell::kill_commands_for;
 pub(crate) use shell::kill_spawned_commands;
 pub(crate) use shell::poll_bash_jobs;
+pub(crate) use shell::run_hook;
 
 mod subagents;
 pub(crate) use subagents::{cancel_runs, register_subagent_run, unregister_subagent_run};
@@ -167,7 +168,19 @@ pub(crate) fn canonical_tool_name(name: &str) -> &str {
 }
 
 pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Result<String> {
-    scoped_workspace(workspace, || match call.function.name.as_str() {
+    scoped_workspace(workspace, || {
+        // A `PreToolUse` hook runs before the tool: its failure is the call's
+        // error, so a guard the user configured actually guards.
+        if let Some(blocked) = crate::hooks::before_call(call, workspace) {
+            bail!("{blocked}");
+        }
+        let result = dispatch(call, web_key);
+        crate::hooks::after_call(call, result, workspace)
+    })
+}
+
+fn dispatch(call: &ToolCall, web_key: Option<&str>) -> Result<String> {
+    match call.function.name.as_str() {
         "list_dir" => files::list_dir(&call.function.arguments),
         "read_file" => files::read_file(&call.function.arguments),
         "multi_read" => files::multi_read(&call.function.arguments),
@@ -200,7 +213,7 @@ pub fn execute(call: &ToolCall, web_key: Option<&str>, workspace: &Path) -> Resu
         "delegate" => bail!("delegate cannot run outside the session loop"),
         name if crate::mcp::is_mcp(name) => crate::mcp::call(name, &call.function.arguments),
         other => bail!("unknown tool `{other}`"),
-    })
+    }
 }
 
 /// The `task` argument of a `delegate` call, when it is a non-empty string.

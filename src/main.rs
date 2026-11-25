@@ -6,6 +6,7 @@ mod config;
 mod credentials;
 mod delegation;
 mod diff;
+mod hooks;
 mod mcp;
 mod model_api;
 mod models;

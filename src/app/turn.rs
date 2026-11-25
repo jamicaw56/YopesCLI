@@ -53,9 +53,22 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
     // `/settings` and the read-only commands change nothing about the turn.
     matches!(
         name,
-        "/help" | "/agents" | "/skills" | "/quit" | "/settings" | "/goal"
+        "/help" | "/agents" | "/skills" | "/quit" | "/settings" | "/goal" | "/export"
     )
 }
+
+/// What `/init` sends: a normal turn, so the usual approvals guard the write.
+const INIT_PROMPT: &str = "Draft AGENTS.md for this workspace. First inspect it: build files, \
+    README, CI config, any existing AGENTS.md or CLAUDE.md, and the source layout. Then write \
+    AGENTS.md at the workspace root with the commands to build, test and lint, the code style \
+    and conventions, a short map of the layout, and anything non-obvious. Improve an existing \
+    file instead of replacing it. State only facts you verified in the files, and keep it under \
+    60 lines. If you cannot write files, print the draft instead.";
+
+/// The largest transcript `/export` puts on the clipboard: the Windows clipboard
+/// write rides a command line capped near 32k characters, and base64 grows the
+/// text by a third. Anything bigger is saved to a file instead.
+const EXPORT_CLIPBOARD_BYTES: usize = 20_000;
 
 fn normalize_endpoint_url(url: &str) -> (String, &str) {
     let url = url.trim().trim_end_matches('/');
@@ -221,6 +234,13 @@ impl App {
         // Swap `[Image N]` placeholders back to their real paths: the model
         // and the transcript see the path, the composer never did.
         value = self.resolve_image_placeholders(value);
+        // `@path` mentions carry the file itself: one round trip saved per
+        // mentioned file, and what was attached is named in the transcript.
+        let (expanded, attached) = mentions::expand(&value, &self.working_dir);
+        if !attached.is_empty() {
+            value = expanded;
+            self.info(format!("Attached: {}", attached.join(", ")));
+        }
         if !self.running_delegates.is_empty() {
             // Delegates still run: their tool results must follow the
             // assistant turn that asked for them, so a message typed now
@@ -470,18 +490,10 @@ impl App {
                         self.disconnect_named_provider(&target);
                     }
                 }
-                "models" => {
-                    let model = parts.collect::<Vec<_>>().join(" ");
-                    if model.is_empty() {
-                        self.open_model_picker();
-                    } else {
-                        self.backend.set_model(model.clone());
-                        self.persist_model(&model);
-                        self.info(format!("Model changed to {model}"));
-                    }
-                }
+                "models" => self.switch_model(&parts.collect::<Vec<_>>().join(" ")),
                 _ => self.error("Usage: /provider connect|disconnect [name]|models [name]"),
             },
+            "/models" => self.switch_model(&parts.collect::<Vec<_>>().join(" ")),
             "/run" => {
                 let cmd = parts.collect::<Vec<_>>().join(" ");
                 if cmd.is_empty() {
@@ -516,6 +528,15 @@ impl App {
                 let goal = parts.collect::<Vec<_>>().join(" ");
                 self.set_goal(&goal);
             }
+            "/compact" => return self.set_compact("now"),
+            "/export" => return self.export_session(&parts.collect::<Vec<_>>().join(" ")),
+            "/fork" => self.fork_session(),
+            "/init" => {
+                // A normal turn: the input path runs the provider checks and
+                // the tool approvals like any message the user typed.
+                self.input.set(INIT_PROMPT);
+                return self.submit();
+            }
             "/quit" => {
                 self.should_quit = true;
                 return Action::Quit;
@@ -525,6 +546,91 @@ impl App {
             )),
         }
         Action::None
+    }
+
+    /// `/models [name]` and `/provider models [name]`: open the picker, or
+    /// switch to the named model.
+    fn switch_model(&mut self, model: &str) {
+        let model = model.trim();
+        if model.is_empty() {
+            self.open_model_picker();
+        } else {
+            self.backend.set_model(model.to_owned());
+            self.persist_model(model);
+            self.info(format!("Model changed to {model}"));
+        }
+    }
+
+    /// `/export [file]`: the transcript as Markdown. With no file it goes to
+    /// the clipboard, so it pastes into another session; a transcript too big
+    /// for the clipboard, or a named file, is written to disk instead (never
+    /// over an existing file), and `@file` attaches it elsewhere.
+    fn export_session(&mut self, file: &str) -> Action {
+        if self.session.messages.is_empty() {
+            self.info("Nothing to export yet.");
+            return Action::None;
+        }
+        let markdown = self.session.to_markdown();
+        let file = file.trim();
+        if file.is_empty() && markdown.len() <= EXPORT_CLIPBOARD_BYTES {
+            self.info(format!(
+                "Transcript copied as Markdown ({} lines) · paste it into another session",
+                markdown.lines().count()
+            ));
+            return Action::CopyClipboard(markdown);
+        }
+        let path = if file.is_empty() {
+            crate::temp::temp_root().join(format!("yopes-export-{}.md", self.session.id))
+        } else {
+            self.working_dir.join(file)
+        };
+        if path.exists() {
+            self.error(format!(
+                "{} already exists; pick a new name.",
+                path.display()
+            ));
+            return Action::None;
+        }
+        match fs::write(&path, &markdown) {
+            Ok(()) if file.is_empty() => self.info(format!(
+                "Transcript is too big for the clipboard: saved to {} · attach it with @{}",
+                path.display(),
+                path.display()
+            )),
+            Ok(()) => self.info(format!("Transcript saved to {}", path.display())),
+            Err(error) => self.error(format!("Could not write {}: {error}", path.display())),
+        }
+        Action::None
+    }
+
+    /// `/fork`: copy this conversation into a new tab, to try another
+    /// direction without losing this one.
+    fn fork_session(&mut self) {
+        if self.is_busy() {
+            self.info("Finish the current turn before forking.");
+            return;
+        }
+        if self.session.messages.is_empty() {
+            self.info("Nothing to fork yet.");
+            return;
+        }
+        let fork = self.session.fork();
+        let (tools_mode, mode) = (self.tools_mode, self.mode);
+        let tabs = self.tab_count();
+        self.open_tab();
+        if self.tab_count() == tabs {
+            // The tab limit refused; open_tab already said so.
+            return;
+        }
+        self.session = fork;
+        self.tools_mode = tools_mode;
+        self.mode = mode;
+        self.save_session();
+        self.info(format!(
+            "Forked into tab {} · the original stays in tab {}",
+            self.tab_index() + 1,
+            tabs
+        ));
     }
 
     /// The goal's progress for the footer: `goal 3/7 · 43%`, or plain `goal`
@@ -1210,6 +1316,90 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_mention_is_attached_to_the_sent_message() {
+        let root = crate::temp::unique_dir("yopes-mention-submit");
+        std::fs::write(root.join("a.rs"), "fn main() {}\n").unwrap();
+        let mut app = test_app();
+        app.working_dir = root.clone();
+        app.input.set("explain @a.rs");
+        let action = app.submit();
+        assert!(matches!(action, Action::Start { .. }), "the turn starts");
+        let sent = app
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .next_back()
+            .expect("a user message");
+        assert!(
+            sent.content.starts_with("explain @a.rs"),
+            "{}",
+            sent.content
+        );
+        assert!(sent.content.contains("fn main() {}"), "{}", sent.content);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn export_writes_a_new_file_and_refuses_to_overwrite_one() {
+        let root = crate::temp::unique_dir("yopes-export-test");
+        let mut app = test_app();
+        app.working_dir = root.clone();
+        app.session.messages.push(Message::new(Role::User, "hello"));
+        app.command("/export out.md");
+        let written = std::fs::read_to_string(root.join("out.md")).unwrap();
+        assert!(written.contains("hello"), "{written}");
+        app.command("/export out.md");
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("already exists")),
+            "a second export must not clobber the first"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_small_transcript_goes_to_the_clipboard_instead_of_a_file() {
+        let mut app = test_app();
+        app.session.messages.push(Message::new(Role::User, "hello"));
+        let action = app.command("/export");
+        assert!(
+            matches!(action, Action::CopyClipboard(ref text) if text.contains("hello")),
+            "a short transcript is pasted, not saved"
+        );
+    }
+
+    #[test]
+    fn compact_with_nothing_to_summarize_explains_itself() {
+        let mut app = test_app();
+        let action = app.command("/compact");
+        assert!(matches!(action, Action::None));
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("Nothing to compact")),
+        );
+    }
+
+    #[test]
+    fn fork_copies_the_conversation_into_a_new_tab() {
+        let mut app = test_app();
+        app.session.messages.push(Message::new(Role::User, "hi"));
+        let original = app.session.id;
+        app.command("/fork");
+        assert_eq!(app.tab_count(), 2);
+        assert_eq!(app.tab_index(), 1);
+        assert_ne!(app.session.id, original);
+        assert!(
+            app.session.title.ends_with("(fork)"),
+            "{}",
+            app.session.title
+        );
+        assert_eq!(app.session.messages.len(), 1);
+    }
+
+    #[test]
     fn the_compaction_chance_ramps_to_certain() {
         let window = 100_000u64;
         let quarter = u64::MAX / 4;
@@ -1516,6 +1706,28 @@ pub(crate) mod tests {
         assert_eq!(app.tools_mode, ToolsMode::Auto);
         assert!(app.approval.is_none());
         assert!(app.running_tool.is_some());
+    }
+
+    #[test]
+    fn the_session_picker_reads_the_directory_once_not_per_frame() {
+        let dir = crate::temp::unique_dir("yopes-session-cache");
+        let session = crate::session::Session::new();
+        let first = dir.join("session-1.json");
+        let second = dir.join("session-2.json");
+        session.save(&first).unwrap();
+        session.save(&second).unwrap();
+
+        let mut app = test_app();
+        app.sessions_dir = Some(dir.clone());
+        app.session_path = Some(first.clone());
+        app.command("/session");
+        assert_eq!(app.session_picker_count(), 2);
+
+        // A file that appears after the picker opened is not picked up: the
+        // rows come from the one read, which is the whole point of the cache.
+        std::fs::remove_file(&second).unwrap();
+        assert_eq!(app.session_picker_count(), 2);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

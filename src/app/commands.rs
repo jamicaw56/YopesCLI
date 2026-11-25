@@ -34,7 +34,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 12] = [
+pub const COMMANDS: [CommandSpec; 17] = [
     CommandSpec {
         name: "/help",
         description: "Show keys, commands and the version",
@@ -49,6 +49,11 @@ pub const COMMANDS: [CommandSpec; 12] = [
         name: "/provider",
         description: "Connect, disconnect, or pick a model",
         argument: Some("action"),
+    },
+    CommandSpec {
+        name: "/models",
+        description: "Pick a model, or switch by name",
+        argument: Some("name"),
     },
     CommandSpec {
         name: "/set",
@@ -89,6 +94,26 @@ pub const COMMANDS: [CommandSpec; 12] = [
         name: "/goal",
         description: "Set the objective the model must reach no matter what",
         argument: Some("goal"),
+    },
+    CommandSpec {
+        name: "/compact",
+        description: "Summarize older turns now",
+        argument: None,
+    },
+    CommandSpec {
+        name: "/export",
+        description: "Copy the transcript as Markdown, or save it to a new file",
+        argument: Some("file"),
+    },
+    CommandSpec {
+        name: "/fork",
+        description: "Copy this session into a new tab",
+        argument: None,
+    },
+    CommandSpec {
+        name: "/init",
+        description: "Have the model draft an AGENTS.md for this workspace",
+        argument: None,
     },
     CommandSpec {
         name: "/quit",
@@ -136,7 +161,10 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
         ("/set", []) => list(&[
             ("tools", "Permission mode for tool calls"),
             ("theme", "Color palette"),
-            ("weather", "Rain, clouds and sun in theme auto: /set weather <city>"),
+            (
+                "weather",
+                "Rain, clouds and sun in theme auto: /set weather <city>",
+            ),
             ("system", "Custom system prompt"),
             ("compact", "Automatic context compaction"),
             ("effort", "Reasoning effort"),
@@ -271,6 +299,7 @@ mod tests {
                 "/help",
                 "/session",
                 "/provider",
+                "/models",
                 "/set",
                 "/settings",
                 "/run",
@@ -279,10 +308,18 @@ mod tests {
                 "/skills",
                 "/revert",
                 "/goal",
+                "/compact",
+                "/export",
+                "/fork",
+                "/init",
                 "/quit",
             ]
         );
-        assert_eq!(command_names("/c"), vec!["/cd"]);
+        assert_eq!(command_names("/c"), vec!["/cd", "/compact"]);
+        assert_eq!(command_names("/m"), vec!["/models"]);
+        assert_eq!(command_names("/e"), vec!["/export"]);
+        assert_eq!(command_names("/f"), vec!["/fork"]);
+        assert_eq!(command_names("/i"), vec!["/init"]);
         assert_eq!(command_names("/r"), vec!["/run", "/revert"]);
         assert_eq!(command_names("/g"), vec!["/goal"]);
         assert_eq!(
@@ -293,7 +330,7 @@ mod tests {
         assert_eq!(command_names("/a"), vec!["/agents"]);
         assert_eq!(command_names("/q"), vec!["/quit"]);
         // The query is matched case-insensitively against the name.
-        assert!(command_names("/MO").is_empty());
+        assert_eq!(command_names("/MO"), vec!["/models"]);
         assert!(command_names("/model gpt").is_empty());
         assert!(command_names("hello").is_empty());
     }

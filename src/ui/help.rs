@@ -46,6 +46,7 @@ pub(super) fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
         help_row("a", "always allow that tool this session"),
         help_row("v", "toggle unified / side-by-side diffs"),
         help_row("ctrl+v", "paste image / text"),
+        help_row("@path", "attach a file to the message"),
         help_row("ctrl+g", "grab image from the clipboard"),
         help_row("right-click", "paste image / text"),
         help_row("click run", "open a subagent's response in the viewer"),

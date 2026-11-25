@@ -28,7 +28,8 @@ use messages::{
 use retry::send_with_retry;
 use sse::{
     OpenAiState, Stalled, consume_lines, parse_anthropic_line, parse_gemini_line,
-    parse_ollama_line, parse_openai_line, send_parsed, tool_call_rejected,
+    parse_ollama_line, parse_openai_line, reasoning_effort_rejected, send_parsed,
+    tool_call_rejected,
 };
 
 #[derive(Debug)]
@@ -134,6 +135,10 @@ pub struct Backend {
     custom_prompt: Option<String>,
     /// Reasoning effort hint sent with OpenAI-compatible requests.
     reasoning_effort: Option<String>,
+    /// `base_url|model|effort` keys a provider has already refused: the hint is
+    /// dropped for the rest of the process instead of costing a failed request
+    /// on every turn. Shared between clones, so every tab learns once.
+    rejected_effort: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     client: Client,
 }
 
@@ -151,6 +156,7 @@ impl Default for Backend {
             models: Vec::new(),
             custom_prompt: None,
             reasoning_effort: None,
+            rejected_effort: Default::default(),
             client: Client::new(),
         }
     }
@@ -173,6 +179,7 @@ impl Backend {
             models: config.models.clone(),
             custom_prompt: config.system_prompt.clone(),
             reasoning_effort: config.reasoning_effort.clone(),
+            rejected_effort: Default::default(),
             client,
         })
     }
@@ -271,6 +278,36 @@ impl Backend {
 
     pub fn set_reasoning_effort(&mut self, value: Option<String>) {
         self.reasoning_effort = value;
+    }
+
+    /// The effort to send: the configured one unless this endpoint already
+    /// refused that exact value for this model. Changing the value (or the
+    /// model) tries again, because another value may be the supported one.
+    fn effort_to_send(&self) -> Option<String> {
+        let effort = self
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())?;
+        let key = self.effort_key(effort);
+        let refused = self
+            .rejected_effort
+            .lock()
+            .map(|keys| keys.contains(&key))
+            .unwrap_or(false);
+        (!refused).then(|| effort.to_owned())
+    }
+
+    /// Record that this endpoint refused one effort value, so later turns skip
+    /// it instead of paying a failed request first.
+    fn reject_effort(&self, effort: &str) {
+        if let Ok(mut keys) = self.rejected_effort.lock() {
+            keys.insert(self.effort_key(effort));
+        }
+    }
+
+    fn effort_key(&self, effort: &str) -> String {
+        format!("{}|{}|{effort}", self.base_url, self.model)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -443,31 +480,59 @@ impl Backend {
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
-        let result = self
-            .stream_openai_once(
-                request_id,
-                messages,
-                tooling,
-                mode_note.clone(),
-                workspace,
-                events,
-            )
-            .await;
-        if let Err(error) = result {
-            if tooling && tool_call_rejected(&format!("{error:#}")) {
+        // A custom endpoint may refuse the optional parts of the request: the
+        // tool schema, or the `reasoning_effort` hint. Each is dropped once
+        // and the request retried, so a hint the endpoint does not know never
+        // costs the turn. Both flags only ever go from on to off, so the
+        // ladder ends.
+        let mut tooling = tooling;
+        let mut effort = self.effort_to_send();
+        loop {
+            let result = self
+                .stream_openai_once(
+                    request_id,
+                    messages,
+                    tooling,
+                    effort.as_deref(),
+                    mode_note.clone(),
+                    workspace,
+                    events,
+                )
+                .await;
+            let error = match result {
+                Ok(()) => return Ok(()),
+                Err(error) => error,
+            };
+            let detail = format!("{error:#}");
+            if let Some(refused) = effort.as_deref() {
+                if reasoning_effort_rejected(&detail) {
+                    self.reject_effort(refused);
+                    // No guessing at a value this endpoint does take: the
+                    // hint is dropped for this model, and `/set effort <other>`
+                    // asks again with a value the provider may accept.
+                    effort = None;
+                    let _ = events.send(StreamEvent::Retrying {
+                        request_id,
+                        attempt: 1,
+                        delay_secs: 0,
+                        reason: "provider rejected the reasoning effort; retrying without it"
+                            .to_owned(),
+                    });
+                    continue;
+                }
+            }
+            if tooling && tool_call_rejected(&detail) {
+                tooling = false;
                 let _ = events.send(StreamEvent::Retrying {
                     request_id,
                     attempt: 1,
                     delay_secs: 0,
                     reason: "provider rejected tool calls; continuing without tools".to_owned(),
                 });
-                return self
-                    .stream_openai_once(request_id, messages, false, mode_note, workspace, events)
-                    .await;
+                continue;
             }
             return Err(error);
         }
-        Ok(())
     }
 
     async fn stream_openai_once(
@@ -475,6 +540,7 @@ impl Backend {
         request_id: u64,
         messages: &[Message],
         tooling: bool,
+        effort: Option<&str>,
         mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
@@ -502,11 +568,7 @@ impl Backend {
         if tooling {
             request["tools"] = tools::definitions();
         }
-        if let Some(effort) = self
-            .reasoning_effort
-            .as_deref()
-            .filter(|effort| !effort.trim().is_empty())
-        {
+        if let Some(effort) = effort.filter(|effort| !effort.trim().is_empty()) {
             request["reasoning_effort"] = serde_json::Value::String(effort.to_owned());
         }
         let response = send_with_retry("provider API", request_id, events, || {
@@ -780,6 +842,25 @@ fn completion_url(base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{anthropic_url, completion_url, gemini_url};
+
+    #[test]
+    fn a_refused_effort_is_not_sent_again_for_that_model() {
+        use crate::backend::Backend;
+        let mut backend = Backend::default();
+        backend.base_url = "https://api.example.com/v1".to_owned();
+        backend.model = "agnes-2.5-flash".to_owned();
+        backend.reasoning_effort = Some("xhigh".to_owned());
+        assert_eq!(backend.effort_to_send().as_deref(), Some("xhigh"));
+        // The endpoint refuses it once: later turns skip the hint entirely.
+        backend.reject_effort("xhigh");
+        assert_eq!(backend.effort_to_send(), None);
+        // Another value is a fresh question, and another model too.
+        backend.reasoning_effort = Some("high".to_owned());
+        assert_eq!(backend.effort_to_send().as_deref(), Some("high"));
+        backend.reasoning_effort = Some("xhigh".to_owned());
+        backend.model = "gpt-4o".to_owned();
+        assert_eq!(backend.effort_to_send().as_deref(), Some("xhigh"));
+    }
 
     #[test]
     fn completion_url_accepts_a_base_or_full_endpoint() {

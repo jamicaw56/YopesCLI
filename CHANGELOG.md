@@ -8,12 +8,22 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- A provider that refuses `reasoning_effort` (strict endpoints reject `xhigh`) no longer fails the turn: the request retries without the hint and remembers the refusal for that model.
+- `/session` no longer lags: the sessions directory is read once when the picker opens instead of on every keystroke and frame.
 - Custom providers that reject tool-call history now retry without tools instead of dumping a validation error.
 - Sending a message in a large directory no longer freezes the CLI: AGENTS.md discovery is bounded and cached.
 - Gemini tool calls replay their thought signature, so Google models keep working after the first tool call.
 
 ### Added
 
+- `@path` mentions: typing `@` completes paths from the workspace, and the mentioned file is attached to the message when it is sent.
+- `/models` is a top-level command again: pick a model, or switch by name.
+- `/compact` summarizes older turns now, without going through `/set compact now`.
+- `/export [file]` copies the transcript as Markdown for pasting into another session, or saves it to a new file (never over an existing one) that `@file` can attach.
+- `/fork` copies the conversation into a new tab.
+- `/init` hands the model the task of drafting `AGENTS.md` for the workspace, through the normal tool approvals.
+- Hooks in `~/.yopes/hooks.json`: `PreToolUse` (a non-zero exit blocks the call), `PostToolUse` (output joins the result) and `Stop` run shell commands around tool calls.
+- The footer shows billed input/output tokens once the provider reports usage.
 - `/set weather <city>` (opt-in, `off` to stop) makes theme `auto` follow the forecast: rain and snow fall, clouds and fog gray the sky, storms darken it, and a clear day shows a sun that rises and sets. Checked every 15 minutes through Open-Meteo; only the city's coordinates are sent, and only while theme `auto` is on.
 - `/set theme auto` moves the background with the clock: the palette and a sky gradient blend nine local-hour keyframes (midnight, pre-dawn, dawn, morning, noon, afternoon, sunset, evening), with stars that fade in at night, repainting on the minute even when the session is idle.
 - Custom API setup is now a four-field quick form: name, completion URL, model ID, token. Models URL, auth, model name and context window default sensibly and stay editable later.

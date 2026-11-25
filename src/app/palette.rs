@@ -19,7 +19,13 @@ impl App {
                 })
                 .collect();
         }
-        argument_suggestions(&self.input.value)
+        let arguments = argument_suggestions(&self.input.value);
+        if !arguments.is_empty() {
+            return arguments;
+        }
+        // No command takes this word: a `@path` completes from the workspace.
+        let root = self.working_dir.clone();
+        mentions::suggestions(&self.input.value, &root)
     }
 
     pub(crate) fn palette_selected(&self) -> usize {

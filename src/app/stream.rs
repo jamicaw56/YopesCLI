@@ -203,6 +203,8 @@ impl App {
                     if !self.is_busy() && self.flush_parked_messages() {
                         return self.begin_turn();
                     }
+                    // The turn chain is over: the `Stop` hooks run now.
+                    crate::hooks::after_turn(&self.working_dir);
                     return self.maybe_name_session();
                 }
                 self.save_session();
