@@ -57,7 +57,7 @@ jobs:
           # main requires status checks, which the Actions token cannot satisfy
           # for a commit it is pushing right now. An admin token can, because
           # enforce_admins is off on the branch protection.
-          PUSH_TOKEN: ${{ secrets.BIGGIE_TOKEN }}
+          PUSH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           ACTIONS_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
