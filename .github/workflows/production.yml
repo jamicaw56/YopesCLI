@@ -29,6 +29,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The git extraheader that checkout leaves behind wins over the token
+          # in the push URL, so GITHUB_TOKEN would be used and refused.
+          persist-credentials: false
       - name: Select next tag
         id: tag
         run: |
