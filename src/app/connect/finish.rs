@@ -135,18 +135,31 @@ impl App {
                 connect.password.clear();
                 connect.selected = 0;
                 connect.error = None;
-                // Switching a model on a saved endpoint reuses the stored key.
-                // Only ask for the encryption password when the key changed.
+                // Switching a model on a saved endpoint reuses the key that is
+                // already there: the secret is not rewritten, so the
+                // encryption password is only asked for when the token itself
+                // changed. A stored secret that is already unlocked counts, and
+                // so does the live key when this is the active endpoint.
+                let key_ready = connect
+                    .stored_secret
+                    .as_ref()
+                    .is_some_and(|secret| secret.plaintext().is_some())
+                    || connect.unlocked_key.is_some()
+                    || (backend_has_key
+                        && connect.custom_provider_id.as_ref().is_some_and(|id| {
+                            connect.saved_custom.iter().any(|saved| {
+                                &saved.id == id
+                                    && saved.base_url.trim_end_matches('/') == backend_base
+                            })
+                        }));
                 let reuse_secret = !connect.custom_token_dirty
-                    && connect.custom_provider_id.as_ref().is_some_and(|id| {
-                        connect.saved_custom.iter().any(|saved| {
-                            &saved.id == id
-                                && (!saved.auth.requires_token()
-                                    || saved.token.is_some()
-                                    || (backend_has_key
-                                        && saved.base_url.trim_end_matches('/') == backend_base))
-                        })
-                    });
+                    && (key_ready
+                        || connect.custom_provider_id.as_ref().is_some_and(|id| {
+                            connect.saved_custom.iter().any(|saved| {
+                                &saved.id == id
+                                    && (!saved.auth.requires_token() || saved.token.is_some())
+                            })
+                        }));
                 if reuse_secret {
                     finish_now = true;
                 } else if connect.custom_token_dirty {

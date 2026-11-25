@@ -57,7 +57,8 @@ fn choices(key: &str) -> Vec<&'static str> {
         "effort" => vec!["off", "low", "medium", "high", "xhigh"],
         "compact" => vec!["on", "off"],
         "diff" => vec!["side-by-side", "unified"],
-        // Only two states: the id itself comes from `/set discord <id>`.
+        // Two states: `on` is the shared application, or the user's own id
+        // when `/set discord <id>` set one.
         "discord" => vec!["off", "on"],
         _ => Vec::new(),
     }
@@ -163,21 +164,7 @@ impl App {
                     }
                 ));
             }
-            "discord" => {
-                if value == "on" {
-                    // Turning it on needs the id of a Discord application; the
-                    // row only reports where to put it.
-                    if self.discord_client_id.is_none() {
-                        self.info(
-                            "Discord presence: set the application id with /set discord <id> first",
-                        );
-                    } else {
-                        self.info("Discord presence: on");
-                    }
-                } else {
-                    self.set_discord("off");
-                }
-            }
+            "discord" => self.set_discord(&value),
             _ => {}
         }
     }
@@ -223,7 +210,10 @@ mod tests {
 
     #[test]
     fn every_row_shows_a_value_and_cycles_it() {
+        // Every row saves through the config, so give the app a real path.
+        let dir = crate::temp::unique_dir("yopes-settings-rows");
         let mut app = test_app();
+        app.config_path = dir.join("config.json");
         app.command("/settings");
         for (index, setting) in SETTING_ROWS.iter().enumerate() {
             assert!(
@@ -234,13 +224,6 @@ mod tests {
             let before = app.setting_value(setting.key);
             app.settings_index = index;
             press(&mut app, KeyCode::Right);
-            // Discord presence needs an application id before it can turn on:
-            // the row reports that instead of flipping to a presence that
-            // never connects.
-            if setting.key == "discord" {
-                assert_eq!(app.setting_value(setting.key), before);
-                continue;
-            }
             assert_ne!(
                 app.setting_value(setting.key),
                 before,
@@ -248,31 +231,34 @@ mod tests {
                 setting.key
             );
         }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn the_discord_row_needs_an_id_before_it_turns_on() {
+    fn the_discord_row_starts_on_the_shared_application_and_cycles_off_and_on() {
         let dir = crate::temp::unique_dir("yopes-discord-setting");
         let mut app = test_app();
         app.config_path = dir.join("config.json");
-        app.command("/settings");
-        app.settings_index = row("discord");
-        // No application id: the row explains instead of flipping to a
-        // presence that could never connect.
-        press(&mut app, KeyCode::Right);
-        assert_eq!(app.setting_value("discord"), "off");
-        assert!(
-            app.notice
-                .as_ref()
-                .is_some_and(|notice| notice.message.contains("application id"))
-        );
-        // With the id set, the row cycles both ways.
-        app.command("/set discord 123456789012345678");
+        // A fresh config uses the shared application: nothing to set up first.
         assert_eq!(app.setting_value("discord"), "on");
         app.command("/settings");
         app.settings_index = row("discord");
         press(&mut app, KeyCode::Right);
         assert_eq!(app.setting_value("discord"), "off");
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.setting_value("discord"), "on");
+        assert_eq!(
+            app.discord_client_id.as_deref(),
+            Some(crate::discord::SHARED_CLIENT_ID)
+        );
+        // A user's own application id wins over the shared one.
+        app.command("/set discord 123456789012345678");
+        assert_eq!(app.discord_client_id.as_deref(), Some("123456789012345678"));
+        app.command("/set discord off");
+        assert_eq!(app.setting_value("discord"), "off");
+        // Switching back on keeps the own application, not the shared one.
+        app.command("/set discord on");
+        assert_eq!(app.discord_client_id.as_deref(), Some("123456789012345678"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

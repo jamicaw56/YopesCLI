@@ -55,6 +55,20 @@ impl Weather {
         }
     }
 
+    /// The code together with the precipitation measured for the same moment.
+    ///
+    /// A forecast cell is coarse: it reports the rain of a whole grid box, and
+    /// it keeps reporting the hour's code after the shower moved on. Dry air
+    /// under a rainy code is therefore drawn as cloud, not as falling water,
+    /// which is why the sky stops raining when the rain does.
+    fn from_report(code: u8, precipitation: f64) -> Self {
+        let weather = Self::from_code(code);
+        if weather.wet() && precipitation <= 0.0 {
+            return Self::Cloudy;
+        }
+        weather
+    }
+
     /// Falling water: the weathers the backdrop animates.
     pub fn wet(self) -> bool {
         matches!(self, Self::Rain | Self::Snow | Self::Storm)
@@ -100,11 +114,14 @@ pub fn start(place: &Place) {
     let (lat, lon) = (place.lat, place.lon);
     thread::spawn(move || {
         while GENERATION.load(Ordering::Relaxed) == generation {
-            let wait = match fetch_code(lat, lon) {
-                Ok(code) => {
+            let wait = match fetch_report(lat, lon) {
+                Ok((code, precipitation)) => {
                     // A poller replaced mid-request must not overwrite the new one.
                     if GENERATION.load(Ordering::Relaxed) == generation {
-                        STATE.store(Weather::from_code(code) as u8, Ordering::Relaxed);
+                        STATE.store(
+                            Weather::from_report(code, precipitation) as u8,
+                            Ordering::Relaxed,
+                        );
                     }
                     900
                 }
@@ -144,7 +161,7 @@ fn client() -> Result<reqwest::blocking::Client> {
         .context("creating the weather client")
 }
 
-fn fetch_code(lat: f64, lon: f64) -> Result<u8> {
+fn fetch_report(lat: f64, lon: f64) -> Result<(u8, f64)> {
     #[derive(Deserialize)]
     struct Reply {
         current: Current,
@@ -152,10 +169,13 @@ fn fetch_code(lat: f64, lon: f64) -> Result<u8> {
     #[derive(Deserialize)]
     struct Current {
         weather_code: u8,
+        #[serde(default)]
+        precipitation: f64,
     }
     let reply: Reply = client()?
         .get(format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=weather_code"
+            "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}\
+             &current=weather_code,precipitation"
         ))
         .send()
         .context("contacting Open-Meteo")?
@@ -163,7 +183,7 @@ fn fetch_code(lat: f64, lon: f64) -> Result<u8> {
         .context("fetching the weather")?
         .json()
         .context("reading the weather")?;
-    Ok(reply.current.weather_code)
+    Ok((reply.current.weather_code, reply.current.precipitation))
 }
 
 /// Resolve a city name to a place through Open-Meteo's geocoder.
@@ -267,6 +287,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dry_air_under_a_rainy_code_does_not_rain() {
+        // The forecast cell keeps the hour's rain code after the shower passed:
+        // measured precipitation is what decides whether water falls.
+        assert_eq!(Weather::from_report(61, 0.0), Weather::Cloudy);
+        assert_eq!(Weather::from_report(95, 0.0), Weather::Cloudy);
+        assert_eq!(Weather::from_report(73, 0.0), Weather::Cloudy);
+        assert_eq!(Weather::from_report(61, 0.4), Weather::Rain);
+        assert_eq!(Weather::from_report(95, 2.1), Weather::Storm);
+        assert_eq!(Weather::from_report(73, 1.0), Weather::Snow);
+        // A dry code stays what it says, whatever the precipitation.
+        assert_eq!(Weather::from_report(0, 0.0), Weather::Clear);
+        assert_eq!(Weather::from_report(3, 0.0), Weather::Cloudy);
+        assert_eq!(Weather::from_report(45, 0.0), Weather::Fog);
+    }
+
+    #[test]
     fn wmo_codes_map_to_the_sky() {
         assert_eq!(Weather::from_code(0), Weather::Clear);
         assert_eq!(Weather::from_code(3), Weather::Cloudy);
@@ -317,11 +353,11 @@ mod tests {
     fn live_lookup_and_forecast_answer() {
         let place = lookup("Paris").expect("geocode");
         assert!(place.name.starts_with("Paris"), "{place:?}");
-        let code = fetch_code(place.lat, place.lon).expect("forecast");
+        let code = fetch_report(place.lat, place.lon).expect("forecast");
         println!(
-            "{} -> code {code} -> {:?}",
+            "{} -> {code:?} -> {:?}",
             place.name,
-            Weather::from_code(code)
+            Weather::from_report(code.0, code.1)
         );
     }
 }

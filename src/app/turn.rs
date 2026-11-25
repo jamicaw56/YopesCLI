@@ -53,7 +53,7 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
     // `/settings` and the read-only commands change nothing about the turn.
     matches!(
         name,
-        "/help" | "/agents" | "/skills" | "/quit" | "/settings" | "/goal" | "/export"
+        "/help" | "/agents" | "/skills" | "/quit" | "/settings" | "/goal" | "/export" | "/stats"
     )
 }
 
@@ -522,6 +522,7 @@ impl App {
                 }
             }
             "/settings" => self.open_settings(),
+            "/stats" => self.open_stats(),
             "/agents" => self.open_agents_picker(),
             "/skills" => self.show_skills(),
             "/revert" => self.open_revert_picker(),
@@ -834,18 +835,19 @@ impl App {
         }
     }
 
-    /// `/set discord [<application id>|off]`: Rich Presence, off until the user
-    /// gives the id of their own Discord application. Nothing is sent, and no
-    /// socket is opened, while it is off.
+    /// `/set discord [on|off|<application id>]`: Rich Presence, on out of the
+    /// box through the shared application in `discord::SHARED_CLIENT_ID`, so
+    /// nobody uploads an asset. `off` saves the switch as off; an id points the
+    /// card at the user's own application instead.
     pub(crate) fn set_discord(&mut self, value: &str) {
         let value = value.trim();
         if value.is_empty() {
             match &self.discord_client_id {
                 Some(id) => self.info(format!(
-                    "Discord presence: on · application {id} · /set discord off to stop"
+                    "Discord presence: on · {} {id} · /set discord off to stop",
+                    Self::discord_application_kind(id)
                 )),
-                None => self
-                    .info("Discord presence: off · /set discord <application id> to show the card"),
+                None => self.info("Discord presence: off · /set discord on to show the card again"),
             }
             return;
         }
@@ -856,6 +858,23 @@ impl App {
             }
             self.discord_client_id = None;
             self.info("Discord presence: off");
+            return;
+        }
+        if matches!(
+            value.to_ascii_lowercase().as_str(),
+            "on" | "shared" | "default"
+        ) {
+            if let Err(error) = config::enable_discord(&self.config_path) {
+                self.error(format!("Could not save the Discord setting: {error:#}"));
+                return;
+            }
+            let id = config::load_discord_client_id(&self.config_path)
+                .unwrap_or_else(|| crate::discord::SHARED_CLIENT_ID.to_owned());
+            self.discord_client_id = Some(id.clone());
+            self.info(format!(
+                "Discord presence: on · {} {id}",
+                Self::discord_application_kind(&id)
+            ));
             return;
         }
         // A Discord application id is a long decimal number; anything else is
@@ -874,10 +893,19 @@ impl App {
             return;
         }
         self.discord_client_id = Some(value.to_owned());
-        self.info(
-            "Discord presence: on · upload the icon as `yopes_logo` (and `yopes_build`, \
-             `yopes_plan`, `yopes_chat` for the small image) in the Discord developer portal",
-        );
+        self.info(format!(
+            "Discord presence: on · own application {value} · upload `yopes_logo` under \
+             Rich Presence → Art Assets, or /set discord on for the shared one"
+        ));
+    }
+
+    /// Which application the card is drawn with, for the one-line reports.
+    fn discord_application_kind(id: &str) -> &'static str {
+        if id == crate::discord::SHARED_CLIENT_ID {
+            "shared application"
+        } else {
+            "own application"
+        }
     }
 
     /// `/set effort [level]`: the reasoning effort, or `off` for the backend

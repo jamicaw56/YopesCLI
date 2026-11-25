@@ -34,7 +34,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 17] = [
+pub const COMMANDS: [CommandSpec; 18] = [
     CommandSpec {
         name: "/help",
         description: "Show keys, commands and the version",
@@ -63,6 +63,11 @@ pub const COMMANDS: [CommandSpec; 17] = [
     CommandSpec {
         name: "/settings",
         description: "Change settings with the arrow keys",
+        argument: None,
+    },
+    CommandSpec {
+        name: "/stats",
+        description: "Tokens used across every run, with a 3-month heatmap",
         argument: None,
     },
     CommandSpec {
@@ -168,7 +173,10 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
             ("system", "Custom system prompt"),
             ("compact", "Automatic context compaction"),
             ("effort", "Reasoning effort"),
-            ("discord", "Discord Rich Presence: off by default"),
+            (
+                "discord",
+                "Discord Rich Presence: on with the shared application",
+            ),
         ]),
         ("/set", ["tools"]) => list(&[
             ("on", "Edits run automatically; risky commands ask"),
@@ -197,6 +205,7 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
         ]),
         ("/set", ["discord"]) => list(&[
             ("off", "Presence off: no socket, nothing sent"),
+            ("on", "Shared YopesCLI application"),
             ("<id>", "Discord application id from the developer portal"),
         ]),
         ("/provider", []) => list(&[
@@ -307,6 +316,7 @@ mod tests {
                 "/models",
                 "/set",
                 "/settings",
+                "/stats",
                 "/run",
                 "/cd",
                 "/agents",
@@ -329,7 +339,7 @@ mod tests {
         assert_eq!(command_names("/g"), vec!["/goal"]);
         assert_eq!(
             command_names("/s"),
-            vec!["/session", "/set", "/settings", "/skills"]
+            vec!["/session", "/set", "/settings", "/stats", "/skills"]
         );
         assert_eq!(command_names("/p"), vec!["/provider"]);
         assert_eq!(command_names("/a"), vec!["/agents"]);

@@ -11,6 +11,7 @@ mod hooks;
 mod mcp;
 mod model_api;
 mod models;
+mod notify;
 mod session;
 mod skills;
 mod temp;
@@ -19,6 +20,7 @@ mod theme;
 mod tools;
 mod ui;
 mod update;
+mod usage;
 mod weather;
 
 use std::{collections::HashMap, future::Future, pin::Pin, time::Instant};
@@ -248,8 +250,8 @@ async fn run() -> Result<()> {
     let mut frames = 0u64;
     let mut total_draw_ms = 0u64;
     let mut worst_draw_ms = 0u64;
-    // Discord Rich Presence: inert until `/set discord <id>` gave an
-    // application id, so an untouched install opens no socket.
+    // Discord Rich Presence: on with the shared application id unless
+    // `/set discord off` turned it off, so nothing here runs when it is off.
     let mut discord = discord::Runtime::default();
 
     loop {

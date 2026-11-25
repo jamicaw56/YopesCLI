@@ -30,11 +30,12 @@ mod help;
 mod markdown;
 mod pickers;
 mod settings;
+mod stats;
 mod transcript;
 
 use self::{
     agents::*, approval::*, changelog::*, composer::*, connect::*, help::*, pickers::*,
-    settings::*, transcript::*,
+    settings::*, stats::*, transcript::*,
 };
 
 /// How a `read_file` result surfaces in the transcript: quiet. The header and
@@ -309,6 +310,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         || revert_picker.is_some()
         || agents_picker.is_some()
         || app.settings_open
+        || app.stats.is_some()
         || app.subagent_view.is_some()
     {
         Vec::new()
@@ -428,6 +430,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_approval(frame, approval, sides, spinner, area);
     } else if app.changelog.is_some() {
         draw_changelog(frame, app, area);
+    } else if app.stats.is_some() {
+        draw_stats(frame, app, area);
     } else if app.show_help {
         draw_help(frame, app, area);
     } else if app.settings_open {

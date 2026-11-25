@@ -17,8 +17,13 @@ jobs:
   prepare:
     name: Select version
     runs-on: ubuntu-latest
+    # The selected version is written back into Cargo.toml: the release exists
+    # in the tree it was built from, not only in the tag.
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.bump.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,6 +48,45 @@ jobs:
           fi
 
           echo "tag=$next" >> "$GITHUB_OUTPUT"
+      # The bot picked the version; the manifest follows it. Without this the
+      # binary still reports the previous version (changelog popup reads it),
+      # and the next release starts from a stale Cargo.toml.
+      - name: Write the version into Cargo.toml
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          current=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$current" = "$version" ]; then
+            echo "Cargo.toml already at $version"
+            exit 0
+          fi
+          sed -i -E "0,/^version = \".*\"/s//version = \"$version\"/" Cargo.toml
+          # Cargo.lock repeats the crate version: rewrite the yopes block only,
+          # so dependencies keep their pins.
+          if [ -f Cargo.lock ]; then
+            awk -v v="$version" '
+              /^\[\[package\]\]/ { inside = 0 }
+              /^name = "yopes"$/ { inside = 1 }
+              inside && !done && /^version = / {
+                print "version = \"" v "\""
+                inside = 0
+                done = 1
+                next
+              }
+              { print }
+            ' Cargo.lock > Cargo.lock.bumped
+            mv Cargo.lock.bumped Cargo.lock
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): $TAG"
+          git push
+      - name: Record the bumped commit
+        id: bump
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.platform }}
@@ -63,6 +107,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -104,6 +150,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Tag the commit that already carries the bumped Cargo.toml.
+          ref: ${{ needs.prepare.outputs.sha }}
       - name: Download release archives
         uses: actions/download-artifact@v4
         with:
@@ -162,7 +210,8 @@ jobs:
             echo "- Initial release" >> "$notes"
           fi
 
-          gh release create "$TAG" dist/* --title "$TAG" --notes-file "$notes" --target "$GITHUB_SHA"
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file "$notes" \
+            --target "${{ needs.prepare.outputs.sha }}"
 
   npm:
     name: Publish npm package

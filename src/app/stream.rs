@@ -203,6 +203,9 @@ impl App {
                     if !self.is_busy() && self.flush_parked_messages() {
                         return self.begin_turn();
                     }
+                    // A turn nobody is watching should still reach you: the
+                    // bell rings and, on Windows, a toast names the workspace.
+                    crate::notify::done(self);
                     // The turn chain is over: the `Stop` hooks run now.
                     crate::hooks::after_turn(&self.working_dir);
                     return self.maybe_name_session();

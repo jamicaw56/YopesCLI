@@ -528,6 +528,18 @@ impl App {
         if self.changelog.is_some() {
             let close = match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'Q') => true,
+                // `c` drops the long Changed tail, `x` shows every bullet of
+                // every group: the two ways to fit the release in one screen.
+                KeyCode::Char('c' | 'C') => {
+                    let view = self.changelog.as_mut().expect("view");
+                    view.hide_changed = !view.hide_changed;
+                    false
+                }
+                KeyCode::Char('x' | 'X') => {
+                    let view = self.changelog.as_mut().expect("view");
+                    view.expanded = !view.expanded;
+                    false
+                }
                 KeyCode::Up | KeyCode::Left => {
                     let view = self.changelog.as_mut().expect("view");
                     view.scroll = view.scroll.saturating_sub(1);
@@ -554,6 +566,10 @@ impl App {
                 self.close_changelog();
             }
             return Action::None;
+        }
+        // `/stats` is a view of its own: it takes the keyboard until Esc.
+        if self.stats.is_some() {
+            return self.handle_stats_key(key);
         }
         if key.code == KeyCode::F(1) {
             self.show_help = !self.show_help;
@@ -1047,6 +1063,9 @@ impl App {
         }
         if self.tools_mode.needs_approval(&call, &self.approved_tools) {
             let change = tools::change_preview(&call);
+            // The approval panel is a stop: ring and toast so a step away from
+            // the window does not turn into a stalled turn.
+            crate::notify::approval_needed(self, &call.function.name);
             self.approval = Some(ToolApproval {
                 call,
                 note: change.note,

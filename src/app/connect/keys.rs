@@ -283,8 +283,7 @@ impl App {
             KeyCode::Tab => {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::CompletionUrl,
-                    AddProviderField::CompletionUrl => AddProviderField::ModelId,
-                    AddProviderField::ModelId => AddProviderField::Token,
+                    AddProviderField::CompletionUrl => AddProviderField::Token,
                     AddProviderField::Token => AddProviderField::Done,
                     AddProviderField::Done => AddProviderField::Name,
                 };
@@ -294,8 +293,7 @@ impl App {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::Done,
                     AddProviderField::CompletionUrl => AddProviderField::Name,
-                    AddProviderField::ModelId => AddProviderField::CompletionUrl,
-                    AddProviderField::Token => AddProviderField::ModelId,
+                    AddProviderField::Token => AddProviderField::CompletionUrl,
                     AddProviderField::Done => AddProviderField::Token,
                 };
                 Action::None
@@ -304,8 +302,7 @@ impl App {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::Done,
                     AddProviderField::CompletionUrl => AddProviderField::Name,
-                    AddProviderField::ModelId => AddProviderField::CompletionUrl,
-                    AddProviderField::Token => AddProviderField::ModelId,
+                    AddProviderField::Token => AddProviderField::CompletionUrl,
                     AddProviderField::Done => AddProviderField::Token,
                 };
                 Action::None
@@ -333,8 +330,7 @@ impl App {
             KeyCode::Down => {
                 connect.add_provider_field = match connect.add_provider_field {
                     AddProviderField::Name => AddProviderField::CompletionUrl,
-                    AddProviderField::CompletionUrl => AddProviderField::ModelId,
-                    AddProviderField::ModelId => AddProviderField::Token,
+                    AddProviderField::CompletionUrl => AddProviderField::Token,
                     AddProviderField::Token => AddProviderField::Done,
                     AddProviderField::Done => AddProviderField::Name,
                 };
@@ -346,8 +342,7 @@ impl App {
                 } else {
                     connect.add_provider_field = match connect.add_provider_field {
                         AddProviderField::Name => AddProviderField::CompletionUrl,
-                        AddProviderField::CompletionUrl => AddProviderField::ModelId,
-                        AddProviderField::ModelId => AddProviderField::Token,
+                        AddProviderField::CompletionUrl => AddProviderField::Token,
                         AddProviderField::Token => AddProviderField::Done,
                         AddProviderField::Done => AddProviderField::Done,
                     };

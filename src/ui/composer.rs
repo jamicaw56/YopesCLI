@@ -533,7 +533,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|w| w.max(context))
         .unwrap_or_else(|| DEFAULT_CONTEXT_WINDOW.max(context));
     let ctx = context_label(context, window);
-    let tokens = token_label(app.spent_tokens());
+    let tokens = token_label(app.display_tokens());
     let (badge, badge_style) = permission_badge(app.tools_mode);
     let badge_w = UnicodeWidthStr::width(badge) as u16;
     let gap: u16 = 3; // " · " between the three groups
@@ -550,16 +550,24 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         .as_ref()
         .map(|label| gap + UnicodeWidthStr::width(label.as_str()) as u16)
         .unwrap_or(0);
-    // The mode and the badge never drop; the token count yields first, then
-    // the context load, so a narrow terminal keeps the permission badge. The
-    // tabs live on their own row above the transcript.
-    let fixed = mode_w + gap + badge_w + goal_cost;
-    let keep_ctx = ctx_cost > 0 && fixed + ctx_cost <= inner.width;
-    let keep_tokens =
-        tokens_cost > 0 && fixed + if keep_ctx { ctx_cost } else { 0 } + tokens_cost <= inner.width;
-    let right_width =
-        (fixed + if keep_tokens { tokens_cost } else { 0 } + if keep_ctx { ctx_cost } else { 0 })
-            .min(inner.width);
+    // The mode and the badge never drop, and the token arrows outrank the goal
+    // and the context load: the numbers the user is watching move first, and
+    // the narrow-terminal squeeze takes the goal, then the context load.
+    let fixed = mode_w + gap + badge_w;
+    let keep_tokens = tokens_cost > 0 && fixed + tokens_cost <= inner.width;
+    let keep_ctx =
+        ctx_cost > 0 && fixed + if keep_tokens { tokens_cost } else { 0 } + ctx_cost <= inner.width;
+    let keep_goal = goal_cost > 0
+        && fixed
+            + if keep_tokens { tokens_cost } else { 0 }
+            + if keep_ctx { ctx_cost } else { 0 }
+            + goal_cost
+            <= inner.width;
+    let right_width = (fixed
+        + if keep_goal { goal_cost } else { 0 }
+        + if keep_tokens { tokens_cost } else { 0 }
+        + if keep_ctx { ctx_cost } else { 0 })
+    .min(inner.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width)])
@@ -575,7 +583,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(" · ", Style::default().fg(dim())),
         Span::styled(badge, badge_style),
     ];
-    if let Some(goal) = goal {
+    if keep_goal && let Some(goal) = goal {
         spans.push(Span::styled(" · ", Style::default().fg(dim())));
         spans.push(Span::styled(goal, Style::default().fg(accent2())));
     }
@@ -625,6 +633,21 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 warning(),
             )
+        } else if let Some(notice) = &app.notice {
+            // A command typed mid-turn confirms itself here: the "thinking"
+            // line would otherwise bury its notice for as long as the stream
+            // runs, and the notice expires unseen.
+            (
+                format!(
+                    "{} {} · {elapsed:.1}s · esc stop",
+                    spinner(app.spinner),
+                    notice.message
+                ),
+                match notice.kind {
+                    NoticeKind::Info => muted(),
+                    NoticeKind::Error => error(),
+                },
+            )
         } else {
             let progress = match app.stream_tool_progress() {
                 Some((name, detail, bytes)) => {
@@ -640,11 +663,10 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut text = format!("{} {progress} · {elapsed:.1}s", spinner(app.spinner));
             if let Some((_, out_tokens)) = app.stream_tokens() {
                 if out_tokens > 0 {
+                    // The footer's ↑↓ arrows already carry the token counts;
+                    // this row only adds the pace they arrive at.
                     let rate = out_tokens as f64 / elapsed.max(0.2);
-                    text.push_str(&format!(
-                        " · out {} · {rate:.0} t/s",
-                        format_tokens(out_tokens)
-                    ));
+                    text.push_str(&format!(" · {rate:.0} t/s"));
                 }
             }
             text.push_str(" · esc stop");

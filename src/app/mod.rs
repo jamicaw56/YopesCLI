@@ -36,6 +36,7 @@ mod mode;
 mod palette;
 mod pickers;
 mod settings;
+mod stats;
 mod stream;
 mod tabs;
 mod talk;
@@ -257,23 +258,61 @@ pub(crate) type MarkdownBlock = (
     usize,
 );
 
-/// The post-update changelog popup: a version's section, scrolled with the
-/// arrow keys and closed with Esc or Enter.
+/// The post-update changelog popup: one version grouped into Added, Fixed,
+/// Removed and Changed, scrolled with the arrow keys and closed with Esc or
+/// Enter.
 pub struct ChangeLogView {
     pub title: String,
-    pub lines: Vec<String>,
+    pub section: crate::changelog::Section,
     pub scroll: usize,
+    /// `c`: leave the long Changed tail out of the popup.
+    pub hide_changed: bool,
+    /// `x`: show every bullet instead of the first few of each group.
+    pub expanded: bool,
+}
+
+/// `/stats`: what every run on this machine has spent, plus a 13-week heatmap.
+/// The ledger is read once when the view opens (and refreshed at most every
+/// few seconds), never per frame.
+pub struct StatsView {
+    pub ledger: crate::usage::Ledger,
+    pub scroll: usize,
+    /// When the ledger was last read, so a long-open view still follows a turn
+    /// that finishes behind it.
+    pub loaded: std::time::Instant,
+}
+
+impl StatsView {
+    /// Open the view on a fresh read of the ledger.
+    pub(crate) fn open() -> Self {
+        Self {
+            ledger: crate::usage::load(),
+            scroll: 0,
+            loaded: std::time::Instant::now(),
+        }
+    }
+
+    /// Re-read the ledger when the copy on screen has gone stale.
+    pub(crate) fn refresh(&mut self) {
+        if self.loaded.elapsed() >= crate::usage::REFRESH {
+            self.ledger = crate::usage::load();
+            self.loaded = std::time::Instant::now();
+        }
+    }
 }
 
 impl ChangeLogView {
     /// Open the popup for the running build, or nothing when the changelog
     /// has no section to show.
     pub(crate) fn for_current_version() -> Option<Self> {
-        let section = crate::changelog::section_for(crate::update::current_version())?;
+        let version = crate::update::current_version();
+        let section = crate::changelog::section_for(version)?;
         Some(Self {
-            title: format!("what's new in v{}", crate::update::current_version()),
-            lines: section.lines,
+            title: format!("What's new in v{version}"),
+            section,
             scroll: 0,
+            hide_changed: false,
+            expanded: false,
         })
     }
 }
@@ -291,6 +330,8 @@ pub struct App {
     pub show_help: bool,
     /// The post-update changelog popup, shown once per new version.
     pub changelog: Option<ChangeLogView>,
+    /// The `/stats` view: token spend across every run, with a heatmap.
+    pub stats: Option<StatsView>,
     /// How far the help popup is scrolled down.
     pub help_scroll: usize,
     pub should_quit: bool,
@@ -312,8 +353,9 @@ pub struct App {
     pub mode: Mode,
     /// Whether history is summarized automatically when the context fills.
     pub auto_compact: bool,
-    /// Discord application id for Rich Presence: `None` leaves the feature
-    /// off, which is the default until `/set discord <id>` turns it on.
+    /// Discord application id for Rich Presence: the shared application by
+    /// default, the user's own when `/set discord <id>` set one, and `None`
+    /// once `/set discord off` turned the feature off.
     pub discord_client_id: Option<String>,
     /// Images pasted with Ctrl+V, sent with the next submitted message.
     pub attachments: Vec<ImageAttachment>,
@@ -499,6 +541,7 @@ impl App {
             image_width: 0,
             approval: None,
             settings_open: false,
+            stats: None,
             settings_index: 0,
             model_picker: None,
             model_choices: Vec::new(),
@@ -674,6 +717,21 @@ impl App {
     pub fn spent_tokens(&self) -> Option<(u64, u64)> {
         (self.spent_prompt_tokens + self.spent_completion_tokens > 0)
             .then_some((self.spent_prompt_tokens, self.spent_completion_tokens))
+    }
+
+    /// (in, out) tokens for the footer arrows: what is billed so far plus the
+    /// request in flight, so the numbers move while the reply streams instead
+    /// of jumping once the turn ends. Falls back to the billed totals when no
+    /// request is running.
+    pub fn display_tokens(&self) -> Option<(u64, u64)> {
+        let billed = (self.spent_prompt_tokens, self.spent_completion_tokens);
+        match self.stream_tokens() {
+            Some((prompt, completion)) => Some((
+                billed.0.saturating_add(prompt),
+                billed.1.saturating_add(completion),
+            )),
+            None => self.spent_tokens(),
+        }
     }
 
     /// Estimated tokens the next request would send, the context window load.

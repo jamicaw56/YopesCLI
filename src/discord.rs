@@ -5,10 +5,12 @@
 //! a frame per message: a little-endian `u32` opcode, a little-endian `u32`
 //! payload length, then JSON.
 //!
-//! Nothing here runs unless the user set a client id in `/set discord`, so an
-//! untouched install opens no socket and talks to nothing. The connection
-//! lives on its own thread: a Discord restart costs a reconnect attempt, never
-//! a frame of the interface.
+//! The presence talks through the shared application in `SHARED_CLIENT_ID`, so
+//! an install shows the card without creating an application or uploading any
+//! asset. `/set discord off` stops it, `/set discord <id>` points it at a
+//! different application, and only then does anything reach Discord. The
+//! connection lives on its own thread: a Discord restart costs a reconnect
+//! attempt, never a frame of the interface.
 
 use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
@@ -16,8 +18,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::app::App;
 
+/// The Discord application every install shares, so Rich Presence works out of
+/// the box: its art assets (`yopes_logo`) are uploaded once by its owner rather
+/// than by every user. `/set discord <id>` replaces it, `/set discord off`
+/// stops it.
+pub const SHARED_CLIENT_ID: &str = "1575038439441563750";
+
 /// The asset key of the large image: the blue pixel Y uploaded to the Discord
-/// application as `yopes_logo`.
+/// application once as `yopes_logo`.
 const LARGE_IMAGE: &str = "yopes_logo";
 const LARGE_TEXT: &str = "YopesCLI";
 /// How long before the presence is re-sent while nothing changes, so a Discord
@@ -309,8 +317,8 @@ mod tests {
         assert_eq!(activity["assets"]["large_text"], "YopesCLI");
         assert_eq!(activity["details"], "YopesCLI · build mode");
         assert_eq!(activity["state"], "build · gpt-4o");
-        // Only the one asset the README asks the user to upload: a missing
-        // asset key makes Discord refuse the whole card.
+        // Only the one asset, uploaded once to the shared application: a
+        // missing asset key makes Discord refuse the whole card.
         assert!(activity["assets"].get("small_image").is_none());
         assert!(activity["timestamps"]["start"].as_u64().unwrap() > 0);
     }

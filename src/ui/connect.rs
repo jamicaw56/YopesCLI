@@ -132,7 +132,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     let active = connect.add_provider_field;
     let width = usize::from(inner.width);
 
-    // Four fields, each two rows. Rows line up with `field_at_mouse`, so a
+    // Three fields, each two rows. Rows line up with `field_at_mouse`, so a
     // click lands on the same box Tab reaches.
     let field = |number: &str, label: &str, value: &str, field: AddProviderField| {
         let on = active == field;
@@ -169,7 +169,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
         vec![label_line, Line::from(spans)]
     };
 
-    let mut lines = Vec::with_capacity(11);
+    let mut lines = Vec::with_capacity(9);
     lines.extend(field(
         "1",
         "Provider name",
@@ -184,19 +184,13 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     ));
     lines.extend(field(
         "3",
-        "Model ID",
-        &connect.custom_model_id,
-        AddProviderField::ModelId,
-    ));
-    lines.extend(field(
-        "4",
         "API key / token",
         &connect.custom_token,
         AddProviderField::Token,
     ));
     lines.push(Line::styled(
         truncate(
-            "defaults · Bearer · <endpoint>/models · 128K context — edit later from the model list",
+            "defaults · Bearer · models come from <endpoint>/models — the model is picked next",
             width,
         ),
         Style::default().fg(dim()),
@@ -442,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn the_quick_connect_form_shows_four_fields_and_their_defaults() {
+    fn the_quick_connect_form_shows_three_fields_and_their_defaults() {
         let mut app = crate::app::test_app();
         app.begin_connect();
         app.select_connect_item();
@@ -463,15 +457,17 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        // Three fields: the model is picked from the endpoint's own list after
+        // the provider is added, so the form never asks for a model id.
         for label in [
             "Provider name",
             "Completion URL",
-            "Model ID",
             "API key / token",
             "defaults",
             "Connect",
         ] {
             assert!(screen.contains(label), "missing {label}: {screen}");
         }
+        assert!(!screen.contains("Model ID"), "{screen}");
     }
 }

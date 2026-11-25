@@ -73,16 +73,21 @@ hook has 60 seconds.
 
 ## Discord presence
 
-Off by default: nothing is sent and no socket opens until you give it the id of
-your own Discord application.
-
-1. Create an application at the [Discord developer portal](https://discord.com/developers/applications) and copy its **Application ID**.
-2. Under *Rich Presence → Art Assets*, upload [`assets/icon-512.png`](assets/icon-512.png) and name the asset **`yopes_logo`**.
-3. Run `/set discord <application id>`. `/set discord off` stops it again, and `/settings` toggles the same switch.
+On by default through one shared Discord application, so there is nothing to
+create and no image to upload: run yopes with Discord open and the card
+appears. `/set discord off` stops it (nothing is sent and no socket opens), and
+`/set discord on` brings it back; `/settings` toggles the same switch.
 
 The card shows the workspace and mode on the first line, the mode and model on
-the second, with the Y as its large image. Only that one asset is referenced:
-a missing asset key makes Discord refuse the whole card.
+the second, with the Y as its large image.
+
+Want your own application name on the card? Create one at the [Discord
+developer portal](https://discord.com/developers/applications), upload
+[`assets/icon-512.png`](assets/icon-512.png) under *Rich Presence → Art Assets*
+as **`yopes_logo`**, then run `/set discord <application id>`. Art assets live
+on the application, which is why a custom id needs that upload: a missing asset
+key makes Discord refuse the whole card. `/set discord on` returns to the
+shared application.
 
 ## Known limitations
 - **Image pasting**: `Ctrl+V` on Windows Terminal pastes text only, so a

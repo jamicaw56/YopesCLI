@@ -8,6 +8,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- Weather `auto` stops raining when the rain stops: a rainy WMO code with no measured precipitation is drawn as cloud, and a cloudy day still shows the sun behind the overcast.
+- The footer's `↑ in ↓ out` arrows move while a reply streams, the duplicate `out N` beside the thinking line is gone, and a narrow terminal drops the goal and context load before the token counts.
+- A tool result's frame label (the file or tool name) is drawn in body color instead of the border's much darker dim.
+- Switching a model on a saved provider no longer asks for the encryption password when the key is already in hand.
 - A provider that refuses `reasoning_effort` (strict endpoints reject `xhigh`) no longer fails the turn: the request retries without the hint and remembers the refusal for that model.
 - `/session` no longer lags: the sessions directory is read once when the picker opens instead of on every keystroke and frame.
 - Custom providers that reject tool-call history now retry without tools instead of dumping a validation error.
@@ -16,8 +20,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
-- `assets/icon-512.png` (plus 128/256/1024 and `icon.ico`): the blue pixel-Y mark, drawn on a 16×16 grid so it stays sharp at every size. Upload it to a Discord application as `yopes_logo`.
-- Discord Rich Presence, off until `/set discord <application id>`: the card shows the workspace, mode and model, with the Y as its large image.
+- `/stats` shows what every run on this machine has spent: totals, requests and active days from `~/.yopes/usage.json`, with a 13-week heatmap and the five busiest days; Esc closes it.
+- Done and needs-approval pings: the terminal bell plus a Windows toast, fired when a turn finishes and when the approval panel opens.
+- `assets/icon-512.png` (plus 128/256/1024 and `icon.ico`): the blue pixel-Y mark, drawn on a 16×16 grid so it stays sharp at every size. Uploaded once to the shared Discord application as `yopes_logo`.
+- Discord Rich Presence, on by default through one shared application (`1575038439441563750`) so nobody creates an application or uploads an asset: the card shows the workspace, mode and model, with the Y as its large image. `/set discord off` stops it, `/set discord on` resumes it, `/set discord <application id>` uses your own app instead.
 - `@path` mentions: typing `@` completes paths from the workspace, and the mentioned file is attached to the message when it is sent.
 - `/models` is a top-level command again: pick a model, or switch by name.
 - `/compact` summarizes older turns now, without going through `/set compact now`.
@@ -37,6 +43,10 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- The add-provider form is three fields (name, completion URL, token): the model is picked from the endpoint's own list afterwards instead of being typed up front.
+- A command typed while the model is thinking confirms itself in the footer, instead of its notice expiring unseen behind the streaming line.
+- The release workflow writes the bot-selected version into `Cargo.toml` (and the `yopes` block of `Cargo.lock`) and tags that commit.
+- The post-update changelog opens on one version, grouped into Added, Fixed, Removed and Changed with counts and four bullets per group: `c` hides Changed, `x` shows every bullet.
 - `web_search` works without a Tavily key: it falls back to DuckDuckGo's no-JavaScript page, and a configured Tavily key still takes precedence.
 - Images in tool results are sharper: they fit the frame width instead of being cropped on the right, and keep their aspect ratio.
 - Saved custom providers show a name-based monogram instead of identical star placeholders.

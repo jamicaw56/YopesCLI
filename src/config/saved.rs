@@ -53,9 +53,14 @@ pub(super) struct SavedConfig {
     /// Whether compaction summarizes older turns automatically.
     #[serde(default = "auto_compact_default")]
     pub(super) auto_compact: bool,
-    /// Discord application id for Rich Presence; `None` keeps the feature off.
+    /// Discord application id for Rich Presence: a user's own application when
+    /// set, the shared one otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) discord_client_id: Option<String>,
+    /// Set by `/set discord off`: presence stays off even though the shared
+    /// application id is always available as the default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) discord_off: bool,
     /// Reasoning effort sent with OpenAI-compatible requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) reasoning_effort: Option<String>,
@@ -78,6 +83,11 @@ pub(super) struct SavedConfig {
 
 fn auto_compact_default() -> bool {
     true
+}
+
+/// Keeps the default `false` out of the saved file.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -113,6 +123,7 @@ impl SavedConfig {
             tavily_api_key: None,
             auto_compact: true,
             discord_client_id: None,
+            discord_off: false,
             reasoning_effort: None,
             theme: None,
             permission: None,
@@ -668,23 +679,44 @@ pub(crate) fn save_auto_compact(path: &Path, value: bool) -> Result<()> {
     update_saved(path, |saved| saved.auto_compact = value)
 }
 
-/// The Discord application id Rich Presence uses, when the user turned it on.
+/// The Discord application id Rich Presence uses: the shared one until the user
+/// points it at their own application, and `None` once they turned it off.
 pub(crate) fn load_discord_client_id(path: &Path) -> Option<String> {
-    load_saved(path)
-        .ok()
-        .flatten()
-        .and_then(|saved| saved.discord_client_id)
-        .map(|id| id.trim().to_owned())
-        .filter(|id| !id.is_empty())
+    let saved = load_saved(path).ok().flatten();
+    match saved {
+        Some(saved) if saved.discord_off => None,
+        Some(saved) => Some(
+            saved
+                .discord_client_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .unwrap_or(crate::discord::SHARED_CLIENT_ID)
+                .to_owned(),
+        ),
+        // No config yet: the shared application is the default.
+        None => Some(crate::discord::SHARED_CLIENT_ID.to_owned()),
+    }
 }
 
-/// Store or clear the Discord application id: `None` turns presence off.
+/// Store a Discord application id, or turn the presence off with `None`. An id
+/// stays saved while it is off, so `/set discord on` returns to the user's own
+/// application instead of forgetting it.
 pub(crate) fn save_discord_client_id(path: &Path, value: Option<String>) -> Result<()> {
     update_saved(path, |saved| {
-        saved.discord_client_id = value
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
+        saved.discord_off = value.is_none();
+        if let Some(value) = value.map(|value| value.trim().to_owned()) {
+            if !value.is_empty() {
+                saved.discord_client_id = Some(value);
+            }
+        }
     })
+}
+
+/// `/set discord on`: back to the shared application, or to the user's own id
+/// when they set one before turning presence off.
+pub(crate) fn enable_discord(path: &Path) -> Result<()> {
+    update_saved(path, |saved| saved.discord_off = false)
 }
 
 /// Store or clear the reasoning effort, in place; an empty value clears.

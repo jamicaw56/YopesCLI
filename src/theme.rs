@@ -562,7 +562,12 @@ fn sky_at(hour: f32, weather: Weather) -> Sky {
         horizon: tint(low.horizon, high.horizon),
         stars: (stars * cover.stars).round() as usize,
         weather,
-        sun: (weather == Weather::Clear).then(|| sun_at(hour)).flatten(),
+        // Cloud grays the sun instead of deleting it: a sunny-overcast
+        // afternoon still shows the glow, while rain, snow, fog and an
+        // unknown forecast leave it out.
+        sun: matches!(weather, Weather::Clear | Weather::Cloudy)
+            .then(|| sun_at(hour))
+            .flatten(),
     }
 }
 
@@ -677,8 +682,11 @@ mod tests {
             sky_at(9.0, Weather::Clear).horizon
         );
         assert!(sky_at(12.0, Weather::Clear).sun.is_some());
-        assert!(sky_at(12.0, Weather::Cloudy).sun.is_none());
+        // Cloud does not delete the sun: it grays it behind the overcast.
+        assert!(sky_at(12.0, Weather::Cloudy).sun.is_some());
         assert!(sky_at(12.0, Weather::Rain).sun.is_none());
+        assert!(sky_at(12.0, Weather::Fog).sun.is_none());
+        assert!(sky_at(12.0, Weather::Unknown).sun.is_none());
         assert!(sky_at(2.0, Weather::Clear).sun.is_none(), "no sun at night");
         let sun = |hour: f32| sky_at(hour, Weather::Clear).sun.expect("day");
         assert!(sun(7.0).x < sun(12.0).x && sun(12.0).x < sun(17.0).x);

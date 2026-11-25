@@ -368,7 +368,11 @@ pub(super) fn frame_lines(
     let label = truncate(&normalize_line(&label), total.saturating_sub(6));
     let head = UnicodeWidthStr::width("╭─ ") + UnicodeWidthStr::width(label.as_str()) + 1;
     lines.push(Line::from(vec![
-        Span::styled(format!("╭─ {label} "), Style::default().fg(border)),
+        // The label is what the frame is about (the file, the tool): it is
+        // drawn in muted body color, not in the border's much darker dim, so
+        // a folded result still says what it holds.
+        Span::styled("╭─ ", Style::default().fg(border)),
+        Span::styled(format!("{label} "), Style::default().fg(muted())),
         Span::styled(
             "─".repeat(total.saturating_sub(head + 2)),
             Style::default().fg(border),
