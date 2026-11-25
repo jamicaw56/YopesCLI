@@ -50,45 +50,6 @@ The [wiki](https://github.com/Jamicaw56/YopesCLI/wiki) holds the detail:
 
 In the checkout: [Architecture](docs/ARCHITECTURE.md), [Adding a tool](docs/ADDING-A-TOOL.md), [Changelog](CHANGELOG.md), [Security policy](SECURITY.md).
 
-## Hooks
-
-`~/.yopes/hooks.json` runs your own shell commands around tool calls. Only the
-global file is read: a cloned repository cannot run anything.
-
-```json
-{
-  "hooks": {
-    "PreToolUse":  [{ "match": "run_command", "command": "echo about to run" }],
-    "PostToolUse": [{ "match": "write_file", "command": "cargo fmt --quiet" }],
-    "Stop":        [{ "command": "echo turn finished" }]
-  }
-}
-```
-
-`match` takes one tool name, a `|`-separated list, or nothing for every tool;
-`{tool}` in the command expands to the tool's name. A failing `PreToolUse`
-hook blocks the call and its output becomes the tool's error, `PostToolUse`
-output joins the result, and `Stop` runs (detached) when a turn ends. Each
-hook has 60 seconds.
-
-## Discord presence
-
-On by default through one shared Discord application, so there is nothing to
-create and no image to upload: run yopes with Discord open and the card
-appears. `/set discord off` stops it (nothing is sent and no socket opens), and
-`/set discord on` brings it back; `/settings` toggles the same switch.
-
-The card shows the workspace and mode on the first line, the mode and model on
-the second, with the Y as its large image.
-
-Want your own application name on the card? Create one at the [Discord
-developer portal](https://discord.com/developers/applications), upload
-[`assets/icon-512.png`](assets/icon-512.png) under *Rich Presence → Art Assets*
-as **`yopes_logo`**, then run `/set discord <application id>`. Art assets live
-on the application, which is why a custom id needs that upload: a missing asset
-key makes Discord refuse the whole card. `/set discord on` returns to the
-shared application.
-
 ## Known limitations
 - **Image pasting**: `Ctrl+V` on Windows Terminal pastes text only, so a
   screenshot clipboard sends nothing. Use **`Ctrl+G`** to attach a clipboard
