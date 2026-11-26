@@ -8,6 +8,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- An MCP server that dies is restarted once on the next call instead of staying dead until the process restarts: its stderr tail is in the error, and a server that answers with its own failure is reported to the model rather than restarted.
 - Discord Rich Presence actually shows up: the card is sent only after Discord answers the handshake, instead of being dropped when it went out in the same breath, and the worker no longer stalls on an idle read that stopped every later update.
 
 - The release workflow's version bump reaches `main` again: the commit is pushed with the bot token instead of `GITHUB_TOKEN`, which branch protection refused.
@@ -25,6 +26,11 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- `run_command` and `bash_background` take a `shell` argument (`bash`, `powershell`, `cmd`, `sh`), so an agent picks the interpreter its command needs instead of the default git-bash/cmd/sh one; the approval preview shows which shell ran it.
+- MCP servers speak stdio, streamable HTTP or SSE. A spec takes `command`/`args`/`env`/`cwd` or `url`/`type`/`headers`, plus `timeout` (seconds per `tools/call`) and `disabled`, with `${VAR}` and `${VAR:-default}` expanded anywhere.
+- Project MCP config in `.mcp.json` at the launch directory, read after `~/.yopes/mcp.json`, so a project server of the same name replaces the global one.
+- `/mcp` lists every server with its state, transport and scope; `/mcp reload` re-reads both config files and restarts them.
+- MCP servers that declare resources get `mcp__<server>__list_resources` and `mcp__<server>__read_resource`, and their tool lists follow `nextCursor` and `notifications/tools/list_changed`.
 - `/generate <prompt>` (or `/generate --model <id> <prompt>`) asks an image model on the active endpoint and saves the PNG in the workspace as `image-<stamp>.png`, never overwriting an earlier one.
 - `/stats` shows what every run on this machine has spent: totals, requests and active days from `~/.yopes/usage.json`, with a 13-week heatmap and the five busiest days; Esc closes it.
 - Done and needs-approval pings: the terminal bell plus a Windows toast, fired when a turn finishes and when the approval panel opens.
@@ -49,6 +55,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Changed
 
+- MCP servers start at launch on a background thread and the landing page lists each one: its name, its tool count, `starting`, or why it failed. The startup screen repaints while they connect.
 - The add-provider form is three fields (name, completion URL, token): the model is picked from the endpoint's own list afterwards instead of being typed up front.
 - A command typed while the model is thinking confirms itself in the footer, instead of its notice expiring unseen behind the streaming line.
 - The release workflow writes the bot-selected version into `Cargo.toml` (and the `yopes` block of `Cargo.lock`) and tags that commit.

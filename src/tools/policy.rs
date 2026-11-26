@@ -145,6 +145,9 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              Prefer tools over guessing, read a file before editing it, and never claim \
              that a file changed unless a tool result confirms it. Set run_command risk to \
              true for anything destructive or hard to undo so the user is asked first. \
+             run_command and bash_background take a `shell` argument — bash, powershell, \
+             cmd or sh — when a command needs a specific interpreter; without it commands \
+             run through git-bash on Windows (cmd when Git is missing) and sh elsewhere. \
              Use glob to find files by pattern and grep to search their contents, so you \
              do not read whole directories blindly. A `.yopesignore` at the workspace root \
              filters what those walks and list_dir see, so a path missing from results may \

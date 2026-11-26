@@ -18,6 +18,8 @@ struct RunCommandArgs {
     command: String,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    #[serde(default)]
+    shell: Option<Shell>,
 }
 
 pub(super) fn run_command(arguments: &str) -> Result<String> {
@@ -38,7 +40,7 @@ pub(super) fn run_command(arguments: &str) -> Result<String> {
         .try_clone()
         .with_context(|| format!("opening {}", log_path.display()))?;
 
-    let mut process = shell_process(command);
+    let mut process = shell_process(command, args.shell)?;
     process
         .current_dir(workspace())
         .stdin(Stdio::null())
@@ -179,6 +181,18 @@ fn bash_jobs() -> MutexGuard<'static, HashMap<u32, BashJob>> {
 /// without it the shell tools refuse to run and `run_command` stays on cmd.
 static BASH_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
+/// The interpreter a command runs through. The model picks one per call;
+/// without a choice the default applies, so older calls keep working.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Shell {
+    Bash,
+    #[serde(alias = "pwsh")]
+    Powershell,
+    Cmd,
+    Sh,
+}
+
 pub(super) fn bash_path() -> Option<&'static PathBuf> {
     BASH_PATH.get_or_init(detect_bash).as_ref()
 }
@@ -206,9 +220,37 @@ fn detect_bash() -> Option<PathBuf> {
     .find(|candidate| candidate.is_file())
 }
 
-/// The process wrapper every command runs through: git-bash when it is
-/// installed, otherwise the platform default. That is the graceful disable.
-fn shell_process(command: &str) -> ProcessCommand {
+/// The process wrapper every command runs through: the interpreter the call
+/// asked for, otherwise git-bash when it is installed, otherwise the platform
+/// default. That is the graceful disable.
+fn shell_process(command: &str, shell: Option<Shell>) -> Result<ProcessCommand> {
+    let Some(shell) = shell else {
+        return Ok(default_shell(command));
+    };
+    let (program, flags): (&std::ffi::OsStr, &[&str]) = match shell {
+        Shell::Bash => (
+            bash_path()
+                .context(
+                    "bash is not available on this machine; install Git for Windows \
+                     and restart yopes, or pass shell \"powershell\" or \"cmd\"",
+                )?
+                .as_os_str(),
+            &["-lc"],
+        ),
+        Shell::Powershell => (
+            std::ffi::OsStr::new("powershell"),
+            &["-NoProfile", "-NonInteractive", "-Command"],
+        ),
+        Shell::Cmd => (std::ffi::OsStr::new("cmd"), &["/C"]),
+        Shell::Sh => (std::ffi::OsStr::new("sh"), &["-c"]),
+    };
+    let mut process = ProcessCommand::new(program);
+    process.args(flags).arg(command);
+    Ok(process)
+}
+
+/// The shell a command runs through when the call names none.
+fn default_shell(command: &str) -> ProcessCommand {
     if let Some(bash) = bash_path() {
         let mut process = ProcessCommand::new(bash);
         process.args(["-lc", command]);
@@ -230,6 +272,8 @@ struct BashBackgroundArgs {
     command: String,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    #[serde(default)]
+    shell: Option<Shell>,
 }
 
 #[derive(Deserialize)]
@@ -238,12 +282,6 @@ struct BashJobArgs {
 }
 
 pub(super) fn bash_background(arguments: &str) -> Result<String> {
-    let Some(bash) = bash_path().cloned() else {
-        bail!(
-            "bash is not available on this machine; install Git for Windows and \
-             restart yopes to run background jobs"
-        );
-    };
     let args: BashBackgroundArgs = parse(arguments)?;
     let command = args.command.trim();
     if command.is_empty() {
@@ -272,8 +310,7 @@ pub(super) fn bash_background(arguments: &str) -> Result<String> {
     let stderr = file
         .try_clone()
         .with_context(|| format!("opening {}", log_path.display()))?;
-    let mut process = ProcessCommand::new(bash);
-    process.args(["-lc", command]);
+    let mut process = shell_process(command, Some(args.shell.unwrap_or(Shell::Bash)))?;
     let child = process
         .current_dir(workspace())
         .stdin(Stdio::null())
@@ -384,7 +421,13 @@ pub(crate) fn run_hook(command: &str, workspace: &Path) -> (bool, String) {
     let Ok(stderr) = file.try_clone() else {
         return (false, "hooks: could not open a log file".to_owned());
     };
-    let mut process = shell_process(command);
+    let mut process = match shell_process(command, None) {
+        Ok(process) => process,
+        Err(error) => {
+            let _ = fs::remove_file(&log_path);
+            return (false, format!("hooks: {error}"));
+        }
+    };
     process
         .current_dir(workspace)
         .stdin(Stdio::null())
@@ -506,4 +549,33 @@ pub(crate) fn poll_bash_jobs() -> Vec<BashNotice> {
         });
     }
     notices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_argument_picks_the_interpreter() {
+        let pwsh: RunCommandArgs = parse(r#"{"command":"echo hi","shell":"pwsh"}"#).unwrap();
+        assert_eq!(pwsh.shell, Some(Shell::Powershell));
+        let build = shell_process("echo hi", pwsh.shell).unwrap();
+        assert_eq!(build.get_program(), std::ffi::OsStr::new("powershell"));
+
+        let cmd: RunCommandArgs = parse(r#"{"command":"dir","shell":"cmd"}"#).unwrap();
+        let build = shell_process("dir", cmd.shell).unwrap();
+        assert_eq!(build.get_program(), std::ffi::OsStr::new("cmd"));
+        let argv: Vec<_> = build.get_args().collect();
+        assert_eq!(argv, ["/C", "dir"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn run_command_runs_through_the_named_shell() {
+        let out = run_command(r#"{"command":"echo cmd-here","shell":"cmd"}"#).unwrap();
+        assert!(out.contains("cmd-here"), "{out}");
+        let out =
+            run_command(r#"{"command":"Write-Output ps-here","shell":"powershell"}"#).unwrap();
+        assert!(out.contains("ps-here"), "{out}");
+    }
 }

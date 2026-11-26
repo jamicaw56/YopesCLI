@@ -85,8 +85,15 @@ pub fn preview(call: &ToolCall) -> String {
         }
         "apply_patch" => super::patch::patch_summary(&call.function.arguments),
         "move_to" => string("path"),
-        "run_command" => clip(&string("command"), 160),
-        "bash_background" => clip(&string("command"), 160),
+        "run_command" | "bash_background" => {
+            let command = clip(&string("command"), 160);
+            let shell = string("shell");
+            if shell.is_empty() {
+                command
+            } else {
+                format!("{shell} · {command}")
+            }
+        }
         "bash_output" | "bash_kill" => {
             let id = arguments
                 .as_ref()

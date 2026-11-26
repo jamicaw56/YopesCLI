@@ -436,6 +436,11 @@ pub fn definitions() -> Value {
                             "type": "string",
                             "description": "Shell command to run from the working directory."
                         },
+                        "shell": {
+                            "type": "string",
+                            "enum": ["bash", "powershell", "cmd", "sh"],
+                            "description": "Interpreter to run the command through. Defaults to git-bash on Windows (cmd when Git is missing) and sh elsewhere."
+                        },
                         "risk": {
                             "type": "boolean",
                             "description": "True when the command is destructive or could discard work, so the user is asked first."
@@ -453,13 +458,18 @@ pub fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "bash_background",
-                "description": "Start one bash shell command in the background and get a job id. Its output lands in a log; the app notifies this conversation automatically when the job finishes or times out, so never poll bash_output in a loop. Stop it with bash_kill when it has served its purpose. Set risk to true for anything destructive or hard to undo so the user is asked first.",
+                "description": "Start one shell command in the background and get a job id. It runs through bash unless the shell argument names another interpreter. Its output lands in a log; the app notifies this conversation automatically when the job finishes or times out, so never poll bash_output in a loop. Stop it with bash_kill when it has served its purpose. Set risk to true for anything destructive or hard to undo so the user is asked first.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {
                             "type": "string",
                             "description": "Bash command to start."
+                        },
+                        "shell": {
+                            "type": "string",
+                            "enum": ["bash", "powershell", "cmd", "sh"],
+                            "description": "Interpreter to run the job through. Defaults to bash."
                         },
                         "risk": {
                             "type": "boolean",
