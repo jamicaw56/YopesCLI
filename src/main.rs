@@ -120,6 +120,9 @@ async fn run() -> Result<()> {
     if let Some(sides) = saved_diff_sides {
         app.diff_sides = sides;
     }
+    // MCP servers start now, off this thread: the landing page shows each one
+    // connect instead of waiting for the first tool request.
+    mcp::start();
     // The changelog opens once per build: a fresh version shows what changed,
     // and closing it records the version so the next start stays quiet.
     if config::last_seen_version(&config.config_path)

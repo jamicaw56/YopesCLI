@@ -823,6 +823,9 @@ impl App {
             || self.notice.is_some()
             // A retry counts down its delay in the footer.
             || self.retry.is_some()
+            // Servers connect in the background: the landing page follows each
+            // one from `starting` to its tool count.
+            || crate::mcp::pending()
             // The submitted-prompt flash animates for a few ticks on its own.
             || self
                 .send_pulse

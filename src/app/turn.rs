@@ -56,6 +56,7 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
         "/help"
             | "/agents"
             | "/skills"
+            | "/mcp"
             | "/quit"
             | "/settings"
             | "/goal"
@@ -538,6 +539,24 @@ impl App {
             }
             "/agents" => self.open_agents_picker(),
             "/skills" => self.show_skills(),
+            "/mcp" => match parts
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "" | "list" => self.info(crate::mcp::summary()),
+                "reload" => {
+                    // Reloading restarts every server off this thread, so the
+                    // answer is immediate and the landing page follows along.
+                    if crate::mcp::reload() {
+                        self.info("Reloading MCP servers…");
+                    } else {
+                        self.info("MCP servers are already loading.");
+                    }
+                }
+                other => self.error(format!("Usage: /mcp [list|reload], not `{other}`")),
+            },
             "/revert" => self.open_revert_picker(),
             "/goal" => {
                 let goal = parts.collect::<Vec<_>>().join(" ");

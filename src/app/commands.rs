@@ -34,7 +34,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 19] = [
+pub const COMMANDS: [CommandSpec; 20] = [
     CommandSpec {
         name: "/help",
         description: "Show keys, commands and the version",
@@ -94,6 +94,11 @@ pub const COMMANDS: [CommandSpec; 19] = [
         name: "/skills",
         description: "List installed skills",
         argument: None,
+    },
+    CommandSpec {
+        name: "/mcp",
+        description: "MCP servers: list their state, or reload the config",
+        argument: Some("action"),
     },
     CommandSpec {
         name: "/revert",
@@ -213,6 +218,10 @@ fn argument_words(command: &str, words: &[&str]) -> Vec<(String, &'static str)> 
             ("on", "Shared YopesCLI application"),
             ("<id>", "Discord application id from the developer portal"),
         ]),
+        ("/mcp", []) => list(&[
+            ("list", "Servers, their state and their setup"),
+            ("reload", "Re-read mcp.json and restart every server"),
+        ]),
         ("/provider", []) => list(&[
             ("connect", "Connect a provider or a custom endpoint"),
             ("disconnect", "Forget a saved provider"),
@@ -327,6 +336,7 @@ mod tests {
                 "/cd",
                 "/agents",
                 "/skills",
+                "/mcp",
                 "/revert",
                 "/goal",
                 "/compact",
@@ -337,7 +347,7 @@ mod tests {
             ]
         );
         assert_eq!(command_names("/c"), vec!["/cd", "/compact"]);
-        assert_eq!(command_names("/m"), vec!["/models"]);
+        assert_eq!(command_names("/m"), vec!["/models", "/mcp"]);
         assert_eq!(command_names("/e"), vec!["/export"]);
         assert_eq!(command_names("/f"), vec!["/fork"]);
         assert_eq!(command_names("/i"), vec!["/init"]);
@@ -354,6 +364,27 @@ mod tests {
         assert_eq!(command_names("/MO"), vec!["/models"]);
         assert!(command_names("/model gpt").is_empty());
         assert!(command_names("hello").is_empty());
+    }
+
+    #[test]
+    fn mcp_reports_its_servers_instead_of_a_usage_error() {
+        let mut app = test_app();
+        app.command("/mcp");
+        let notice = app.notice.as_ref().map(|notice| notice.message.clone());
+        assert!(
+            notice
+                .as_deref()
+                .is_some_and(|message| message.contains("MCP")),
+            "{notice:?}"
+        );
+        app.command("/mcp sideways");
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("Usage: /mcp")),
+            "{:?}",
+            app.notice.as_ref().map(|notice| &notice.message)
+        );
     }
 
     #[test]

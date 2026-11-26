@@ -18,6 +18,105 @@ fn landing_hint_row(
     ])
 }
 
+/// How many servers the landing page names before the rest move to `/mcp`.
+const MAX_MCP_ROWS: usize = 4;
+
+/// The landing page's MCP block: one row per configured server with the state
+/// it reached. Read-only: the client snapshot never starts a server here.
+///
+/// The block is centred line by line, so every row is padded to one width;
+/// otherwise a long failure message would drag its columns left of the others.
+fn mcp_rows(width: u16) -> Vec<Line<'static>> {
+    let report = crate::mcp::report();
+    if report.servers.is_empty() && report.problems.is_empty() {
+        return Vec::new();
+    }
+    // Names line up in one column, as long as the longest one stays short.
+    let name_width = report
+        .servers
+        .iter()
+        .map(|server| server.name.chars().count())
+        .max()
+        .unwrap_or(4)
+        .clamp(4, 18);
+    // What a state may say before it would run past the terminal.
+    let tail_width = usize::from(width)
+        .saturating_sub(11 + name_width + 2)
+        .max(16);
+    let mut rows: Vec<(String, String, String, bool)> = Vec::new();
+    for (index, server) in report.servers.iter().take(MAX_MCP_ROWS).enumerate() {
+        rows.push((
+            if index == 0 {
+                "mcp".to_owned()
+            } else {
+                String::new()
+            },
+            server.name.clone(),
+            clip_to(&server.detail(), tail_width),
+            server.is_failure(),
+        ));
+    }
+    let hidden = report.servers.len().saturating_sub(MAX_MCP_ROWS);
+    if hidden > 0 {
+        rows.push((
+            String::new(),
+            String::new(),
+            format!("+{hidden} more · /mcp"),
+            false,
+        ));
+    }
+    // A broken config file has to speak for itself: no server row can carry it.
+    if let Some(problem) = report.problems.first() {
+        rows.push((
+            if report.servers.is_empty() {
+                "mcp".to_owned()
+            } else {
+                String::new()
+            },
+            String::new(),
+            format!(
+                "config · {}",
+                clip_to(problem, tail_width.saturating_sub(9))
+            ),
+            true,
+        ));
+    }
+    let tail_width = rows
+        .iter()
+        .map(|(_, _, tail, _)| tail.chars().count())
+        .max()
+        .unwrap_or(1);
+    rows.into_iter()
+        .map(|(label, name, tail, failure)| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{label:<11}"),
+                    Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{name:<name_width$}", name_width = name_width),
+                    Style::default().fg(text()),
+                ),
+                Span::styled(
+                    format!("  {tail:<tail_width$}"),
+                    Style::default().fg(if failure { error() } else { muted() }),
+                ),
+            ])
+        })
+        .collect()
+}
+/// One line, at most `width` characters, with an ellipsis when it was cut.
+fn clip_to(text: &str, width: usize) -> String {
+    let flat = text.replace(['\r', '\n'], " ");
+    let mut characters = flat.chars();
+    let mut result = characters.by_ref().take(width).collect::<String>();
+    if characters.next().is_some() {
+        result.pop();
+        result.push('…');
+    }
+    result
+}
+
 /// How many messages keep their rendered markdown in the cache: a very long
 /// session evicts the oldest instead of holding every message's lines.
 const MARKDOWN_CACHE_LIMIT: usize = 300;
@@ -129,8 +228,11 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("workspace  {}", workspace_label(app.working_dir())),
                 Style::default().fg(muted()),
             ),
-            Line::raw(""),
         ];
+        // Servers the config lists, with the state each one reached: the
+        // landing page is where a failed connection shows up without a command.
+        welcome.extend(mcp_rows(inner.width));
+        welcome.push(Line::raw(""));
         // The startup screen carries no mascot: the workspace line is what the
         // eye needs, not an animation to watch.
         welcome.push(Line::styled(
