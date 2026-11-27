@@ -4,7 +4,6 @@ A better coding CLI, built with Rust, Ratatui, and Tokio.
 
 [![Repo size](https://img.shields.io/github/repo-size/Jamicaw56/YopesCLI)](https://github.com/Jamicaw56/YopesCLI)
 [![License](https://img.shields.io/github/license/Jamicaw56/YopesCLI)](LICENSE)
-[Discord](https://discord.gg/xrRAJKHAVP)
 
 ## Highlights
 
