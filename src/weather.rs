@@ -7,7 +7,7 @@
 
 use std::{
     sync::{
-        atomic::{AtomicU8, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
         mpsc,
     },
     thread,
@@ -99,6 +99,10 @@ pub struct Place {
 static STATE: AtomicU8 = AtomicU8::new(0);
 /// Bumped by every `start` and `stop`, so a superseded poller notices and exits.
 static GENERATION: AtomicU32 = AtomicU32::new(0);
+/// Raised when the terminal comes back: the poller drops its wait and fetches.
+static REFRESH: AtomicBool = AtomicBool::new(false);
+/// On while a request is in flight, so the frame with the answer gets drawn.
+static FETCHING: AtomicBool = AtomicBool::new(false);
 
 /// The last weather the poller saw.
 pub fn current() -> Weather {
@@ -114,6 +118,7 @@ pub fn start(place: &Place) {
     let (lat, lon) = (place.lat, place.lon);
     thread::spawn(move || {
         while GENERATION.load(Ordering::Relaxed) == generation {
+            FETCHING.store(true, Ordering::Relaxed);
             let wait = match fetch_report(lat, lon) {
                 Ok((code, precipitation)) => {
                     // A poller replaced mid-request must not overwrite the new one.
@@ -127,10 +132,16 @@ pub fn start(place: &Place) {
                 }
                 Err(_) => 60,
             };
+            FETCHING.store(false, Ordering::Relaxed);
             // One-second slices, so `stop` ends the thread within a second.
             for _ in 0..wait {
                 if GENERATION.load(Ordering::Relaxed) != generation {
                     return;
+                }
+                // A focus regain cuts the wait short: the forecast is fetched
+                // now instead of whenever the 15-minute wait happened to end.
+                if REFRESH.swap(false, Ordering::Relaxed) {
+                    break;
                 }
                 thread::sleep(Duration::from_secs(1));
             }
@@ -151,6 +162,21 @@ pub fn follow(place: Option<&Place>, auto: bool) {
 pub fn stop() {
     GENERATION.fetch_add(1, Ordering::Relaxed);
     STATE.store(Weather::Unknown as u8, Ordering::Relaxed);
+    REFRESH.store(false, Ordering::Relaxed);
+    FETCHING.store(false, Ordering::Relaxed);
+}
+
+/// Ask the running poller to fetch now, without restarting it. The terminal
+/// coming back is when the sky on screen is most likely stale; with no poller
+/// (no place, or not theme `auto`) this does nothing.
+pub fn refresh() {
+    REFRESH.store(true, Ordering::Relaxed);
+}
+
+/// Whether a forecast request is in flight. The ticker keeps drawing while it
+/// is, so the answer shows up on the frame it lands instead of the next minute.
+pub fn fetching() -> bool {
+    FETCHING.load(Ordering::Relaxed)
 }
 
 fn client() -> Result<reqwest::blocking::Client> {

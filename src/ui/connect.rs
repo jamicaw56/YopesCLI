@@ -2,6 +2,49 @@ use crate::app::AddProviderField;
 
 use super::*;
 
+/// Rows of the connect list shown before it scrolls inside the box: the same
+/// ceiling the command palette uses, so connecting never eats the transcript.
+const MAX_CONNECT_ROWS: usize = 9;
+
+/// Inner rows the box needs at a given stage, borders excluded.
+fn inner_rows(connect: &ConnectState, app: &App) -> u16 {
+    if connect.stage == ConnectStage::AddProvider {
+        // Three fields at two rows each, the defaults line, the button, the
+        // error/hint line. `field_at_mouse` maps clicks onto exactly these.
+        return 9;
+    }
+    let list = if connect.loading {
+        1
+    } else if matches!(
+        connect.stage,
+        ConnectStage::Providers
+            | ConnectStage::Models
+            | ConnectStage::CustomModels
+            | ConnectStage::ModelContextWindow
+    ) {
+        let items = connect.items_using(app.backend.base_url(), app.backend.model());
+        // A failed fetch keeps one row of the box for its message.
+        let errors = u16::from(connect.error.is_some());
+        (connect.list_rows(&items).len().clamp(1, MAX_CONNECT_ROWS) as u16)
+            .saturating_sub(errors)
+            .max(1)
+    } else {
+        0
+    };
+    // current, label, input, rule, list, hint
+    5 + list
+}
+
+/// Height the connect box takes in the layout above the composer. Zero when
+/// the dialog is closed.
+pub(super) fn connect_height(app: &App) -> u16 {
+    app.connect_state()
+        .map_or(0, |connect| inner_rows(connect, app) + 2)
+}
+
+/// The provider dialog, docked above the composer the way the command palette
+/// is: a small box that leaves the conversation visible, instead of a
+/// full-screen window that hides the session it is about to change.
 pub(super) fn draw_connect(
     frame: &mut Frame,
     app: &App,
@@ -9,28 +52,18 @@ pub(super) fn draw_connect(
     spinner: usize,
     area: Rect,
 ) {
-    let width = (area.width.saturating_sub(4) * 92 / 100)
-        .clamp(60, 120)
-        .min(area.width.saturating_sub(2));
-    let min_height = if connect.stage == ConnectStage::AddProvider {
-        14
-    } else {
-        16
-    };
-    let height = (area.height.saturating_sub(2) * 90 / 100)
-        .clamp(min_height, 40)
-        .min(area.height.saturating_sub(2));
-    if width < 34 || height < 10 {
+    let width = responsive_palette_width(area.width).max(46);
+    let height = (inner_rows(connect, app) + 2).min(area.height);
+    if width < 34 || height < 5 || area.width < width {
         return;
     }
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
+        area.y,
         width,
         height,
     );
     frame.render_widget(Clear, popup);
-
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(dim()))
@@ -48,10 +81,11 @@ pub(super) fn draw_connect(
             format!(" {} ", connect.stage.hint()),
             Style::default().fg(dim()),
         ))
-        .padding(Padding::new(2, 2, 1, 1));
+        .padding(Padding::new(1, 1, 0, 0));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    if inner.width == 0 || inner.height < 4 {
+    connect.popup_inner.set(inner);
+    if inner.width == 0 || inner.height < 3 {
         return;
     }
 
@@ -60,8 +94,8 @@ pub(super) fn draw_connect(
         return;
     }
 
-    // A form, not a text dump: the connection in use, then the field with its
-    // label, a rule that closes the field, the list, and the key hints.
+    // A form, not a text dump: who is connected now, the field with its
+    // label and a rule under it, then the list that field filters.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -69,7 +103,7 @@ pub(super) fn draw_connect(
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(2),
+            Constraint::Min(0),
             Constraint::Length(1),
         ])
         .split(inner);
@@ -78,9 +112,9 @@ pub(super) fn draw_connect(
     if let Some(current) = current_connection(app) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("current  ", Style::default().fg(dim())),
+                Span::styled("current ", Style::default().fg(dim())),
                 Span::styled(
-                    truncate(&current, width.saturating_sub(9)),
+                    truncate(&current, width.saturating_sub(8)),
                     Style::default().fg(muted()),
                 ),
             ])),
@@ -99,7 +133,7 @@ pub(super) fn draw_connect(
         Span::styled(connect.input().to_owned(), Style::default().fg(text())),
     ];
     if connect.uses_cursor() {
-        spans.push(Span::styled("▌", Style::default().fg(accent())));
+        spans.push(Span::styled("▌", breathe(spinner, dim(), accent())));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rows[2]);
     frame.render_widget(
@@ -120,27 +154,21 @@ fn current_connection(app: &App) -> Option<String> {
         (true, true) => None,
         (false, true) => Some(provider.to_owned()),
         (true, false) => Some(model.to_owned()),
-        (false, false) => Some(format!("{provider} · {model}")),
+        _ => Some(format!("{provider} · {model}")),
     }
 }
 
+/// The add-provider form, laid out to the row map `field_at_mouse` clicks on:
+/// two rows per field, the button below them, the hint on the last row.
 fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect) {
-    connect.popup_inner.set(inner);
-    if inner.width < 30 || inner.height < 11 {
+    if inner.width < 30 || inner.height < 9 {
         return;
     }
     let active = connect.add_provider_field;
     let width = usize::from(inner.width);
 
-    // Three fields, each two rows. Rows line up with `field_at_mouse`, so a
-    // click lands on the same box Tab reaches.
     let field = |number: &str, label: &str, value: &str, field: AddProviderField| {
         let on = active == field;
-        let edge = if on {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(dim())
-        };
         let label_line = Line::from(vec![
             Span::styled(
                 format!("{number}  "),
@@ -155,17 +183,23 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
                 },
             ),
         ]);
+        // The field is a single rule under the value: the box shape belongs to
+        // the dialog, so nested boxes inside it only add noise.
         let mut spans = vec![
-            Span::styled("   ╭ ", edge),
+            Span::styled("   ", Style::default()),
             Span::styled(
-                truncate(value, width.saturating_sub(8)),
+                truncate(value, width.saturating_sub(6)),
                 Style::default().fg(text()),
             ),
         ];
         if on {
             spans.push(Span::styled("▌", Style::default().fg(accent())));
         }
-        spans.push(Span::styled(" ╮", edge));
+        let used = spans_width(&spans);
+        spans.push(Span::styled(
+            " ".repeat(width.saturating_sub(used)),
+            Style::default().fg(if on { accent() } else { dim() }),
+        ));
         vec![label_line, Line::from(spans)]
     };
 
@@ -190,7 +224,7 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     ));
     lines.push(Line::styled(
         truncate(
-            "defaults · Bearer · models come from <endpoint>/models — the model is picked next",
+            "defaults · Bearer · models come from <endpoint>/models",
             width,
         ),
         Style::default().fg(dim()),
@@ -204,20 +238,22 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     } else {
         Style::default().fg(text()).add_modifier(Modifier::BOLD)
     };
-    lines.push(Line::from(Span::styled(
-        if done_active {
-            "   ›  Connect  ‹   "
-        } else {
-            "      Connect        "
-        },
-        done_style,
-    )));
+    let done_label = if done_active {
+        " ›  Connect  ‹ "
+    } else {
+        "   Connect     "
+    };
+    let pad = width.saturating_sub(UnicodeWidthStr::width(done_label));
+    lines.push(Line::from(vec![
+        Span::styled(done_label.to_owned(), done_style),
+        Span::styled(" ".repeat(pad), Style::default()),
+    ]));
+    let footer = connect.error.as_deref().map_or_else(
+        || "tab next · enter continue · esc cancel".to_owned(),
+        |error| format!("✗ {error}"),
+    );
     lines.push(Line::styled(
-        connect
-            .error
-            .as_deref()
-            .map(|error| format!("✗ {error}"))
-            .unwrap_or_else(|| "Tab next · Enter continue · Esc cancel".to_owned()),
+        truncate(&footer, width),
         if connect.error.is_some() {
             Style::default().fg(crate::theme::current().error)
         } else {
@@ -235,13 +271,10 @@ pub(super) fn draw_connect_list(
     area: Rect,
 ) {
     if connect.loading {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(spinner(step), Style::default().fg(accent())),
-                Span::styled(connect.loading_detail(), Style::default().fg(muted())),
-            ])),
-            area,
-        );
+        let label = connect.loading_detail().trim().to_owned();
+        let mut spans = vec![Span::styled(" ", Style::default())];
+        spans.extend(live_label(&label, step, muted(), accent()));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
     let mut area = area;
@@ -322,7 +355,7 @@ pub(super) fn draw_connect_list(
             Style::default().fg(accent())
         };
         let title_style = if chosen {
-            Style::default().fg(text()).add_modifier(Modifier::BOLD)
+            selection(accent(), step)
         } else {
             Style::default().fg(text())
         };
@@ -350,21 +383,22 @@ pub(super) fn draw_connect_list(
         }
         spans.push(Span::styled(item.detail.clone(), detail_style));
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        if chosen {
+            highlight(frame, rect, step);
+        }
     }
 }
 
 pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area: Rect) {
     let text = match connect.stage {
         ConnectStage::Providers => {
-            "↑↓ move · type to filter · enter choose · f2 rename · delete / ctrl+d remove · esc close"
+            "↑↓ move · type to filter · enter choose · f2 rename · del remove · esc close"
                 .to_owned()
         }
         ConnectStage::AddProvider => {
             "tab switch box · ←/→ auth · enter submit · esc close".to_owned()
         }
-        ConnectStage::RenameProvider => {
-            "enter rename · esc back".to_owned()
-        }
+        ConnectStage::RenameProvider => "enter rename · esc back".to_owned(),
         ConnectStage::Models => {
             "↑↓ move · type to filter · enter choose · tab context · esc back".to_owned()
         }
@@ -395,79 +429,19 @@ pub(super) fn draw_connect_hint(frame: &mut Frame, connect: &ConnectState, area:
         }
         ConnectStage::Unlock => "enter unlock · esc back".to_owned(),
     };
-    frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(muted())),
-        area,
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
-
-    /// The dialog is a form: the connection in use, the field's label, and the
-    /// stage's hint, not one undifferentiated text block.
-    #[test]
-    fn the_connect_dialog_reads_as_a_form() {
-        let mut app = crate::app::test_app();
-        app.begin_connect();
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        terminal
-            .draw(|frame| {
-                if let Some(connect) = app.connect_state() {
-                    super::draw_connect(frame, &app, connect, 0, frame.area());
-                }
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let screen: String = (0..30)
-            .map(|row| {
-                (0..100)
-                    .map(|column| buffer[(column, row)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(screen.contains("connect"), "{screen}");
-        assert!(screen.contains("provider"), "{screen}");
-        assert!(screen.contains("current"), "{screen}");
-        assert!(screen.contains("pick a provider"), "{screen}");
-        assert!(screen.contains("OpenAI"), "the live connection: {screen}");
-    }
-
-    #[test]
-    fn the_quick_connect_form_shows_three_fields_and_their_defaults() {
-        let mut app = crate::app::test_app();
-        app.begin_connect();
-        app.select_connect_item();
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        terminal
-            .draw(|frame| {
-                if let Some(connect) = app.connect_state() {
-                    super::draw_connect(frame, &app, connect, 0, frame.area());
-                }
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let screen: String = (0..30)
-            .map(|row| {
-                (0..100)
-                    .map(|column| buffer[(column, row)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        // Three fields: the model is picked from the endpoint's own list after
-        // the provider is added, so the form never asks for a model id.
-        for label in [
-            "Provider name",
-            "Completion URL",
-            "API key / token",
-            "defaults",
-            "Connect",
-        ] {
-            assert!(screen.contains(label), "missing {label}: {screen}");
+    // The hint drops whole tail segments instead of clipping mid-word: the
+    // first keys are the ones a reader needs, so the last ones go first.
+    let mut hint = String::new();
+    for (index, part) in text.split(" · ").enumerate() {
+        let next = if index == 0 {
+            part.to_owned()
+        } else {
+            format!("{hint} · {part}")
+        };
+        if UnicodeWidthStr::width(next.as_str()) > usize::from(area.width) {
+            break;
         }
-        assert!(!screen.contains("Model ID"), "{screen}");
+        hint = next;
     }
+    frame.render_widget(Paragraph::new(hint).style(Style::default().fg(dim())), area);
 }

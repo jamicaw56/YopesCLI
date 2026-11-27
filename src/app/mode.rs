@@ -86,9 +86,9 @@ impl Mode {
     /// Supplied Nerd Font mode icons.
     pub const fn icon(self) -> &'static str {
         match self {
-            Self::Build => "\u{f0ad}",
-            Self::Plan => "\u{f046}",
-            Self::Chat => "\u{f075}",
+            Self::Build => "◆",
+            Self::Plan => "◇",
+            Self::Chat => "○",
         }
     }
 
@@ -189,9 +189,9 @@ mod tests {
 
     #[test]
     fn the_mode_cycle_and_denials_match_the_labels() {
-        assert_eq!(Mode::Build.icon(), "\u{f0ad}");
-        assert_eq!(Mode::Plan.icon(), "\u{f046}");
-        assert_eq!(Mode::Chat.icon(), "\u{f075}");
+        assert_eq!(Mode::Build.icon(), "◆");
+        assert_eq!(Mode::Plan.icon(), "◇");
+        assert_eq!(Mode::Chat.icon(), "○");
         assert_eq!(Mode::default(), Mode::Build);
         assert_eq!(Mode::Build.next(), Mode::Plan);
         assert_eq!(Mode::Plan.next(), Mode::Chat);

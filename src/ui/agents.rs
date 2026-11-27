@@ -17,7 +17,7 @@ pub(super) const SIDEBAR_MIN_WIDTH: u16 = 90;
 /// long name clips with an ellipsis instead of spilling past the border.
 fn agent_row(agent: &crate::app::Subagent, step: usize, width: u16) -> Line<'static> {
     let (glyph, color) = match agent.status() {
-        crate::app::SubagentStatus::Running => (spinner(step), accent()),
+        crate::app::SubagentStatus::Running => (LIVE_DOT, accent()),
         crate::app::SubagentStatus::Done => ("✓", muted()),
         crate::app::SubagentStatus::Failed => ("✗", error()),
     };
@@ -38,7 +38,14 @@ fn agent_row(agent: &crate::app::Subagent, step: usize, width: u16) -> Line<'sta
         truncate(&agent.row_label(), budget)
     };
     Line::from(vec![
-        Span::styled(format!("{glyph} "), Style::default().fg(color)),
+        Span::styled(
+            format!("{glyph} "),
+            if agent.status() == crate::app::SubagentStatus::Running {
+                breathe(step, dim(), color)
+            } else {
+                Style::default().fg(color)
+            },
+        ),
         Span::styled(format!("{elapsed} "), Style::default().fg(muted())),
         Span::styled(label, Style::default().fg(text())),
     ])
@@ -299,13 +306,13 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
         let list_row = start + row;
         let agent = &app.subagents[index];
         let style = if list_row == selected {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+            selection(accent(), app.spinner)
         } else {
             Style::default().fg(text())
         };
         let (glyph, glyph_style) = match agent.status() {
             crate::app::SubagentStatus::Running => {
-                (spinner(app.spinner), Style::default().fg(accent()))
+                (LIVE_DOT, breathe(app.spinner, dim(), accent()))
             }
             crate::app::SubagentStatus::Done => ("✓", Style::default().fg(muted())),
             crate::app::SubagentStatus::Failed => ("✗", Style::default().fg(error())),
@@ -318,10 +325,11 @@ pub(super) fn draw_agents_picker(frame: &mut Frame, app: &App, picker: &ListPick
                 Style::default().fg(muted()),
             ),
         ]);
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(inner.x, inner.y.saturating_add(row as u16), inner.width, 1),
-        );
+        let row = Rect::new(inner.x, inner.y.saturating_add(row as u16), inner.width, 1);
+        frame.render_widget(Paragraph::new(line), row);
+        if list_row == selected {
+            highlight(frame, row, app.spinner);
+        }
     }
 }
 

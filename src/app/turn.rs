@@ -250,26 +250,31 @@ impl App {
             value = expanded;
             self.info(format!("Attached: {}", attached.join(", ")));
         }
-        if !self.running_delegates.is_empty() {
-            // Delegates still run: their tool results must follow the
-            // assistant turn that asked for them, so a message typed now
-            // queues for the post-delegate continuation instead of landing
-            // between the tool calls and their results.
+        // Tool calls the model already asked for keep their place: their
+        // results must follow the assistant turn that asked for them, so a
+        // message typed now queues for the continuation instead of landing
+        // between the tool calls and their results. A steer is a message like
+        // any other — it must not throw away a write the user is waiting on,
+        // which is what discarding the pending calls did.
+        if !self.running_delegates.is_empty() || (steering && !self.pending_tools.is_empty()) {
             let images = std::mem::take(&mut self.attachments);
             self.queued_message = match self.queued_message.take() {
                 Some(existing) => Some(format!("{existing}\n\n{value}")),
                 None => Some(value),
             };
             self.queued_images.extend(images);
-            self.info("Queued — it sends when the running agents finish.");
+            self.info(if self.running_delegates.is_empty() {
+                "Queued — it sends when the running tools finish."
+            } else {
+                "Queued — it sends when the running agents finish."
+            });
             return Action::None;
         }
-        if steering && self.running_delegates.is_empty() {
-            // Drop the blank reply the interrupted request left behind, then
-            // fold the steer into the conversation and restart the turn.
-            // Delegates still running keep the turn instead: their results
-            // must not land inside a restarted conversation.
-            self.discard_pending_tools("The user steered the response before this tool could run.");
+        if steering {
+            // Nothing the model asked for is waiting, so a steer still
+            // interrupts: drop the blank reply the interrupted request left
+            // behind, then fold the steer into the conversation and restart
+            // the turn.
             self.remove_empty_response();
             // Several steers before the model answered read as one message
             // block, not one bubble per line.
@@ -417,6 +422,7 @@ impl App {
             prompt_tokens: prompt_chars as u64 / 4,
             usage: None,
             tool_progress: None,
+            ttft_ms: None,
             recovered: false,
             compacting,
         });
@@ -1373,6 +1379,11 @@ impl App {
         // Stopping is a decision, not an interruption to recover from.
         self.session.interrupted = false;
         self.save_session();
+        // A message the user queued while the model streamed is still theirs to
+        // send: it goes now instead of waiting for a turn that never comes.
+        if self.flush_queued_message() {
+            return self.begin_turn();
+        }
         // A subagent that finished while the turn streamed reports now.
         if !self.is_busy() && self.flush_parked_messages() {
             return self.begin_turn();
@@ -1582,6 +1593,7 @@ pub(crate) mod tests {
             prompt_tokens: 10,
             usage: None,
             tool_progress: None,
+            ttft_ms: None,
             recovered: false,
             compacting: None,
         });
@@ -1599,6 +1611,95 @@ pub(crate) mod tests {
         assert!(!app.user_command_running);
         assert_eq!(app.session.messages.len(), 2);
         assert!(app.session.messages[1].content.contains("hello_active"));
+    }
+
+    /// A reply in flight that has already asked for one write: the shape a
+    /// steer lands in when the model decides to change a file.
+    fn streaming_with_a_pending_write(app: &mut App) {
+        app.active = Some(ActiveRequest {
+            id: 7,
+            started: Instant::now(),
+            prompt_tokens: 10,
+            usage: None,
+            tool_progress: None,
+            ttft_ms: None,
+            recovered: false,
+            compacting: None,
+        });
+        app.session
+            .messages
+            .push(Message::new(Role::User, "add a tab bar"));
+        let call = ToolCall::new(
+            "call-write",
+            "write_file",
+            r#"{"path":"ui.rs","content":"fn tabs() {}\n"}"#,
+        );
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![call.clone()]);
+        app.session.messages.push(assistant);
+        app.pending_tools.push_back(call);
+    }
+
+    /// Steering used to discard the tool calls the model had already asked
+    /// for, so a write the user was waiting on vanished. The steer now queues
+    /// and the call keeps its place in the turn.
+    #[test]
+    fn a_steer_keeps_the_pending_write_and_queues_the_message() {
+        let mut app = test_app();
+        streaming_with_a_pending_write(&mut app);
+        assert!(app.is_streaming());
+
+        app.input.set("actually put it on the left");
+        assert!(
+            matches!(app.submit(), Action::None),
+            "the turn is not restarted"
+        );
+
+        assert_eq!(app.pending_tools.len(), 1, "the write still runs");
+        assert_eq!(app.pending_tools[0].id, "call-write");
+        assert_eq!(
+            app.queued_message.as_deref(),
+            Some("actually put it on the left")
+        );
+        assert!(
+            !app.session
+                .messages
+                .iter()
+                .any(|message| message.role == Role::Tool),
+            "no tool call was cancelled"
+        );
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("running tools")),
+            "the user is told the steer waits for the tools"
+        );
+    }
+
+    /// The queued steer is not lost when the user stops the reply: it becomes
+    /// the next turn once the interrupted one is out of the way.
+    #[test]
+    fn stopping_the_stream_after_a_steer_sends_the_queued_message() {
+        let mut app = test_app();
+        streaming_with_a_pending_write(&mut app);
+        app.input.set("different approach: keep the old bar");
+        assert!(matches!(app.submit(), Action::None));
+
+        let action = app.stop_streaming();
+        assert!(
+            matches!(action, Action::Start { .. }),
+            "the steer starts the next turn"
+        );
+        assert!(app.queued_message.is_none(), "the queue is drained");
+        assert!(app.pending_tools.is_empty(), "the stopped call is gone");
+        let sent = app
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::User)
+            .expect("the steer reached the conversation");
+        assert_eq!(sent.content, "different approach: keep the old bar");
     }
 
     #[test]
@@ -1924,6 +2025,7 @@ pub(crate) mod tests {
             attempt: 3,
             delay_secs: 8,
             reason: "overloaded".to_owned(),
+            since: Instant::now(),
         });
         app.error("Connection refused".to_owned());
         app.on_stream_event(StreamEvent::Delta {

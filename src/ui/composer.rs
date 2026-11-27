@@ -2,35 +2,46 @@ use super::*;
 
 pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = padded(area, 2);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(9), Constraint::Min(1)])
-        .split(inner);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("◆", Style::default().fg(accent2())),
-            Span::styled(
-                " yopes",
-                Style::default().fg(accent2()).add_modifier(Modifier::BOLD),
-            ),
-        ])),
-        columns[0],
-    );
-
-    // The header carries the passive provider line. The mode, the permission
-    // badge and the context load sit together in the footer.
+    // The top row is the provider line alone: the window title already says
+    // yopes, and a brand mark parked in the corner read as a stray footer.
+    // The mode, the permission badge and the context load sit in the footer.
+    let ttft = app
+        .session
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| message.usage)
+        .map(|usage| usage.ttft_ms);
+    let bars = signal_bars(ttft);
+    // The meter keeps its own width out of the header's budget, so a narrow
+    // terminal drops the provider name before the bars collide with the spend.
+    let bars_w = if bars.is_empty() {
+        0
+    } else {
+        spans_width(&bars) + 1
+    };
     let right = header_right(
         app.backend.provider_label(),
         app.backend.model(),
         &app.spent_cost(),
-        columns[1].width as usize,
+        usize::from(inner.width).saturating_sub(bars_w),
     );
-    if !right.is_empty() {
+    if !right.is_empty() || !bars.is_empty() {
+        let mut spans = Vec::with_capacity(3);
+        if !right.is_empty() {
+            spans.push(Span::raw(right));
+        }
+        if !bars.is_empty() {
+            if !spans.is_empty() {
+                spans.push(Span::raw(" "));
+            }
+            spans.extend(bars);
+        }
         frame.render_widget(
-            Paragraph::new(right)
+            Paragraph::new(Line::from(spans))
                 .alignment(Alignment::Right)
                 .style(Style::default().fg(muted())),
-            columns[1],
+            inner,
         );
     }
 }
@@ -51,6 +62,34 @@ fn permission_badge(mode: ToolsMode) -> (&'static str, Style) {
             Style::default().fg(error()).add_modifier(Modifier::BOLD),
         ),
     }
+}
+
+/// Four ascending bars, the way a signal meter reads: the faster the last
+/// reply came back, the more of them light up. No sample yet, or a zero
+/// timing, draws nothing, so the header never shows a meter it cannot back.
+fn signal_bars(ttft_ms: Option<u64>) -> Vec<Span<'static>> {
+    const BARS: [&str; 4] = ["▁", "▃", "▅", "█"];
+    let Some(ms) = ttft_ms.filter(|ms| *ms > 0) else {
+        return Vec::new();
+    };
+    let (lit, color) = match ms {
+        0..=400 => (4, added()),
+        401..=900 => (3, warning()),
+        901..=2_000 => (2, error()),
+        _ => (1, blend(error(), dim(), 60)),
+    };
+    let mut spans = Vec::with_capacity(BARS.len() * 2);
+    for (index, bar) in BARS.iter().enumerate() {
+        if index > 0 {
+            // A cell of air between bars, the way a signal meter draws it.
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            *bar,
+            Style::default().fg(if index < lit { color } else { dim() }),
+        ));
+    }
+    spans
 }
 
 /// The header's right side: provider, model and spend.
@@ -83,37 +122,48 @@ fn context_label(context: u64, window: u64) -> String {
     if context == 0 {
         return String::new();
     }
-    format!("ctx {}/{}", format_tokens(context), format_tokens(window))
+    format!("ctx {}/{}", format_context(context), format_context(window))
 }
 
-pub(super) fn draw_separator(frame: &mut Frame, area: Rect) {
+pub(super) fn draw_separator(frame: &mut Frame, area: Rect, step: usize) {
     let inner = padded(area, 2);
     if inner.width == 0 {
         return;
     }
-    // The divider fades from the secondary accent into dim across its width,
-    // so the composer edge reads as one soft band instead of a hard rule.
+    // The rule above the composer: a glow head travels across it every couple
+    // of seconds and the cells near the head lean toward the accent, while a
+    // scatter of dashes reshuffles each frame so the line never reads as a
+    // static border.
     let (accent2, dim) = {
         let theme = crate::theme::current();
         (theme.accent2, theme.dim)
     };
-    let left = blend(accent2, dim, 0);
-    let mid = blend(accent2, dim, 50);
-    let right = dim;
-    let width = usize::from(inner.width);
-    let mut spans = Vec::with_capacity(3);
-    let third = width / 3;
-    for (index, (color, count)) in [(left, third), (mid, third), (right, width - 2 * third)]
-        .into_iter()
-        .enumerate()
-    {
-        if index == 2 && count == 0 {
-            // A narrow terminal splits into thirds with nothing left over.
-            continue;
-        }
-        spans.push(Span::styled("─".repeat(count), Style::default().fg(color)));
+    let width = usize::from(inner.width).max(1);
+    let head = (step / 2) % width;
+    let mut spans = Vec::with_capacity(width);
+    for column in 0..width {
+        // Circular distance, so the glow wraps instead of pooling at an edge.
+        let distance = column.abs_diff(head).min(width - column.abs_diff(head));
+        let glow = 100usize.saturating_sub(distance * 100 / 10);
+        let glyph = if scramble(step as u64 * 7 + column as u64) % 19 == 0 {
+            "┄"
+        } else {
+            "─"
+        };
+        spans.push(Span::styled(
+            glyph,
+            Style::default().fg(blend(dim, accent2, glow)),
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+}
+
+/// A cheap deterministic-scramble: same seed, same number, different seed,
+/// scattered. No rng dependency for a decorative shimmer.
+fn scramble(seed: u64) -> u64 {
+    let mut value = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    value ^= value >> 33;
+    value.wrapping_mul(0xff51_afd7_ed55_8ccd) >> 32
 }
 
 /// The color `blend%` of the way from `from` to `to`, per channel.
@@ -131,6 +181,57 @@ pub(super) fn blend(from: Color, to: Color, blend: usize) -> Color {
     Color::Rgb(mix(fr, tr), mix(fg, tg), mix(fb, tb))
 }
 
+/// The composer's rounded frame: a top edge fading from the secondary accent
+/// into dim, a bottom edge fading the other way, and side rails at the
+/// midpoint. The input reads as its own card instead of a strip cut off by a
+/// rule, and the fade keeps the corners from shouting.
+fn draw_composer_box(frame: &mut Frame, area: Rect) {
+    if area.width < 6 || area.height < 3 {
+        return;
+    }
+    let (accent, dim) = {
+        let theme = crate::theme::current();
+        (theme.accent2, theme.dim)
+    };
+    let width = usize::from(area.width);
+    let span_w = width - 2;
+    let third = span_w / 3;
+    // One edge, in three faded runs: the same thirds the separator band uses.
+    let mut edge = |corners: (&'static str, &'static str), (from, to): (Color, Color), row: u16| {
+        let mut spans = vec![Span::styled(corners.0, Style::default().fg(from))];
+        for (step, count) in [third, third, span_w - 2 * third].into_iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+            spans.push(Span::styled(
+                "─".repeat(count),
+                Style::default().fg(blend(from, to, step * 50)),
+            ));
+        }
+        spans.push(Span::styled(corners.1, Style::default().fg(to)));
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect {
+                y: row,
+                height: 1,
+                ..area
+            },
+        );
+    };
+    edge(("╭", "╮"), (accent, dim), area.y);
+    edge(
+        ("╰", "╯"),
+        (dim, accent),
+        area.y.saturating_add(area.height - 1),
+    );
+    let rail = Style::default().fg(blend(accent, dim, 50));
+    let buffer = frame.buffer_mut();
+    for row in area.y.saturating_add(1)..area.y.saturating_add(area.height - 1) {
+        buffer.set_string(area.x, row, "│", rail);
+        buffer.set_string(area.x + area.width - 1, row, "│", rail);
+    }
+}
+
 pub(super) fn composer_height(app: &App, width: u16, height: u16) -> u16 {
     let content_width = width.saturating_sub(6).max(1);
     let lines = wrapped_line_count(&app.input.with_cursor(), content_width);
@@ -140,7 +241,14 @@ pub(super) fn composer_height(app: &App, width: u16, height: u16) -> u16 {
 }
 
 pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
-    let inner = padded(area, 2);
+    // The bordered card owns the outer rows and columns; the prompt sits inside
+    // it, still two columns in from the edge.
+    draw_composer_box(frame, area);
+    let inner = Rect {
+        y: area.y.saturating_add(1),
+        height: area.height.saturating_sub(2),
+        ..padded(area, 2)
+    };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
@@ -197,18 +305,35 @@ pub(super) fn draw_composer(frame: &mut Frame, app: &mut App, area: Rect) {
         app.input_scroll = before.saturating_add(1).saturating_sub(height);
     }
     frame.render_widget(
-        Paragraph::new(render_composer_text(&app.input))
-            .wrap(Wrap { trim: false })
-            .scroll((app.input_scroll.min(u16::MAX as usize) as u16, 0)),
+        Paragraph::new(render_composer_text(
+            &app.input,
+            typing_caret(app.spinner, app.typing_tick()),
+        ))
+        .wrap(Wrap { trim: false })
+        .scroll((app.input_scroll.min(u16::MAX as usize) as u16, 0)),
         target,
     );
 }
 
-fn render_composer_text(input: &Input) -> Text<'static> {
+/// The composer caret: a steady bar at rest, and a bright bar that throbs and
+/// shifts width for a few ticks after each keystroke, so typing reads as
+/// motion without the whole composer repainting.
+fn typing_caret(step: usize, elapsed: Option<usize>) -> Span<'static> {
+    let accent = crate::theme::current().accent2;
+    let Some(elapsed) = elapsed else {
+        return Span::styled("▌", Style::default().fg(accent));
+    };
+    let full = crate::app::App::TYPING_TICKS;
+    let glow = (full - elapsed) * 100 / full;
+    let color = blend(accent, crate::theme::current().text, glow);
+    let glyph = if step % 2 == 0 { "▌" } else { "▍" };
+    Span::styled(glyph, Style::default().fg(color))
+}
+
+fn render_composer_text(input: &Input, caret: Span<'static>) -> Text<'static> {
     let sel = input.selection();
     let sel_style = Style::default().add_modifier(Modifier::REVERSED);
     let norm_style = Style::default().fg(text());
-    let cursor_style = Style::default().fg(crate::theme::current().accent2);
     let style_at = |start: usize| match &sel {
         Some(range) if start >= range.start && start < range.end => sel_style,
         _ => norm_style,
@@ -262,7 +387,7 @@ fn render_composer_text(input: &Input) -> Text<'static> {
             Seg::Run(start, end, style) => {
                 spans.push(Span::styled(input.value[start..end].to_owned(), style));
             }
-            Seg::Cursor => spans.push(Span::styled("▌", cursor_style)),
+            Seg::Cursor => spans.push(caret.clone()),
             Seg::Break => lines.push(Line::from(std::mem::take(&mut spans))),
         }
     }
@@ -398,7 +523,7 @@ pub(super) fn draw_tab_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let markers: Vec<String> = (0..tab_count)
         .map(|index| {
             if app.tab_streaming(index) {
-                format!("{} ", spinner(app.spinner))
+                format!("{LIVE_DOT} ")
             } else if app.tab_busy(index) {
                 "! ".to_owned()
             } else {
@@ -474,6 +599,10 @@ pub(super) fn draw_tab_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         if !markers[index].is_empty() {
             let marker_style = if app.tab_busy(index) && !app.tab_streaming(index) {
                 Style::default().fg(warning()).add_modifier(Modifier::BOLD)
+            } else if app.tab_streaming(index) {
+                // A streaming tab breathes instead of spinning: the tab row
+                // never reflows while requests run in the background.
+                breathe(app.spinner, dim(), accent())
             } else {
                 Style::default().fg(accent())
             };
@@ -597,57 +726,57 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), columns[1]);
 
-    let (text, color) = if app.approval.is_some() {
-        (
-            "approval needed · enter run · a always allow · shift+tab yolo · esc deny · v diff"
-                .to_owned(),
-            accent(),
-        )
+    // The live row animates by light, not by a spinning glyph: the status
+    // word is swept and the dot beside it breathes, so nothing on this row
+    // reflows while a turn runs.
+    let step = app.spinner;
+    let mut live: Vec<Span<'static>> = Vec::new();
+    if app.approval.is_some() {
+        live.push(Span::styled(
+            "approval needed · enter run · a always allow · shift+tab yolo · esc deny · v diff",
+            Style::default().fg(accent()),
+        ));
     } else if let Some(retry) = &app.retry {
-        // A retry in flight: the wait is shown so a slow provider does not
-        // look like a hang.
-        (
+        // A retry in flight: the wait counts down on the ticker, so a slow
+        // provider neither looks like a hang nor a frozen number.
+        live.extend(live_label("retrying", step, error(), warning()));
+        live.push(Span::styled(
             format!(
-                "retrying in {}s · attempt {} · {}",
-                retry.delay_secs, retry.attempt, retry.reason
+                " in {}s · attempt {} · {}",
+                retry.remaining_secs(),
+                retry.attempt,
+                retry.reason
             ),
-            error(),
-        )
+            Style::default().fg(error()),
+        ));
     } else if let Some(running) = &app.running_tool {
         let elapsed = app.running_tool_elapsed().unwrap_or_default();
-        (
-            format!(
-                "{} running {} · {elapsed:.1}s",
-                spinner(app.spinner),
-                running.call.function.name
-            ),
-            accent2(),
-        )
+        live.extend(live_label("running", step, accent2(), accent()));
+        live.push(Span::styled(
+            format!(" {} · {elapsed:.1}s", running.call.function.name),
+            Style::default().fg(accent2()),
+        ));
     } else if let Some(elapsed) = app.elapsed_seconds() {
         // Compaction is a request of its own: say so instead of "thinking".
         if app.compaction_active() {
-            (
-                format!(
-                    "{} compacting context · {elapsed:.1}s · esc stop",
-                    spinner(app.spinner)
-                ),
-                warning(),
-            )
+            live.extend(live_label("compacting context", step, warning(), accent2()));
+            live.push(Span::styled(
+                format!(" · {elapsed:.1}s · esc stop"),
+                Style::default().fg(warning()),
+            ));
         } else if let Some(notice) = &app.notice {
             // A command typed mid-turn confirms itself here: the "thinking"
             // line would otherwise bury its notice for as long as the stream
             // runs, and the notice expires unseen.
-            (
-                format!(
-                    "{} {} · {elapsed:.1}s · esc stop",
-                    spinner(app.spinner),
-                    notice.message
-                ),
-                match notice.kind {
-                    NoticeKind::Info => muted(),
-                    NoticeKind::Error => error(),
-                },
-            )
+            let color = match notice.kind {
+                NoticeKind::Info => muted(),
+                NoticeKind::Error => error(),
+            };
+            live.push(Span::styled(LIVE_DOT, breathe(step, dim(), color)));
+            live.push(Span::styled(
+                format!(" {} · {elapsed:.1}s · esc stop", notice.message),
+                Style::default().fg(color),
+            ));
         } else {
             let progress = match app.stream_tool_progress() {
                 Some((name, detail, bytes)) => {
@@ -658,56 +787,87 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &mut App, area: Rect) {
                         format!("{name} {detail} · {size}")
                     }
                 }
-                None => "thinking".to_owned(),
+                None => String::new(),
             };
-            let mut text = format!("{} {progress} · {elapsed:.1}s", spinner(app.spinner));
+            if progress.is_empty() {
+                live.extend(live_label("thinking", step, muted(), accent2()));
+            } else {
+                live.push(Span::styled(LIVE_DOT, breathe(step, dim(), accent())));
+                live.extend(shimmer(&progress, step, accent2(), text_idle()));
+            }
+            let mut tail = format!(" · {elapsed:.1}s");
             if let Some((_, out_tokens)) = app.stream_tokens() {
                 if out_tokens > 0 {
                     // The footer's ↑↓ arrows already carry the token counts;
                     // this row only adds the pace they arrive at.
                     let rate = out_tokens as f64 / elapsed.max(0.2);
-                    text.push_str(&format!(" · {rate:.0} t/s"));
+                    tail.push_str(&format!(" · {rate:.0} t/s"));
                 }
             }
-            text.push_str(" · esc stop");
-            (text, accent2())
+            tail.push_str(" · esc stop");
+            live.push(Span::styled(tail, Style::default().fg(accent2())));
         }
     } else if app.fetching_models {
-        (
-            format!("{} fetching models · esc stop", spinner(app.spinner)),
-            accent(),
-        )
+        live.extend(live_label("fetching models", step, muted(), accent()));
+        live.push(Span::styled(" · esc stop", Style::default().fg(accent())));
     } else if app.generating_image {
         // An image model takes a minute: say what is being waited on instead
         // of sitting on an idle row. There is no interrupt to offer: the
         // request is a detached task that ends when the endpoint answers.
-        (
-            format!("{} generating image", spinner(app.spinner)),
-            accent(),
-        )
+        live.extend(live_label("generating image", step, muted(), accent()));
     } else if let Some(notice) = &app.notice {
-        (
+        live.push(Span::styled(
             notice.message.clone(),
-            match notice.kind {
+            Style::default().fg(match notice.kind {
                 NoticeKind::Info => muted(),
                 NoticeKind::Error => error(),
-            },
-        )
-    } else {
-        // The idle row stays quiet: the mode dot and the permission badge
-        // already sit in the header and the footer, and the shortcut hints
-        // live in F1 help. A notice or an in-flight turn still speaks here.
-        (String::new(), muted())
-    };
-    frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(color)),
-        columns[0],
-    );
+            }),
+        ));
+    }
+    // An idle row stays empty: the mode dot and the permission badge already
+    // sit in the header and the footer, and the shortcut hints live in F1
+    // help. A notice or an in-flight turn still speaks here.
+    frame.render_widget(Paragraph::new(Line::from(live)), columns[0]);
+}
+
+/// The color a swept status word peaks at: plain text where the theme has an
+/// RGB one, the secondary accent for the themes that leave `text` to the
+/// terminal, so the sweep always has two RGB ends to blend between.
+fn text_idle() -> Color {
+    match crate::theme::current().text {
+        Color::Reset => accent2(),
+        text => text,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{context_label, header_right, token_label};
+    use ratatui::style::Color;
+    use ratatui::text::Span;
+
+    /// The composer caret animates only while a keystroke is fresh: a glowing
+    /// narrower bar that settles back into the steady caret.
+    #[test]
+    fn the_composer_caret_throbs_after_a_keystroke() {
+        let rest = super::typing_caret(0, None);
+        assert_eq!(rest.content, "▌");
+
+        let live = super::typing_caret(0, Some(0));
+        assert_eq!(live.content, "▌");
+        assert_ne!(live.style.fg, Some(crate::theme::current().accent2));
+
+        // Alternate ticks swap the glyph, so the caret pulses in width too.
+        assert_eq!(super::typing_caret(1, Some(1)).content, "▍");
+
+        let mut app = crate::app::test_app();
+        app.typing_pulse = Some(app.spinner);
+        assert_eq!(app.typing_tick(), Some(0));
+        for _ in 0..crate::app::App::TYPING_TICKS {
+            app.spinner = app.spinner.wrapping_add(1);
+        }
+        assert_eq!(app.typing_tick(), None, "the caret never settles");
+    }
 
     #[test]
     fn the_token_label_names_both_directions() {
@@ -731,8 +891,44 @@ mod tests {
     }
 
     #[test]
+    fn the_signal_bars_track_the_first_token_wait() {
+        assert!(super::signal_bars(None).is_empty());
+        // A zero timing means nothing was timed, not a perfect connection.
+        assert!(super::signal_bars(Some(0)).is_empty());
+
+        // The meter reads left to right, shortest bar first: the number of
+        // lit bars is what carries the speed.
+        let bars = |ms| super::signal_bars(Some(ms));
+        let lit = |spans: &[Span<'_>], color: Color| {
+            spans
+                .iter()
+                .filter(|span| span.style.fg == Some(color))
+                .count()
+        };
+        let text = |spans: &[Span<'_>]| {
+            spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(text(&bars(120)), "▁ ▃ ▅ █");
+        assert_eq!(lit(&bars(120), crate::ui::added()), 4);
+        assert_eq!(lit(&bars(700), crate::ui::warning()), 3);
+        assert_eq!(lit(&bars(1_500), crate::ui::error()), 2);
+        assert_eq!(lit(&bars(9_000), crate::ui::dim()), 3);
+        // The worst level is a darker red, still short of the plain error red.
+        assert!(
+            bars(9_000)
+                .iter()
+                .all(|span| span.style.fg != Some(crate::ui::error()))
+        );
+    }
+
+    #[test]
     fn the_footer_names_the_context_load_and_its_window() {
-        assert_eq!(context_label(12_800, 128_000), "ctx 12.8k/128.0k");
+        assert_eq!(context_label(12_800, 128_000), "ctx 12.8K/128K");
+        // A million-token window reads as `1M`, not five digits.
+        assert_eq!(context_label(383_000, 1_000_000), "ctx 383K/1M");
         // An empty transcript shows no context row at all.
         assert_eq!(context_label(0, 128_000), "");
         // A malformed window of 0 still renders instead of panicking.
@@ -861,6 +1057,37 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    /// The composer card: rounded corners on the outer rows, side rails, and
+    /// the prompt still drawn inside the frame.
+    #[test]
+    fn the_composer_sits_in_a_bordered_card() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.input.set("hello");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let rows = (0..24)
+            .map(|row| screen_row(&terminal, row))
+            .collect::<Vec<_>>();
+        let card = rows
+            .iter()
+            .position(|row| row.starts_with("╭") && row.ends_with("╮"))
+            .unwrap_or_else(|| panic!("no card top: {rows:#?}"));
+        assert!(rows[card + 1].contains("hello"), "{}", rows[card + 1]);
+        assert!(rows[card + 1].starts_with('│') && rows[card + 1].ends_with('│'));
+        assert!(
+            rows[card + 2].starts_with("╰") && rows[card + 2].ends_with("╯"),
+            "{}",
+            rows[card + 2]
+        );
+        // The click map covers the framed text rows, not the border rows.
+        let area = app.composer_area.expect("composer area");
+        assert_eq!(u16::from(area.y), card as u16 + 1);
     }
 
     #[test]

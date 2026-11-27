@@ -46,6 +46,7 @@ mod turn;
 #[cfg(test)]
 mod orchestration_tests;
 
+pub use action::TextSelection;
 pub(crate) use action::{Action, ChangeReport, Notice, NoticeKind, RetryNotice, ToolEvent};
 pub(crate) use commands::{
     COMMANDS, EFFORT_CHOICES, SET_KEYS, Suggestion, argument_suggestions, matching_commands,
@@ -66,7 +67,9 @@ use format::estimated_output_tokens;
 pub(crate) use connect::state::{
     AddProviderField, ConnectStage, ConnectState, ListRow, list_row_of,
 };
-pub use format::{format_bytes, format_cost, format_duration_ms, format_tokens};
+pub use format::{
+    format_bytes, format_context, format_cost, format_duration_ms, format_rtt, format_tokens,
+};
 pub use mode::{Mode, ToolsMode};
 
 /// The screenshot a tool result points at, for the model to see.
@@ -102,6 +105,9 @@ const MAX_AUTO_CONTINUES: u32 = 3;
 struct ActiveRequest {
     id: u64,
     started: Instant,
+    /// Send to first token, stamped once per request. `None` while the
+    /// provider has said nothing yet.
+    ttft_ms: Option<u64>,
     prompt_tokens: u64,
     usage: Option<(u64, u64)>,
     tool_progress: Option<(String, String, u64)>,
@@ -243,6 +249,9 @@ pub(crate) struct ToolFrameKey {
     pub report_files: usize,
     pub image_rows: usize,
     pub diff_sides: bool,
+    /// Whether this result closes its group: the last one hangs on `╰`, an
+    /// earlier one keeps the rail running toward the result below it.
+    pub last: bool,
 }
 
 /// A framed tool result, shared by every frame it is drawn in. `clicks` are
@@ -352,6 +361,8 @@ pub struct App {
     pub spinner: usize,
     /// Submitted turn body: the composer prompt flashes for a few ticks.
     pub send_pulse: Option<usize>,
+    /// Keystroke that armed the composer caret animation, if it is still live.
+    pub typing_pulse: Option<usize>,
     pub tools_mode: ToolsMode,
     /// What the current turn is for: applying changes, planning, or chat.
     pub mode: Mode,
@@ -431,6 +442,17 @@ pub struct App {
     pub progress_row: Option<u16>,
     /// Composer target area for mouse click and drag selection.
     pub composer_area: Option<ratatui::layout::Rect>,
+    /// The transcript's on-screen area, refilled each draw: a click or drag
+    /// here selects conversation text instead of toggling a tool result.
+    pub transcript_area: Option<ratatui::layout::Rect>,
+    /// The transcript selection: the first and last cell of the drag, in
+    /// transcript rows and screen columns. Text between them is highlighted,
+    /// and releasing the button copies it.
+    pub text_selection: Option<TextSelection>,
+    /// The text the last drawn selection covered, rebuilt every frame from
+    /// the cells actually on screen. A mouse release copies this, so what
+    /// lands on the clipboard is what the user saw highlighted.
+    pub selection_text: Option<String>,
     /// Unified or side-by-side diff view, kept across approvals and results.
     pub diff_sides: bool,
     active: Option<ActiveRequest>,
@@ -537,6 +559,7 @@ impl App {
             focused: true,
             spinner: 0,
             send_pulse: None,
+            typing_pulse: None,
             tools_mode: ToolsMode::default(),
             mode: Mode::default(),
             auto_compact,
@@ -572,6 +595,9 @@ impl App {
             progress_area: None,
             progress_row: None,
             composer_area: None,
+            transcript_area: None,
+            text_selection: None,
+            selection_text: None,
             diff_sides: true,
             context_cache: (None, 0),
             active: None,
@@ -617,6 +643,13 @@ impl App {
 
     pub fn connect_state(&self) -> Option<&ConnectState> {
         self.connect.as_ref()
+    }
+
+    /// Mutable access to the open dialog, for the test scenes that render it
+    /// at a chosen stage.
+    #[cfg(test)]
+    pub(crate) fn connect_state_mut(&mut self) -> Option<&mut ConnectState> {
+        self.connect.as_mut()
     }
 
     /// Whether any subagent run is still streaming, so the event loop keeps
@@ -807,6 +840,16 @@ impl App {
         }
     }
 
+    /// Ticks the composer caret keeps animating after a keystroke.
+    pub(crate) const TYPING_TICKS: usize = 8;
+
+    /// How many ticks ago the last keystroke armed the caret animation, while
+    /// that animation still has frames left to draw.
+    pub(crate) fn typing_tick(&self) -> Option<usize> {
+        let elapsed = self.spinner.wrapping_sub(self.typing_pulse?);
+        (elapsed < Self::TYPING_TICKS).then_some(elapsed)
+    }
+
     /// Whether the 100ms ticker should redraw this frame: only when something
     /// visible animates or a timer has to run. A queued tool or a background
     /// `/run` command draws nothing animated, so they no longer keep the
@@ -815,6 +858,14 @@ impl App {
     pub(crate) fn ticker_wanted(&self) -> bool {
         self.any_streaming()
             || self.connect_open()
+            // An open list animates its selection: the glow and the sliding
+            // band need frames, or the selection sits still.
+            || self.settings_open
+            || self.model_picker.is_some()
+            || self.session_picker.is_some()
+            || self.revert_picker.is_some()
+            || self.agents_picker.is_some()
+            || (!self.palette_hidden && !self.palette_matches().is_empty())
             || self.approval.is_some()
             || self.running_tool.is_some()
             || self.any_subagent_running()
@@ -830,6 +881,8 @@ impl App {
             || self
                 .send_pulse
                 .is_some_and(|mark| self.spinner.wrapping_sub(mark) < 5)
+            // A keystroke throbs the composer caret for a moment.
+            || self.typing_tick().is_some()
             // The model fetch spinner animates while it waits.
             || self.fetching_models
             || self.generating_image
@@ -838,6 +891,9 @@ impl App {
             || crate::theme::auto_redraw_due()
             // Rain and snow fall: the ticker slides them every frame.
             || crate::weather::current().wet()
+            // A forecast request is in flight: the frame that lands with the
+            // answer still has to be drawn, without waiting for the minute.
+            || crate::weather::fetching()
     }
 
     /// Record whether the terminal has focus.
@@ -847,6 +903,11 @@ impl App {
     /// retry notice stays: the retry runs in the background, and dropping its
     /// footer text makes a waiting request look like a silent hang.
     pub fn set_focused(&mut self, focused: bool) {
+        // Coming back to the terminal is when the sky on screen is most likely
+        // stale: ask the forecast again instead of waiting out its poll.
+        if focused && !self.focused {
+            crate::weather::refresh();
+        }
         self.focused = focused;
     }
 }

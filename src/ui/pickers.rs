@@ -19,8 +19,7 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
 
     let prov_label = picker.provider_filter.as_deref().unwrap_or("All");
     let fetch_status = if app.fetching_models {
-        let glyph = spinner(app.spinner);
-        format!(" {glyph} fetching ")
+        format!(" {LIVE_DOT} fetching ")
     } else {
         String::new()
     };
@@ -114,7 +113,7 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
             model.name.clone()
         };
         let title_style = if chosen {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+            selection(accent(), app.spinner)
         } else {
             Style::default().fg(text())
         };
@@ -147,6 +146,9 @@ pub(super) fn draw_model_picker(frame: &mut Frame, app: &App, picker: &ListPicke
             Span::styled(provider_tag, Style::default().fg(muted())),
         ]);
         frame.render_widget(Paragraph::new(line), row);
+        if chosen {
+            highlight(frame, row, app.spinner);
+        }
     }
 }
 
@@ -215,7 +217,7 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
         let left_width = inner.width.saturating_sub(right_width as u16 + 4) as usize;
         let title = entry.title.clone();
         let title_style = if chosen {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+            selection(accent(), app.spinner)
         } else {
             Style::default().fg(text())
         };
@@ -225,6 +227,9 @@ pub(super) fn draw_session_picker(frame: &mut Frame, app: &App, picker: &ListPic
             Span::styled(fit_to(&right, right_width), Style::default().fg(muted())),
         ]);
         frame.render_widget(Paragraph::new(line), row);
+        if chosen {
+            highlight(frame, row, app.spinner);
+        }
     }
 }
 
@@ -278,7 +283,7 @@ pub(super) fn draw_revert_picker(frame: &mut Frame, app: &App, picker: &ListPick
         let chosen = start + offset == selected;
         let marker = if chosen { "› " } else { "  " };
         let title_style = if chosen {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+            selection(accent(), app.spinner)
         } else {
             Style::default().fg(text())
         };
@@ -288,6 +293,9 @@ pub(super) fn draw_revert_picker(frame: &mut Frame, app: &App, picker: &ListPick
             Span::styled(fit_to(excerpt, left_width), title_style),
         ]);
         frame.render_widget(Paragraph::new(line), row);
+        if chosen {
+            highlight(frame, row, app.spinner);
+        }
     }
 }
 
@@ -353,7 +361,7 @@ pub(super) fn draw_palette(frame: &mut Frame, app: &App, palette: &[Suggestion],
         let marker = if chosen { "› " } else { "  " };
         let name = command.label.as_str();
         let name_style = if chosen {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+            selection(accent(), app.spinner)
         } else {
             Style::default().fg(text())
         };
@@ -373,5 +381,8 @@ pub(super) fn draw_palette(frame: &mut Frame, app: &App, palette: &[Suggestion],
             ),
         ]);
         frame.render_widget(Paragraph::new(line), row);
+        if chosen {
+            highlight(frame, row, app.spinner);
+        }
     }
 }

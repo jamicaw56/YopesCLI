@@ -413,6 +413,72 @@ impl App {
                 }
             }
         }
+        // Text selection over the transcript. A tool result still opens on a
+        // plain click, but a click that starts a drag selects text instead:
+        // the two gestures are told apart by what the pointer does next, so
+        // the click is held back until the button comes up.
+        if let Some(area) = self.transcript_area {
+            let inside = mouse.column >= area.x
+                && mouse.column < area.x.saturating_add(area.width)
+                && mouse.row >= area.y
+                && mouse.row < area.y.saturating_add(area.height);
+            let cell = |row: u16, column: u16| {
+                (
+                    self.scroll + usize::from(row.saturating_sub(area.y)),
+                    column.saturating_sub(area.x),
+                )
+            };
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) if inside => {
+                    self.text_selection = Some(crate::app::TextSelection {
+                        anchor: cell(mouse.row, mouse.column),
+                        head: cell(mouse.row, mouse.column),
+                    });
+                    return Action::None;
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some(selection) = self.text_selection.as_mut() {
+                        // A drag past the edge keeps selecting: the row is
+                        // clamped to the transcript instead of the drag dying.
+                        let row = mouse
+                            .row
+                            .clamp(area.y, area.y.saturating_add(area.height.saturating_sub(1)));
+                        let column = mouse
+                            .column
+                            .clamp(area.x, area.x.saturating_add(area.width.saturating_sub(1)));
+                        selection.head = cell(row, column);
+                    }
+                    return Action::None;
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    let selected = self.text_selection.take();
+                    if let Some(selection) = selected {
+                        // A press and release on one cell is a click, not a
+                        // selection: it keeps its old meaning below.
+                        if selection.anchor == selection.head {
+                            if inside && self.progress_row != Some(mouse.row) {
+                                self.toggle_output_at(mouse.row);
+                            }
+                        }
+                    }
+                    // The highlight is redrawn on the next frame, so the text
+                    // is taken from the copy the last frame built: whatever
+                    // was painted is what lands on the clipboard.
+                    if let Some(text) = self.selection_text.take() {
+                        let dragged = selected.is_some_and(|s| s.anchor != s.head);
+                        if dragged && !text.trim().is_empty() {
+                            self.info(format!(
+                                "Copied {} characters to clipboard",
+                                text.chars().count()
+                            ));
+                            return Action::CopyClipboard(text);
+                        }
+                    }
+                    return Action::None;
+                }
+                _ => {}
+            }
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll_up(3),
             MouseEventKind::ScrollDown => self.scroll_down(3),
@@ -449,6 +515,18 @@ impl App {
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Action {
         if key.kind == KeyEventKind::Release {
             return Action::None;
+        }
+        // Any editing key arms the composer caret animation; it settles on its
+        // own after a few ticks. Modifier chords are commands, not typing.
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(
+                key.code,
+                KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Enter
+            )
+        {
+            self.typing_pulse = Some(self.spinner);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('q' | 'Q'))
@@ -1084,7 +1162,7 @@ impl App {
     /// A message queued while subagents still ran: it joins the conversation
     /// here, so the continuation sends it together with their results. True
     /// when a queued message was flushed.
-    fn flush_queued_message(&mut self) -> bool {
+    pub(crate) fn flush_queued_message(&mut self) -> bool {
         let Some(value) = self.queued_message.take() else {
             return false;
         };

@@ -239,6 +239,12 @@ impl Backend {
         self.model = model;
     }
 
+    /// Replace the live key, e.g. right after the user edited the endpoint's
+    /// key in the connect dialog.
+    pub fn set_api_key(&mut self, api_key: Option<String>) {
+        self.api_key = api_key;
+    }
+
     /// A failover backend: the same connection pointed at another model — and
     /// at another provider's endpoint when the failover crosses providers.
     pub fn failover(

@@ -100,6 +100,10 @@ pub struct Usage {
     pub completion_tokens: u64,
     #[serde(default)]
     pub elapsed_ms: u64,
+    /// Request send to first token back: the provider's round trip before it
+    /// generated anything. Zero when nothing was timed.
+    #[serde(default)]
+    pub ttft_ms: u64,
 }
 
 impl Usage {

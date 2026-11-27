@@ -67,6 +67,7 @@ impl App {
                     connect.custom_models_url = saved.models_url.clone().unwrap_or_default();
                     connect.custom_token = saved.token.clone().unwrap_or_default();
                     connect.custom_token_dirty = false;
+                    connect.token_only_save = false;
                     connect.custom_model_id.clear();
                     connect.custom_model_name.clear();
                     // The endpoint keeps its own key, so coming back to it
@@ -85,6 +86,7 @@ impl App {
                     connect.custom_auth = config::AuthKind::Bearer;
                     connect.custom_auth_explicit = false;
                     connect.custom_token_dirty = false;
+                    connect.token_only_save = false;
                     connect.custom_models.clear();
                     connect.custom_models_url.clear();
                     connect.custom_model_id.clear();
@@ -122,6 +124,10 @@ impl App {
                     connect.stage = ConnectStage::CustomToken;
                     connect.selected = 0;
                     connect.error = None;
+                    // A key is opaque: starting the field with the old one on
+                    // screen made typing append to it, and the endpoint then
+                    // rejected the combined string as an invalid key.
+                    connect.custom_token.clear();
                     connect.custom_token_dirty = true;
                     return Action::None;
                 }
@@ -454,6 +460,53 @@ impl App {
         }
     }
 
+    /// Rewrite the key of an endpoint that is already saved.
+    ///
+    /// Only the secret changes: the active model, the model list and the
+    /// endpoint stay as they are, so editing a key can never leave the
+    /// session pointed at an endpoint without a model.
+    pub(crate) fn finish_custom_token_change(&mut self, password: Option<String>) -> Action {
+        let Some(connect) = self.connect.as_ref() else {
+            return Action::None;
+        };
+        let endpoint = connect.custom_endpoint.trim_end_matches('/').to_owned();
+        let token = connect.custom_token.trim().to_owned();
+        let name = connect.custom_name.clone();
+        if endpoint.is_empty() {
+            self.connect_error("Enter the completion endpoint first.");
+            return Action::None;
+        }
+        if token.is_empty() {
+            self.connect_error(format!(
+                "Enter a token for {}.",
+                connect.custom_auth.label()
+            ));
+            return Action::None;
+        }
+        let saved =
+            config::save_endpoint_secret(&self.config_path, &endpoint, &token, password.as_deref());
+        if let Some(connect) = self.connect.as_mut() {
+            connect.token_only_save = false;
+            connect.token_only_save = false;
+            connect.custom_token_dirty = false;
+            connect.stage = ConnectStage::CustomModels;
+            connect.selected = 0;
+            connect.error = None;
+        }
+        // The live key follows when this is the endpoint the session is on.
+        if self.backend.base_url().trim_end_matches('/') == endpoint {
+            self.backend.set_api_key(Some(token));
+        }
+        match saved {
+            Ok(()) => {
+                self.custom_providers = config::load_custom_providers(&self.config_path);
+                self.info(format!("Key updated for {name}"));
+            }
+            Err(error) => self.connect_error(format!("Could not save the key: {error:#}")),
+        }
+        Action::None
+    }
+
     pub(crate) fn finish_custom_connect(&mut self, password: Option<String>) -> Action {
         let plan = {
             let Some(connect) = self.connect.as_ref() else {
@@ -591,6 +644,89 @@ mod tests {
     use crate::app::Session;
     use crate::backend::Backend;
     use crate::config::{AuthKind, Connection, ProviderKind, SavedModel};
+
+    /// Editing a saved endpoint's key replaces it: the field starts empty
+    /// instead of holding the old key, and Enter writes the new one to disk
+    /// without touching the endpoint's models.
+    #[test]
+    fn editing_the_key_replaces_the_stored_one() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let temp = crate::temp::unique_dir("yopes-key-edit-test");
+        let config_path = temp.join("config.json");
+        let base = "https://example.test/v1";
+        let connection = Connection {
+            provider: ProviderKind::Custom,
+            provider_name: "Test".to_owned(),
+            model: "model-a".to_owned(),
+            base_url: base.to_owned(),
+            api_key: Some("sk-old".to_owned()),
+            api_key_env: None,
+            auth: AuthKind::Bearer,
+            models: vec![SavedModel {
+                id: "model-a".to_owned(),
+                name: "Model A".to_owned(),
+                ..SavedModel::default()
+            }],
+            models_url: None,
+            custom_provider_id: None,
+            provider_id: None,
+            reuse_secret: false,
+        };
+        config::save_connection(&config_path, &connection, None).expect("saving the connection");
+        let saved = config::load_custom_providers(&config_path);
+        let id = saved[0].id.clone();
+
+        let mut app = crate::app::turn::tests::test_app();
+        app.config_path = config_path.clone();
+        app.custom_providers = saved.clone();
+        let mut connect = ConnectState::loading();
+        connect.custom_flow = true;
+        connect.custom_provider_id = Some(id);
+        connect.custom_name = "Test".to_owned();
+        connect.custom_endpoint = base.to_owned();
+        connect.custom_auth = AuthKind::Bearer;
+        connect.custom_models = connection.models.clone();
+        connect.custom_token = "sk-old".to_owned();
+        connect.stored_secret = config::load_endpoint_secret(&config_path, base);
+        connect.stage = ConnectStage::CustomModels;
+        connect.selected = connect
+            .items()
+            .iter()
+            .position(|item| item.id == EDIT_TOKEN_ID)
+            .expect("the key row");
+        app.connect = Some(connect);
+
+        app.select_connect_item();
+        let connect = app.connect.as_ref().expect("the dialog stays open");
+        assert_eq!(connect.stage, ConnectStage::CustomToken);
+        assert!(
+            connect.custom_token.is_empty(),
+            "the key field must not carry the old key: {}",
+            connect.custom_token
+        );
+
+        for character in "sk-new".chars() {
+            app.handle_connect_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        app.handle_connect_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.connect.as_ref().map(|connect| connect.stage),
+            Some(ConnectStage::Password),
+            "the new key asks for a passphrase before it is written"
+        );
+        // An empty passphrase stores the key in the clear, as /provider did.
+        app.handle_connect_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let stored = config::load_endpoint_secret(&config_path, base).expect("a stored key");
+        assert_eq!(stored.plaintext(), Some("sk-new"));
+        // The model list is untouched by a key edit.
+        let models = config::load_endpoint_models(&config_path, base);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "model-a");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 
     /// A fetch from a custom provider rewrites the saved model list with what
     /// the `/models` response holds: models the endpoint no longer lists are

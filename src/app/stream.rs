@@ -19,6 +19,15 @@ impl App {
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        // The first token back is the provider answering: stamp the round trip
+        // once, before the recovery sweep can return early.
+        if active.ttft_ms.is_none() {
+            active.ttft_ms = Some(
+                u64::try_from(active.started.elapsed().as_millis())
+                    .unwrap_or(0)
+                    .max(1),
+            );
+        }
         if active.recovered {
             return;
         }
@@ -156,6 +165,7 @@ impl App {
                     attempt,
                     delay_secs,
                     reason,
+                    since: std::time::Instant::now(),
                 });
                 Action::None
             }
@@ -222,15 +232,21 @@ impl App {
                     let (prompt_tokens, completion_tokens) = active
                         .usage
                         .unwrap_or((active.prompt_tokens, estimated_output_tokens(&self.session)));
-                    (prompt_tokens, completion_tokens, elapsed_ms)
+                    (
+                        prompt_tokens,
+                        completion_tokens,
+                        elapsed_ms,
+                        active.ttft_ms.unwrap_or(0),
+                    )
                 });
-                if let Some((prompt_tokens, completion_tokens, elapsed_ms)) = finished {
+                if let Some((prompt_tokens, completion_tokens, elapsed_ms, ttft_ms)) = finished {
                     if let Some(message) = self.session.messages.last_mut() {
                         if message.role == Role::Assistant {
                             message.usage = Some(session::Usage {
                                 prompt_tokens,
                                 completion_tokens,
                                 elapsed_ms,
+                                ttft_ms,
                             });
                         }
                     }

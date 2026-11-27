@@ -524,6 +524,49 @@ pub(crate) fn load_endpoint_secret(path: &Path, base_url: &str) -> Option<Stored
     stored.secret.has_key().then(|| stored.secret.clone())
 }
 
+/// Store a new key for an endpoint, leaving its models and the active
+/// connection untouched.
+///
+/// Used by the key editor: a changed key must reach the disk even when the
+/// dialog is closed without picking a model again.
+pub(crate) fn save_endpoint_secret(
+    path: &Path,
+    endpoint: &str,
+    api_key: &str,
+    password: Option<&str>,
+) -> Result<()> {
+    let endpoint = endpoint.trim_end_matches('/');
+    let secret = match password.filter(|password| !password.is_empty()) {
+        Some(password) => {
+            let sealed = credentials::seal(password, api_key)?;
+            StoredSecret {
+                encrypted: true,
+                salt: Some(sealed.salt),
+                nonce: Some(sealed.nonce),
+                ciphertext: Some(sealed.ciphertext),
+                ..StoredSecret::default()
+            }
+        }
+        None => StoredSecret {
+            api_key: Some(api_key.to_owned()),
+            ..StoredSecret::default()
+        },
+    };
+    update_saved(path, |saved| {
+        if let Some(stored) = saved.provider_keys.get_mut(endpoint) {
+            stored.secret = secret.clone();
+        }
+        for custom in &mut saved.custom_providers {
+            if custom.base_url.trim_end_matches('/') == endpoint {
+                custom.secret = secret.clone();
+            }
+        }
+        if saved.base_url.trim_end_matches('/') == endpoint {
+            saved.secret = secret;
+        }
+    })
+}
+
 /// Models saved for an endpoint, from provider keys or the active connection.
 pub(crate) fn load_endpoint_models(path: &Path, base_url: &str) -> Vec<SavedModel> {
     let endpoint = base_url.trim_end_matches('/');

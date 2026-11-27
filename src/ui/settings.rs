@@ -52,20 +52,23 @@ pub(super) fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         let chosen = index == app.settings_index;
         let line = Rect::new(inner.x, inner.y + offset as u16, inner.width, 1);
         let marker = if chosen { "› " } else { "  " };
+        // The selected row walks the palette: the "cool colors" the high-end
+        // settings popup gets, while the plain lists only glow.
+        let glow = cycling(app.spinner);
         let label_style = if chosen {
             Style::default().fg(text()).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(text())
         };
         let value_style = if chosen {
-            Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+            Style::default().fg(glow).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(muted())
         };
         let arrows = if chosen { "‹ ›" } else { "   " };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(marker, Style::default().fg(accent())),
+                Span::styled(marker, Style::default().fg(glow)),
                 Span::styled(fit_to(row.label, label_width), label_style),
                 Span::styled(" ", Style::default()),
                 Span::styled(
@@ -76,6 +79,9 @@ pub(super) fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
             ])),
             line,
         );
+        if chosen {
+            highlight(frame, line, app.spinner);
+        }
     }
 }
 

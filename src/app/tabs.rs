@@ -55,6 +55,11 @@ pub(crate) struct TabState {
     pub(crate) progress_scroll: Option<usize>,
     pub(crate) progress_row: Option<u16>,
     pub(crate) composer_area: Option<Rect>,
+    pub(crate) transcript_area: Option<Rect>,
+    pub(crate) text_selection: Option<crate::app::TextSelection>,
+    /// The text the last drawn selection covered, so a release copies exactly
+    /// what was highlighted on screen.
+    pub(crate) selection_text: Option<String>,
     pub(crate) diff_sides: bool,
     pub(crate) active: Option<ActiveRequest>,
     pub(crate) pending_tools: VecDeque<ToolCall>,
@@ -121,6 +126,9 @@ impl Default for TabState {
             progress_scroll: None,
             progress_row: None,
             composer_area: None,
+            transcript_area: None,
+            text_selection: None,
+            selection_text: None,
             diff_sides: true,
             active: None,
             pending_tools: VecDeque::new(),
@@ -174,6 +182,9 @@ impl TabState {
             progress_scroll: app.progress_scroll.take(),
             progress_row: app.progress_row.take(),
             composer_area: app.composer_area.take(),
+            transcript_area: app.transcript_area.take(),
+            text_selection: app.text_selection.take(),
+            selection_text: app.selection_text.take(),
             diff_sides: std::mem::take(&mut app.diff_sides),
             active: app.active.take(),
             pending_tools: std::mem::take(&mut app.pending_tools),
@@ -224,6 +235,9 @@ impl TabState {
         app.progress_scroll = self.progress_scroll;
         app.progress_row = self.progress_row;
         app.composer_area = self.composer_area;
+        app.transcript_area = self.transcript_area;
+        app.text_selection = self.text_selection;
+        app.selection_text = self.selection_text;
         app.diff_sides = self.diff_sides;
         app.active = self.active;
         app.pending_tools = self.pending_tools;
@@ -637,6 +651,7 @@ mod tests {
                 prompt_tokens: 0,
                 usage: None,
                 tool_progress: None,
+                ttft_ms: None,
                 recovered: false,
                 compacting: None,
             });

@@ -187,9 +187,18 @@ impl App {
                 if let Some(connect) = self.connect.as_mut() {
                     connect.custom_token = token;
                     connect.custom_token_dirty = true;
-                    connect.stage = ConnectStage::CustomModels;
-                    connect.selected = 0;
                     connect.error = None;
+                    if connect.custom_provider_id.is_some() {
+                        // The endpoint is already on disk: write the edited key
+                        // on its own, so closing the dialog keeps it instead of
+                        // resurrecting the old one.
+                        connect.token_only_save = true;
+                        connect.stage = ConnectStage::Password;
+                        connect.password.clear();
+                    } else {
+                        connect.stage = ConnectStage::CustomModels;
+                        connect.selected = 0;
+                    }
                 }
             }
             ConnectStage::ModelId => {
@@ -405,6 +414,13 @@ impl App {
                     )
                 };
                 if custom_flow {
+                    if self
+                        .connect
+                        .as_ref()
+                        .is_some_and(|connect| connect.token_only_save)
+                    {
+                        return self.finish_custom_token_change(password);
+                    }
                     return self.finish_custom_connect(password);
                 }
                 let _ = password;

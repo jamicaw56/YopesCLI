@@ -140,6 +140,7 @@ fn tool_frame_key(
     message: &Message,
     width: u16,
     call_name: Option<&str>,
+    last: bool,
 ) -> crate::app::ToolFrameKey {
     let call_id = message.tool_call_id.as_deref().unwrap_or_default();
     crate::app::ToolFrameKey {
@@ -159,6 +160,7 @@ fn tool_frame_key(
             .map(|image| app.cached_image(&image.name).map_or(0, <[_]>::len))
             .sum(),
         diff_sides: app.diff_sides,
+        last,
     }
 }
 
@@ -297,17 +299,18 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut rows: Vec<(usize, usize, String)> = Vec::new();
     // Copied out: the summary is owned so the session can stay borrowed.
     let compaction = app.compaction_text().map(str::to_owned);
-    // Call names by tool-call id, built in one forward pass: the per-result
-    // lookup below no longer rescans the session backwards for every tool
-    // message.
-    let mut call_names: std::collections::HashMap<&str, &str> =
+    // Call names and the assistant turn that made them, by tool-call id, built
+    // in one forward pass: the per-result lookup below no longer rescans the
+    // session backwards for every tool message, and a run of results from one
+    // turn can join into a single rail.
+    let mut call_names: std::collections::HashMap<&str, (&str, usize)> =
         std::collections::HashMap::with_capacity(app.session.messages.len());
-    for message in &app.session.messages {
+    for (index, message) in app.session.messages.iter().enumerate() {
         if let Some(calls) = &message.tool_calls {
             for call in calls {
                 call_names
                     .entry(call.id.as_str())
-                    .or_insert(call.function.name.as_str());
+                    .or_insert((call.function.name.as_str(), index));
             }
         }
     }
@@ -322,7 +325,26 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                     .as_deref()
                     .and_then(|id| call_names.get(id).copied())
             })
-            .flatten();
+            .flatten()
+            .map(|(name, _)| name);
+        // The result that follows this one from the same assistant turn: the
+        // rail runs on to it instead of closing here.
+        let followed = app.session.messages.get(index + 1).is_some_and(|next| {
+            message.role == Role::Tool
+                && next.role == Role::Tool
+                && next
+                    .tool_call_id
+                    .as_deref()
+                    .zip(message.tool_call_id.as_deref())
+                    .is_some_and(|(next_id, id)| {
+                        call_names.get(next_id).zip(call_names.get(id)).is_some_and(
+                            |((next_name, next_turn), (_, turn))| {
+                                !is_hidden_tool(next_name) && next_turn == turn
+                            },
+                        )
+                    })
+        });
+        let last = !followed;
         // A hidden tool leaves no trace in the transcript; its effect shows in
         // the Progress panel instead.
         if message.role == Role::Tool && call_name.is_some_and(is_hidden_tool) {
@@ -348,7 +370,17 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             last_speaker = Some(Role::Assistant);
             continue;
         }
-        if !slots.is_empty() {
+        let under_calls = message.role == Role::Tool
+            && index.checked_sub(1).is_some_and(|previous| {
+                let previous = &app.session.messages[previous];
+                previous.tool_calls.as_ref().is_some_and(|calls| {
+                    calls.iter().any(|call| {
+                        !is_hidden_tool(&call.function.name)
+                            && Some(call.id.as_str()) == message.tool_call_id.as_deref()
+                    })
+                })
+            });
+        if !slots.is_empty() && !under_calls {
             slots.push(Slot::Line(Line::raw("")));
         }
         let (label, color) = match message.role {
@@ -362,7 +394,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         if message.role == Role::Tool {
             let start = slots.len();
-            let key = tool_frame_key(app, message, inner.width, call_name);
+            let key = tool_frame_key(app, message, inner.width, call_name, last);
             let frame = match app.tool_frames.get(&index) {
                 Some(frame) if frame.key == key => frame,
                 _ => {
@@ -375,6 +407,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                         &mut frame_rows,
                         0,
                         name.as_deref(),
+                        last,
                     );
                     let counts = line_counts(&framed, inner.width);
                     app.tool_frames.insert(
@@ -448,10 +481,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         if message.content.is_empty() && streaming && !has_calls && message.reasoning.is_empty() {
-            slots.push(Slot::Line(Line::styled(
-                caret(app.spinner),
-                Style::default().fg(accent()),
-            )));
+            slots.push(Slot::Line(thinking_line(app.spinner)));
             continue;
         }
         if !message.content.is_empty() {
@@ -571,7 +601,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
                 if call.function.name == "delegate" {
                     if let Some(agent) = app.subagent_for_call(&call.id) {
                         let (glyph, color) = match agent.status() {
-                            crate::app::SubagentStatus::Running => (spinner(app.spinner), accent()),
+                            crate::app::SubagentStatus::Running => (LIVE_DOT, accent()),
                             crate::app::SubagentStatus::Done => ("✓", muted()),
                             crate::app::SubagentStatus::Failed => ("✗", error()),
                         };
@@ -630,12 +660,12 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         if !slots.is_empty() {
             slots.push(Slot::Line(Line::raw("")));
         }
-        slots.push(Slot::Line(Line::styled(
+        slots.push(Slot::Line(Line::from(live_label(
             "compacting context",
-            // Warning color, so compaction reads apart from the thinking
-            // caret above, which stays in the accent color.
-            Style::default().fg(warning()).add_modifier(Modifier::BOLD),
-        )));
+            app.spinner,
+            warning(),
+            accent2(),
+        ))));
         if summary.trim().is_empty() {
             slots.push(Slot::Line(Line::styled(
                 caret(app.spinner),
@@ -704,6 +734,18 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         inner,
     );
 
+    // Text selection: the terminal cannot select inside an app that captures
+    // the mouse, so the transcript paints its own highlight and copies what
+    // it highlights. The area is published for the mouse handler, and the
+    // text is read back out of the frame buffer — the wrapped cells exactly as
+    // drawn — so a selection can never copy something that is not on screen.
+    app.transcript_area = Some(inner);
+    if let Some(selection) = app.text_selection {
+        app.selection_text = paint_selection(frame, inner, app.scroll, selection);
+    } else {
+        app.selection_text = None;
+    }
+
     // Map tool frames to screen rows so a click can hit one.
     let scroll = app.scroll;
     for (slot, offset, call_id) in rows {
@@ -721,6 +763,73 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         app.output_rows
             .push((inner.y.saturating_add(offset), call_id));
     }
+}
+
+/// Highlight a selection and return its text.
+///
+/// A mouse-captured app has to draw its own selection: the terminal's native
+/// one never sees the mouse. The highlight is painted onto the finished frame
+/// cells, so wrapped lines, tool rails and centred rows all select exactly as
+/// they read, and the copied text is read from those same cells. Trailing
+/// blanks are trimmed per row and rows are joined with newlines, so a copied
+/// message does not come back as a ragged grid of spaces.
+///
+/// `scroll` is the absolute transcript row drawn at the top of `area`.
+fn paint_selection(
+    frame: &mut Frame,
+    area: Rect,
+    scroll: usize,
+    selection: crate::app::TextSelection,
+) -> Option<String> {
+    if area.width == 0 {
+        return None;
+    }
+    let mark = Style::default()
+        .fg(Color::Black)
+        .bg(crate::theme::current().accent)
+        .add_modifier(Modifier::BOLD);
+    let (from, to) = selection.ordered();
+    let mut text = String::new();
+    let mut copied = false;
+    let buffer = frame.buffer_mut();
+    for offset in 0..usize::from(area.height) {
+        let row = scroll + offset;
+        if row < from.0 || row > to.0 {
+            continue;
+        }
+        // A row that is only partly selected starts or ends mid-line; every
+        // row between the ends is selected edge to edge.
+        let start = if row == from.0 { from.1 } else { 0 };
+        let end = if row == to.0 {
+            to.1
+        } else {
+            area.width.saturating_sub(1)
+        };
+        if start > end {
+            continue;
+        }
+        let mut line = String::new();
+        for column in start..=end {
+            let x = area.x.saturating_add(column);
+            let y = area.y.saturating_add(offset as u16);
+            if x >= area.x.saturating_add(area.width) || y >= area.y.saturating_add(area.height) {
+                continue;
+            }
+            let cell = &mut buffer[(x, y)];
+            line.push_str(cell.symbol());
+            cell.set_style(mark);
+        }
+        if copied {
+            text.push('\n');
+        }
+        text.push_str(line.trim_end());
+        copied = true;
+    }
+    // A click without a drag is not a selection to copy: an empty result
+    // leaves the clipboard alone.
+    copied
+        .then_some(text)
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// The window of transcript lines to render, as `(first, hidden, last)`:
@@ -826,6 +935,107 @@ mod tests {
             .collect()
     }
 
+    /// A drag across a reply selects it, and the release copies exactly the
+    /// cells that were highlighted — not a guess at the message text.
+    #[test]
+    fn a_drag_over_the_transcript_copies_what_it_highlighted() {
+        use crate::session::{Message, Role};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "copy me"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "selected answer"));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let area = app
+            .transcript_area
+            .expect("the transcript publishes its area");
+        // Find the screen row the answer landed on, then sweep it.
+        let row = (area.y..area.y + area.height)
+            .find(|row| {
+                (area.x..area.x + area.width).any(|column| {
+                    terminal.backend().buffer()[(column, *row)]
+                        .symbol()
+                        .starts_with('s')
+                })
+            })
+            .expect("the reply is on screen");
+
+        let press = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: area.x,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        assert!(matches!(app.handle_mouse(press), crate::app::Action::None));
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let drag = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            column: area.x + area.width.saturating_sub(1),
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        assert!(matches!(app.handle_mouse(drag), crate::app::Action::None));
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let release = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            column: area.x + area.width.saturating_sub(1),
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        match app.handle_mouse(release) {
+            crate::app::Action::CopyClipboard(text) => {
+                assert_eq!(text.trim(), "selected answer", "copied: {text:?}");
+            }
+            _ => panic!("a completed drag must copy its selection"),
+        }
+        // The selection is spent: the highlight is gone after the copy.
+        assert!(app.text_selection.is_none());
+        assert!(app.selection_text.is_none());
+    }
+
+    /// A press and release on one cell is still a click: it opens a tool
+    /// result instead of copying an empty selection.
+    #[test]
+    fn a_click_without_a_drag_is_not_a_selection() {
+        use crate::session::{Message, Role};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.messages.push(Message::new(Role::User, "hello"));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let area = app.transcript_area.expect("area");
+        let cell = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: area.x + 2,
+            row: area.y + 1,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        app.handle_mouse(cell);
+        let mut release = cell;
+        release.kind = crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left);
+        assert!(matches!(
+            app.handle_mouse(release),
+            crate::app::Action::None
+        ));
+        assert!(app.text_selection.is_none());
+    }
+
     /// A long edit diff folds inside its frame, and a click on any of its rows
     /// expands it in place.
     #[test]
@@ -880,12 +1090,19 @@ mod tests {
             .first()
             .map(|(row, _)| *row)
             .expect("the diff frame registers click rows");
-        app.handle_mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: 4,
-            row,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        });
+        // A click is a press and a release on one cell: the press starts a
+        // possible text selection, and the release decides it was a click.
+        for kind in [
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+        ] {
+            app.handle_mouse(crossterm::event::MouseEvent {
+                kind,
+                column: 4,
+                row,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            });
+        }
         assert!(
             app.expanded.contains("call_edit"),
             "the click did not expand the diff"
@@ -897,6 +1114,61 @@ mod tests {
         assert!(
             opened.contains("click to collapse"),
             "not expanded: {opened}"
+        );
+    }
+
+    /// Two commands in one turn: the outputs share one connector rail that
+    /// reaches from the first result down to the last.
+    #[test]
+    fn two_results_from_one_turn_share_the_connector_rail() {
+        use crate::session::{Message, Role, ToolCall};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session.messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            reasoning: String::new(),
+            tool_calls: Some(vec![
+                ToolCall::new("call_a", "run_command", r#"{"command":"git status"}"#),
+                ToolCall::new("call_b", "run_command", r#"{"command":"git diff"}"#),
+            ]),
+            tool_call_id: None,
+            usage: None,
+            images: Vec::new(),
+            error: None,
+        });
+        for (id, output) in [
+            ("call_a", "clean status\nnothing staged"),
+            ("call_b", "diff line"),
+        ] {
+            app.session.messages.push(Message {
+                role: Role::Tool,
+                content: output.to_owned(),
+                reasoning: String::new(),
+                tool_calls: None,
+                tool_call_id: Some(id.to_owned()),
+                usage: None,
+                images: Vec::new(),
+                error: None,
+            });
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let text = rendered_text(&terminal);
+        assert!(
+            text.contains("├ clean status"),
+            "the first result lost its joint: {text}"
+        );
+        assert!(
+            text.contains("│ nothing staged"),
+            "the rail does not run down: {text}"
+        );
+        assert!(
+            text.contains("╰ diff line"),
+            "the last result does not close the rail: {text}"
         );
     }
 

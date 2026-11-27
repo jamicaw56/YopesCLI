@@ -563,9 +563,10 @@ fn sky_at(hour: f32, weather: Weather) -> Sky {
         stars: (stars * cover.stars).round() as usize,
         weather,
         // Cloud grays the sun instead of deleting it: a sunny-overcast
-        // afternoon still shows the glow, while rain, snow, fog and an
-        // unknown forecast leave it out.
-        sun: matches!(weather, Weather::Clear | Weather::Cloudy)
+        // afternoon still shows the glow, while rain, snow and fog leave it
+        // out. An unknown forecast (no `/set weather` place saved) keeps the
+        // sun too: the plain clock sky is a clear one.
+        sun: matches!(weather, Weather::Clear | Weather::Cloudy | Weather::Unknown)
             .then(|| sun_at(hour))
             .flatten(),
     }
@@ -686,7 +687,9 @@ mod tests {
         assert!(sky_at(12.0, Weather::Cloudy).sun.is_some());
         assert!(sky_at(12.0, Weather::Rain).sun.is_none());
         assert!(sky_at(12.0, Weather::Fog).sun.is_none());
-        assert!(sky_at(12.0, Weather::Unknown).sun.is_none());
+        // No place saved still paints the clock sky's sun: default `auto`
+        // must not spend the whole day without one.
+        assert!(sky_at(12.0, Weather::Unknown).sun.is_some());
         assert!(sky_at(2.0, Weather::Clear).sun.is_none(), "no sun at night");
         let sun = |hour: f32| sky_at(hour, Weather::Clear).sun.expect("day");
         assert!(sun(7.0).x < sun(12.0).x && sun(12.0).x < sun(17.0).x);

@@ -110,6 +110,7 @@ pub(super) fn tool_result_lines(
     rows: &mut Vec<(usize, String)>,
     start_row: usize,
     call_name: Option<&str>,
+    last: bool,
 ) -> Vec<Line<'static>> {
     let outer = usize::from(width).saturating_sub(1).max(1);
     let inner_width = outer.saturating_sub(4);
@@ -149,7 +150,6 @@ pub(super) fn tool_result_lines(
         .as_deref()
         .and_then(|call_id| app.changes.get(call_id));
     let mut body: Vec<Line<'static>> = Vec::new();
-    let mut label: Option<String> = None;
     let mut quiet = false;
     // A read stays quiet: its header and range replace the contents, and
     // clicking the frame still reveals a capped window. The header format
@@ -171,7 +171,6 @@ pub(super) fn tool_result_lines(
                 .collect();
             if headers.len() > 1 {
                 quiet = true;
-                label = Some(format!("{} files", headers.len()));
                 let shown = headers.len().min(MULTI_READ_SUMMARY_FILES);
                 for line in &headers[..shown] {
                     body.push(Line::styled(
@@ -191,9 +190,8 @@ pub(super) fn tool_result_lines(
             }
         }
         if !quiet {
-            if let Some((path, summary)) = read_result_summary(&message.content) {
+            if let Some((_, summary)) = read_result_summary(&message.content) {
                 quiet = true;
-                label = Some(path);
                 for line in summary {
                     body.push(Line::styled(
                         truncate(&line, inner_width),
@@ -332,82 +330,49 @@ pub(super) fn tool_result_lines(
         ));
     }
 
-    let label = truncate(
-        report
-            .and_then(|report| report.diffs.first())
-            .map(|diff| diff.path.clone())
-            .or(label)
-            .unwrap_or_else(|| "tool".to_owned())
-            .as_str(),
-        inner_width,
-    );
-    let framed = frame_lines(label, body, inner_width, border);
+    let framed = tree_lines(body, border, last);
     if clickable {
-        // Rows are traced so a click anywhere on the frame toggles it. The
-        // leading blank line is row 0 of `framed`, so skip it.
-        for offset in 1..framed.len() {
+        // Rows are traced so a click anywhere in the tree toggles it.
+        for offset in 0..framed.len() {
             rows.push((start_row.saturating_add(offset), call_id.clone()));
         }
     }
     framed
 }
 
-/// Wrap body lines in a light frame of exactly `inner_width + 4` columns.
-pub(super) fn frame_lines(
-    label: String,
+/// Hang a tool result off its call row as a tree: the first row opens with the
+/// connector, every later row indents under it. A result that is followed by
+/// another one from the same turn keeps a vertical rail running down to it.
+///
+/// No frame: the call row above already names the tool, so a head label would
+/// repeat it, and a closing rule would box in three rows for nothing.
+pub(super) fn tree_lines(
     body: Vec<Line<'static>>,
-    inner_width: usize,
     border: Color,
+    last: bool,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::with_capacity(body.len() + 3);
-    lines.push(Line::raw(""));
-    // Every row is exactly inner_width + 4 columns, so the frame stays aligned
-    // even when the label is clipped. The label gets what the corners, the left
-    // cap, and one separating space leave over.
-    let total = inner_width + 4;
-    let label = truncate(&normalize_line(&label), total.saturating_sub(6));
-    let head = UnicodeWidthStr::width("╭─ ") + UnicodeWidthStr::width(label.as_str()) + 1;
-    lines.push(Line::from(vec![
-        // The label is what the frame is about (the file, the tool): it is
-        // drawn in muted body color, not in the border's much darker dim, so
-        // a folded result still says what it holds.
-        Span::styled("╭─ ", Style::default().fg(border)),
-        Span::styled(format!("{label} "), Style::default().fg(muted())),
-        Span::styled(
-            "─".repeat(total.saturating_sub(head + 2)),
-            Style::default().fg(border),
-        ),
-        Span::styled("─╮", Style::default().fg(border)),
-    ]));
-    for line in body {
-        let mut used = 0usize;
-        let mut row_spans = vec![Span::styled("│ ", Style::default().fg(border))];
-        for span in &line.spans {
-            let normalized = normalize_line(&span.content);
-            let span_width = UnicodeWidthStr::width(normalized.as_str());
-            if used + span_width <= inner_width {
-                used += span_width;
-                row_spans.push(Span::styled(normalized, span.style));
-            } else {
-                let room = inner_width.saturating_sub(used);
-                if room > 0 {
-                    let clipped = truncate(&normalized, room);
-                    used += UnicodeWidthStr::width(clipped.as_str());
-                    row_spans.push(Span::styled(clipped, span.style));
-                }
-                break;
+    body.into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            // The rail runs from the joints of every result but the last down
+            // to the one below it, so two results read as one tree instead of
+            // two connectors hanging in the same column.
+            let marker = match (index == 0, last) {
+                (true, true) => "  ╰ ",
+                (true, false) => "  ├ ",
+                (false, true) => "    ",
+                (false, false) => "  │ ",
+            };
+            let mut spans = vec![Span::styled(marker, Style::default().fg(border))];
+            for span in line.spans {
+                spans.push(Span::styled(normalize_line(&span.content), span.style));
             }
-        }
-        let padding = inner_width.saturating_sub(used) + 1;
-        row_spans.push(Span::raw(" ".repeat(padding)));
-        row_spans.push(Span::styled("│", Style::default().fg(border)));
-        lines.push(Line::from(row_spans));
-    }
-    lines.push(Line::styled(
-        format!("╰{}╯", "─".repeat(total.saturating_sub(2))),
-        Style::default().fg(border),
-    ));
-    lines
+            // The line's own style survives the rebuild: a hint built with
+            // `Line::styled` would otherwise lose its color and draw in the
+            // terminal default.
+            Line::from(spans).style(line.style)
+        })
+        .collect()
 }
 
 /// The diffs under a tool result: per file, a header then the change, with a

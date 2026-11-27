@@ -62,6 +62,21 @@ mod tests {
         assert_ne!(frame(0), frame(1));
     }
 
+    /// A focus regain raises one flag the poller's wait loop consumes, and
+    /// `stop` clears it so a later poller starts clean.
+    #[test]
+    fn a_focus_regain_asks_for_a_fresh_forecast() {
+        use std::sync::atomic::Ordering;
+        stop();
+        assert!(!fetching());
+        assert!(!REFRESH.swap(false, Ordering::Relaxed));
+        refresh();
+        assert!(REFRESH.swap(false, Ordering::Relaxed));
+        refresh();
+        stop();
+        assert!(!REFRESH.swap(false, Ordering::Relaxed));
+    }
+
     /// Live check against Open-Meteo, off by default so `cargo test` stays
     /// offline: `cargo test live_ -- --ignored`.
     #[test]

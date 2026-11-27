@@ -14,7 +14,7 @@ use crate::{
     app::{
         App, COMMANDS, ChangeReport, ConnectStage, ConnectState, DEFAULT_CONTEXT_WINDOW, Input,
         ListPicker, ListRow, ModelRow, NoticeKind, SETTING_ROWS, Suggestion, ToolApproval,
-        ToolsMode, format_bytes, format_tokens, list_row_of,
+        ToolsMode, format_bytes, format_context, format_rtt, format_tokens, list_row_of,
     },
     diff::{ChangeKind, DiffLine, FileDiff},
     session::{Message, Role, Usage},
@@ -26,15 +26,17 @@ mod approval;
 mod changelog;
 mod composer;
 mod connect;
+mod glow;
 mod help;
 mod markdown;
+mod mockups;
 mod pickers;
 mod settings;
 mod stats;
 mod transcript;
 
 use self::{
-    agents::*, approval::*, changelog::*, composer::*, connect::*, help::*, pickers::*,
+    agents::*, approval::*, changelog::*, composer::*, connect::*, glow::*, help::*, pickers::*,
     settings::*, stats::*, transcript::*,
 };
 
@@ -98,40 +100,53 @@ pub(crate) fn accent2() -> Color {
     crate::theme::current().accent2
 }
 
-/// A quiet ambient backdrop: a vertical wash in the active theme plus a
-/// sparse dot grid. Widgets draw over it, so empty cells stop looking like a
-/// flat void without competing with the transcript.
-///
-/// `phase` is the app's 100ms tick: it slides the rain and snow of `auto`.
-fn draw_backdrop(frame: &mut Frame, area: Rect, phase: usize) {
-    let theme = crate::theme::current();
+/// The backdrop's base color: a near-white wash on a light theme, a near-black
+/// one on a dark theme.
+fn backdrop_base(theme: &crate::theme::Theme) -> Color {
     let light = match theme.dim {
         Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b) > 420,
         _ => false,
     };
-    let base = if light {
+    if light {
         Color::Rgb(247, 248, 251)
     } else {
         Color::Rgb(9, 11, 19)
-    };
-    // `auto` paints the sky for the local hour: a top-to-horizon gradient
-    // (night, dawn, noon, sunset...) with stars that fade in after dusk, and,
-    // once `/set weather` saved a place, the weather in front of it: a sun
-    // glow on a clear day, falling rain or snow, gray cloud and fog.
-    let sky = crate::theme::sky();
-    let weather = sky
-        .as_ref()
-        .map_or(crate::weather::Weather::Unknown, |sky| sky.weather);
-    let stars = sky.as_ref().map_or(0, |sky| sky.stars);
-    let wash = blend(theme.accent2, base, 90);
-    let haze = blend(theme.accent, base, 94);
-    let dot = blend(theme.accent2, base, 78);
-    let rows = usize::from(area.height);
-    let columns = usize::from(area.width);
-    // The sun's disc in cell units: center column and row, tint, strength,
-    // and glow radius. A cell is about twice as tall as wide, so row
-    // distances count double.
-    let sun = sky.as_ref().and_then(|sky| sky.sun.as_ref()).map(|sun| {
+    }
+}
+
+/// The color of one backdrop row: the sky gradient under `auto`, the theme's
+/// vertical wash otherwise.
+fn backdrop_row(
+    theme: &crate::theme::Theme,
+    sky: Option<&crate::theme::Sky>,
+    rows: usize,
+    y: usize,
+) -> Color {
+    let base = backdrop_base(theme);
+    let position = y * 100 / rows.max(1);
+    match sky {
+        Some(sky) => blend(
+            theme.accent2,
+            blend(
+                sky.top,
+                sky.horizon,
+                y * 100 / rows.saturating_sub(1).max(1),
+            ),
+            95,
+        ),
+        None if position < 40 => blend(theme.accent2, base, 90),
+        None if position < 75 => blend(theme.accent, base, 94),
+        None => base,
+    }
+}
+
+/// The sun's disc in cell units: center column and row, tint, strength, and
+/// glow radius. A cell is about twice as tall as wide, so row distances count
+/// double.
+type SunGlow = Option<(f32, f32, Color, f32, f32)>;
+
+fn sun_glow(sky: Option<&crate::theme::Sky>, rows: usize, columns: usize) -> SunGlow {
+    sky.and_then(|sky| sky.sun.as_ref()).map(|sun| {
         let radius = (columns as f32 * 0.16).clamp(6.0, 22.0);
         (
             sun.x * columns as f32,
@@ -140,86 +155,97 @@ fn draw_backdrop(frame: &mut Frame, area: Rect, phase: usize) {
             sun.strength as f32,
             radius,
         )
-    });
-    let mut lines = Vec::with_capacity(rows);
-    for y in 0..rows {
-        let position = y * 100 / rows.max(1);
-        let color = match &sky {
-            Some(sky) => blend(
-                theme.accent2,
-                blend(
-                    sky.top,
-                    sky.horizon,
-                    y * 100 / rows.saturating_sub(1).max(1),
-                ),
-                95,
-            ),
-            None if position < 40 => wash,
-            None if position < 75 => haze,
-            None => base,
-        };
-        let star_color = blend(Color::Rgb(205, 214, 255), color, 55);
-        let drop_color = blend(
+    })
+}
+
+/// The row color under the sun: unchanged away from it, tinted toward the sun
+/// by a falling-off glow, with a bright core.
+fn ground(color: Color, sun: SunGlow, x: usize, y: usize) -> Color {
+    let Some((cx, cy, tint, strength, radius)) = sun else {
+        return color;
+    };
+    let (dx, dy) = (x as f32 - cx, (y as f32 - cy) * 2.0);
+    let distance = (dx * dx + dy * dy).sqrt();
+    if distance >= radius {
+        color
+    } else if distance < 1.5 {
+        blend(color, Color::Rgb(255, 226, 150), (strength * 1.4) as usize)
+    } else {
+        let falloff = 1.0 - distance / radius;
+        blend(color, tint, (strength * falloff * falloff) as usize)
+    }
+}
+
+/// What an empty cell shows in front of the wash: rain or snow, a star, a grid
+/// dot, or nothing.
+fn backdrop_glyph(
+    sky: bool,
+    weather: crate::weather::Weather,
+    stars: usize,
+    phase: usize,
+    row: Color,
+    dot: Color,
+    x: usize,
+    y: usize,
+    position: usize,
+) -> Option<(&'static str, Color)> {
+    if let Some(symbol) = crate::weather::drop_at(weather, x, y, phase) {
+        let ink = blend(
             if weather == crate::weather::Weather::Snow {
                 Color::Rgb(220, 228, 244)
             } else {
                 Color::Rgb(140, 170, 214)
             },
-            color,
+            row,
             45,
         );
-        // The row's color under the sun: unchanged away from it, tinted
-        // toward the sun by a falling-off glow, with a bright core.
-        let ground = |x: usize| -> Color {
-            let Some((cx, cy, tint, strength, radius)) = sun else {
-                return color;
-            };
-            let (dx, dy) = (x as f32 - cx, (y as f32 - cy) * 2.0);
-            let distance = (dx * dx + dy * dy).sqrt();
-            if distance >= radius {
-                color
-            } else if distance < 1.5 {
-                blend(color, Color::Rgb(255, 226, 150), (strength * 1.4) as usize)
-            } else {
-                let falloff = 1.0 - distance / radius;
-                blend(color, tint, (strength * falloff * falloff) as usize)
-            }
-        };
-        // What one cell shows: a drop, a star, a grid dot, or nothing.
-        let cell = |x: usize| -> (&'static str, Style) {
-            let bg = ground(x);
-            if let Some(symbol) = crate::weather::drop_at(weather, x, y, phase) {
-                return (symbol, Style::default().fg(drop_color).bg(bg));
-            }
-            if sky.is_some() {
-                let mut h =
-                    (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA6B);
-                h ^= h >> 15;
-                h = h.wrapping_mul(0x2C1B_3C6D);
-                h ^= h >> 13;
-                if position < 70 && (h % 1000) as usize * 4 < stars {
-                    let symbol = if h % 7 == 0 { "*" } else { "·" };
-                    return (symbol, Style::default().fg(star_color).bg(bg));
-                }
-            }
-            if y % 3 == 0 && x % 8 == 4 {
-                ("·", Style::default().fg(dot).bg(bg))
-            } else {
-                (" ", Style::default().bg(bg))
-            }
-        };
+        return Some((symbol, ink));
+    }
+    if sky {
+        let mut h = (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA6B);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^= h >> 13;
+        if position < 70 && (h % 1000) as usize * 4 < stars {
+            let symbol = if h % 7 == 0 { "*" } else { "·" };
+            return Some((symbol, blend(Color::Rgb(205, 214, 255), row, 55)));
+        }
+    }
+    if y % 3 == 0 && x % 8 == 4 {
+        return Some(("·", dot));
+    }
+    None
+}
+
+/// A quiet ambient backdrop: a vertical wash in the active theme plus a
+/// sparse dot grid. Widgets draw over it, so empty cells stop looking like a
+/// flat void without competing with the transcript.
+///
+/// Only the background is painted here. Its glyphs land in
+/// `draw_backdrop_glyphs` after every widget: ratatui patches styles, so a
+/// dot's foreground left under a later span without a color tinted that text
+/// in the dot's faint color.
+fn draw_backdrop(frame: &mut Frame, area: Rect) {
+    let theme = crate::theme::current();
+    let sky = crate::theme::sky();
+    let rows = usize::from(area.height);
+    let columns = usize::from(area.width);
+    let sun = sun_glow(sky.as_ref(), rows, columns);
+    let mut lines = Vec::with_capacity(rows);
+    for y in 0..rows {
+        let color = backdrop_row(&theme, sky.as_ref(), rows, y);
         // Neighbours with one style share a span, so a quiet row stays a
         // handful of spans instead of one per cell.
         let mut spans = Vec::new();
         let mut run = String::new();
         let mut run_style = Style::default();
         for x in 0..columns {
-            let (symbol, style) = cell(x);
+            let style = Style::default().bg(ground(color, sun, x, y));
             if style != run_style && !run.is_empty() {
                 spans.push(Span::styled(std::mem::take(&mut run), run_style));
             }
             run_style = style;
-            run.push_str(symbol);
+            run.push(' ');
         }
         if !run.is_empty() {
             spans.push(Span::styled(run, run_style));
@@ -227,6 +253,72 @@ fn draw_backdrop(frame: &mut Frame, area: Rect, phase: usize) {
         lines.push(Line::from(spans));
     }
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The backdrop's glyphs, painted after every widget so a cell that carries
+/// text or a panel keeps its own foreground. A cell is only decorated while it
+/// is still empty and still sits on the wash: anything a widget painted is
+/// left alone.
+///
+/// `phase` is the app's 100ms tick: it slides the rain and snow of `auto`.
+fn draw_backdrop_glyphs(frame: &mut Frame, area: Rect, phase: usize) {
+    let theme = crate::theme::current();
+    let sky = crate::theme::sky();
+    let weather = sky
+        .as_ref()
+        .map_or(crate::weather::Weather::Unknown, |sky| sky.weather);
+    let stars = sky.as_ref().map_or(0, |sky| sky.stars);
+    let dot = blend(theme.accent2, backdrop_base(&theme), 78);
+    let rows = usize::from(area.height);
+    let columns = usize::from(area.width);
+    let sun = sun_glow(sky.as_ref(), rows, columns);
+    let buffer = frame.buffer_mut();
+    for y in 0..rows {
+        let color = backdrop_row(&theme, sky.as_ref(), rows, y);
+        let position = y * 100 / rows.max(1);
+        for x in 0..columns {
+            // A blank cell wedged between glyphs belongs to a text line: the
+            // grid stays out of it, so no dot lands between two words.
+            let neighbour_text = |dx: isize| {
+                let at = x as isize + dx;
+                (at >= 0 && at < columns as isize)
+                    && buffer
+                        .cell((at as u16, y as u16))
+                        .is_some_and(|cell| cell.symbol() != " ")
+            };
+            if neighbour_text(-1) || neighbour_text(1) {
+                continue;
+            }
+            let Some(cell) = buffer.cell_mut((x as u16, y as u16)) else {
+                continue;
+            };
+            // Text, a wide glyph's tail, or a widget's own foreground or
+            // background: not ours. A span patching a color leaves the cell
+            // marked, even when it painted only blanks.
+            if cell.symbol() != " "
+                || cell.skip
+                || cell.fg != Color::Reset
+                || cell.bg != ground(color, sun, x, y)
+            {
+                continue;
+            }
+            let Some((symbol, ink)) = backdrop_glyph(
+                sky.is_some(),
+                weather,
+                stars,
+                phase,
+                color,
+                dot,
+                x,
+                y,
+                position,
+            ) else {
+                continue;
+            };
+            cell.set_symbol(symbol);
+            cell.fg = ink;
+        }
+    }
 }
 
 pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
@@ -243,14 +335,73 @@ const TOOL_OUTPUT_PREVIEW_LINES: usize = 7;
 /// Rows of the command palette shown before it scrolls: the list never eats
 /// more than this many transcript rows.
 const MAX_PALETTE_ROWS: usize = 10;
-/// The spinner frames: a braille ring whose gap turns, the terminal stand-in
-/// for a ring with an arc sweeping around it. Eight frames, one per tick.
-const SPINNER: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+/// The one live-status glyph: a filled dot whose color breathes. Nothing
+/// spins and nothing reflows, so a status row keeps its width while it moves.
+pub(super) const LIVE_DOT: &str = "●";
 
-/// The spinner glyph for `step`: the footer, the session tabs, the sidebar and
-/// the transcript all turn off this one clock.
-pub(super) fn spinner(step: usize) -> &'static str {
-    SPINNER[step % SPINNER.len()]
+/// A breathing color on the 100ms ticker: from `base` to `bright` and back
+/// over about a second.
+///
+/// This is what replaced the braille spinner: a live row reads as alive from
+/// its light, not from a rotating glyph that drags the eye to the left edge
+/// of every line it touches.
+pub(super) fn breathe(step: usize, base: Color, bright: Color) -> Style {
+    let phase = (step % 14) as f32 / 14.0 * std::f32::consts::TAU;
+    let wave = (phase.sin() * 0.5 + 0.5) * 100.0;
+    Style::default().fg(blend(base, bright, wave as usize))
+}
+
+/// A sweep of light crossing `text`, one pass every couple of seconds: each
+/// glyph is blended toward `bright` by how close it sits to a head that
+/// travels the string.
+///
+/// The words stay where they are and only their color moves, so a thinking
+/// line has momentum without the spinner's churn.
+pub(super) fn shimmer(text: &str, step: usize, base: Color, bright: Color) -> Vec<Span<'static>> {
+    // Four quiet cells ahead of the text, so the sweep starts off the first
+    // glyph instead of lighting it up from nothing.
+    let lead = 4usize;
+    let length = text.chars().count();
+    let period = length + lead + 6;
+    let head = (step / 2) % period;
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(length);
+    let mut run = String::new();
+    let mut run_style = Style::default().fg(base);
+    for (index, character) in text.chars().enumerate() {
+        let distance = (index + lead).abs_diff(head);
+        // A three-cell gradient: full, two thirds, one third, then back to
+        // the base color, which keeps the sweep cheap to blend per frame.
+        let style = match distance {
+            0 => Style::default().fg(bright),
+            1 => Style::default().fg(blend(base, bright, 66)),
+            2 => Style::default().fg(blend(base, bright, 33)),
+            _ => Style::default().fg(base),
+        };
+        if style != run_style && !run.is_empty() {
+            spans.push(Span::styled(std::mem::take(&mut run), run_style));
+        }
+        run_style = style;
+        run.push(character);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, run_style));
+    }
+    spans
+}
+
+/// A shimmering status prefix: the breathing dot and a swept label.
+pub(super) fn live_label(
+    label: &str,
+    step: usize,
+    base: Color,
+    bright: Color,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(LIVE_DOT, breathe(step, base, bright)),
+        Span::styled(" ", Style::default().fg(base)),
+    ];
+    spans.extend(shimmer(label, step, base, bright));
+    spans
 }
 
 pub(super) fn responsive_palette_width(area_width: u16) -> u16 {
@@ -280,9 +431,21 @@ fn caret(spinner: usize) -> &'static str {
     if (spinner / 3) % 2 == 0 { "▌" } else { "" }
 }
 
+/// The live "thinking" row: a breathing rail mark and the swept word.
+///
+/// This is what a stream with no text yet shows instead of a blinking cursor
+/// on its own line: the row says what is happening, and its light says the
+/// process is alive.
+pub(super) fn thinking_line(step: usize) -> Line<'static> {
+    let mut spans = vec![Span::styled("▍", breathe(step, dim(), accent()))];
+    spans.push(Span::styled(" ", Style::default().fg(dim())));
+    spans.extend(shimmer("thinking", step, muted(), accent2()));
+    Line::from(spans)
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    draw_backdrop(frame, area, app.spinner);
+    draw_backdrop(frame, area);
     if area.width < 28 || area.height < 8 {
         app.output_rows.clear();
         frame.render_widget(
@@ -291,6 +454,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 .style(Style::default().fg(muted())),
             area,
         );
+        draw_backdrop_glyphs(frame, area, app.spinner);
         return;
     }
 
@@ -298,6 +462,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let session_picker = app.session_picker.clone();
     let revert_picker = app.revert_picker.clone();
     let agents_picker = app.agents_picker.clone();
+    let connect_open = app.connect_open();
     // The Progress panel steps aside once every task is done: a finished
     // checklist means finished work, not a panel parked over the composer.
     let tasks = app.session.tasks.iter().any(|task| !task.done);
@@ -340,8 +505,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
+    // The connect dialog is a docked box in the same slot as the palette: it
+    // used to be a full-screen window over the session it was changing.
+    let connect_height = connect_height(app);
+    // Room for the box and its two borders. A short terminal gives the list
+    // up to the transcript rather than pushing the composer off the screen.
     let popup_height = palette_height + picker_height + revert_height + agents_height;
-    let composer_height = composer_height(app, area.width, area.height);
+    let dock_height = popup_height.max(connect_height);
+    let composer_height = composer_height(app, area.width, area.height).saturating_add(2);
     let progress_height = if tasks {
         if app.progress_collapsed {
             1
@@ -358,8 +529,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // them never squeezes the footer's badge and context load.
     constraints.push(Constraint::Length(1));
     constraints.push(Constraint::Min(2));
-    if popup_height > 0 {
-        constraints.push(Constraint::Length(popup_height));
+    if dock_height > 0 {
+        constraints.push(Constraint::Length(dock_height));
     }
     if progress_height > 0 {
         constraints.push(Constraint::Length(progress_height));
@@ -400,7 +571,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_transcript(frame, app, transcript_area);
 
     index += 1;
-    if popup_height > 0 {
+    if connect_open {
+        if let Some(connect) = app.connect_state() {
+            draw_connect(frame, app, connect, app.spinner, chunks[index]);
+        }
+        index += 1;
+    } else if popup_height > 0 {
         if let Some(revert_picker) = &revert_picker {
             draw_revert_picker(frame, app, revert_picker, chunks[index]);
         } else if let Some(agents_picker) = &agents_picker {
@@ -415,8 +591,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if progress_height > 0 {
         draw_progress(frame, app, chunks[index]);
         index += 1;
-    } else if popup_height == 0 {
-        draw_separator(frame, chunks[index]);
+    } else if dock_height == 0 {
+        draw_separator(frame, chunks[index], app.spinner);
     }
     // The separator slot is reserved even when an overlay or the panel takes
     // that row instead.
@@ -436,13 +612,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_help(frame, app, area);
     } else if app.settings_open {
         draw_settings(frame, app, area);
-    } else if let Some(connect) = app.connect_state() {
-        draw_connect(frame, app, connect, spinner, area);
     } else if let Some(session_picker) = &session_picker {
         draw_session_picker(frame, app, session_picker, area);
     } else if app.subagent_view.is_some() {
         draw_agents_viewer(frame, app, area);
     }
+    draw_backdrop_glyphs(frame, area, app.spinner);
 }
 
 fn truncate(text: &str, width: usize) -> String {
@@ -518,6 +693,9 @@ fn usage_line(usage: Usage) -> Line<'static> {
     let seconds = usage.elapsed_ms as f64 / 1000.0;
     if usage.elapsed_ms > 0 {
         text.push_str(&format!(" · {seconds:.1}s"));
+    }
+    if usage.ttft_ms > 0 {
+        text.push_str(&format!(" · rtt {}", format_rtt(usage.ttft_ms)));
     }
     if let Some(rate) = usage.tokens_per_second() {
         text.push_str(&format!(" · {rate:.0} t/s"));
@@ -711,10 +889,45 @@ fn wrapped_rows(line: &str, width: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_lines, pad_to, reasoning_lines, wrapped_line_count};
+    use super::{pad_to, reasoning_lines, tree_lines, wrapped_line_count};
     use crate::session::{Message, Role};
     use ratatui::{style::Color, text::Line};
-    use unicode_width::UnicodeWidthStr;
+
+    /// The dot grid is painted after the widgets, so a span that names no
+    /// color cannot inherit the dot's faint foreground: every letter keeps its
+    /// own color while the grid still shows through the empty cells.
+    #[test]
+    fn the_dot_grid_never_tints_text() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = crate::app::test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "hello world, a line with letters"));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| super::draw(frame, &mut app)).unwrap();
+
+        let theme = crate::theme::current();
+        let dot = super::blend(theme.accent2, super::backdrop_base(&theme), 78);
+        let mut glyphs = 0;
+        let mut dots = 0;
+        for cell in terminal.backend().buffer().content() {
+            if cell.symbol() == "·" && cell.fg == dot {
+                dots += 1;
+            }
+            if cell.symbol().chars().any(char::is_alphanumeric) {
+                glyphs += 1;
+                assert_ne!(
+                    cell.fg,
+                    dot,
+                    "text inherited the dot color: {:?}",
+                    cell.symbol()
+                );
+            }
+        }
+        assert!(glyphs > 0, "nothing rendered");
+        assert!(dots > 0, "the dot grid stopped drawing");
+    }
 
     fn text_of(line: &Line<'_>) -> String {
         line.spans
@@ -813,37 +1026,35 @@ mod tests {
     }
 
     #[test]
-    fn every_framed_line_has_the_same_width() {
-        let body = vec![
-            Line::raw("short"),
-            Line::raw("a much longer body line that has to be clipped"),
-            Line::raw(""),
-        ];
-        let lines = frame_lines("main.py".to_owned(), body, 20, Color::Reset);
-        assert_eq!(lines.len(), 6);
-        for line in &lines[1..] {
-            assert_eq!(text_of(line).chars().count(), 24, "{:?}", text_of(line));
-        }
-        assert!(text_of(&lines[1]).starts_with("╭─ main.py "));
-        assert!(text_of(&lines[3]).starts_with("│ a much longer body"));
-        assert!(text_of(&lines[5]).starts_with('╰'));
-    }
-
-    #[test]
-    fn frame_lines_sanitizes_tabs_and_carriage_returns() {
-        let body = vec![Line::raw("col\tnext\r"), Line::raw("\t\tindented")];
-        let lines = frame_lines("tool".to_owned(), body, 20, Color::Reset);
-        for line in &lines[1..] {
+    fn tool_output_hangs_under_the_call_row() {
+        let body = vec![Line::raw("1 match"), Line::raw("src/theme.rs")];
+        let lines = tree_lines(body, Color::Reset, true);
+        assert_eq!(lines.len(), 2);
+        // The first row is the connector under `→ tool …`, the rest indent
+        // under it: no head label, no closing rule, no box.
+        assert_eq!(text_of(&lines[0]), "  ╰ 1 match");
+        assert_eq!(text_of(&lines[1]), "    src/theme.rs");
+        for line in &lines {
             let text = text_of(line);
-            assert_eq!(UnicodeWidthStr::width(text.as_str()), 24, "{text:?}");
-            assert!(!text.contains('\t'));
-            assert!(!text.contains('\r'));
-            assert!(text.ends_with('│') || text.ends_with('╮') || text.ends_with('╯'));
+            assert!(
+                !text.contains('│') && !text.contains('╭') && !text.contains('╮'),
+                "the tree drew a box: {text}"
+            );
         }
     }
 
+    /// Two results from the same turn join into one rail: the first keeps a
+    /// joint and a running rail, the last closes it.
     #[test]
-    fn frame_lines_preserves_span_styles_for_diff_colors() {
+    fn a_second_result_keeps_the_connector_rail() {
+        let body = vec![Line::raw("out"), Line::raw("more")];
+        let lines = tree_lines(body, Color::Reset, false);
+        assert_eq!(text_of(&lines[0]), "  ├ out");
+        assert_eq!(text_of(&lines[1]), "  │ more");
+    }
+
+    #[test]
+    fn the_tree_sanitizes_tabs_and_keeps_span_styles() {
         use ratatui::style::Style;
         use ratatui::text::Span;
         let line = Line::from(vec![
@@ -851,19 +1062,17 @@ mod tests {
             Span::styled("+ ", Style::default().fg(Color::Green)),
             Span::styled("new line", Style::default().fg(Color::Green)),
         ]);
-        let lines = frame_lines("diff".to_owned(), vec![line], 30, Color::Reset);
-        assert_eq!(lines.len(), 4);
-        let body_row = &lines[2];
+        let lines = tree_lines(vec![Line::raw("col\tnext\r"), line], Color::Reset, true);
+        for line in &lines {
+            let text = text_of(line);
+            assert!(!text.contains('\t'), "{text:?}");
+            assert!(!text.contains('\r'), "{text:?}");
+        }
+        // Spans land past the four-cell marker, colors intact.
+        let body_row = &lines[1];
         assert_eq!(body_row.spans[1].style.fg, Some(Color::DarkGray));
         assert_eq!(body_row.spans[2].style.fg, Some(Color::Green));
         assert_eq!(body_row.spans[3].style.fg, Some(Color::Green));
-    }
-
-    #[test]
-    fn a_label_wider_than_the_frame_does_not_break_it() {
-        let lines = frame_lines("x".repeat(60), vec![Line::raw("body")], 10, Color::Reset);
-        assert_eq!(text_of(&lines[1]).chars().count(), 14);
-        assert_eq!(text_of(&lines[2]).chars().count(), 14);
     }
 
     #[test]
@@ -873,27 +1082,6 @@ mod tests {
         assert_eq!(pad_to("汉", 4), "汉  ");
         assert_eq!(pad_to("汉汉", 4), "汉汉");
         assert_eq!(pad_to("too long here", 4), "too long here");
-    }
-
-    #[test]
-    fn the_frame_fits_every_usable_width() {
-        for inner in 6..90 {
-            for label in ["tool", "main.py", "yopes", "a-very-long-path/some/file.rs"] {
-                let body = vec![
-                    Line::raw("short"),
-                    Line::raw("a much longer body line that has to be clipped"),
-                    Line::raw(""),
-                ];
-                let lines = frame_lines(label.to_owned(), body, inner, Color::Reset);
-                for line in &lines[1..] {
-                    assert_eq!(
-                        text_of(line).chars().count(),
-                        inner + 4,
-                        "inner={inner} label={label}",
-                    );
-                }
-            }
-        }
     }
 
     /// The palette is truncated to a fixed window and scrolls to follow the

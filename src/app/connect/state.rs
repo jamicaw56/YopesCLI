@@ -173,6 +173,10 @@ pub struct ConnectState {
     pub(crate) unlock_endpoint: String,
     /// A key that was unlocked during this visit.
     pub(crate) unlocked_key: Option<String>,
+    /// The key editor was used on a saved endpoint: the next password prompt
+    /// writes just that key, leaving the model and the rest of the connection
+    /// alone.
+    pub(crate) token_only_save: bool,
 }
 impl ConnectState {
     pub(crate) fn loading() -> Self {
@@ -206,6 +210,7 @@ impl ConnectState {
             stored_secret: None,
             unlock_endpoint: String::new(),
             unlocked_key: None,
+            token_only_save: false,
         }
     }
     pub fn items(&self) -> Vec<ConnectItem> {

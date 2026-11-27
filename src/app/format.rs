@@ -17,6 +17,20 @@ pub fn format_tokens(tokens: u64) -> String {
     }
 }
 
+/// A context size the way a window is written: `850`, `38.3K`, `128K`, `1M`.
+///
+/// The model's window is a round number in millions, so it earns a suffix
+/// instead of five digits, and a `.0` is dropped: `1M`, not `1.0M`.
+pub fn format_context(tokens: u64) -> String {
+    if tokens < 1_000 {
+        tokens.to_string()
+    } else if tokens < 999_950 {
+        format!("{:.1}K", tokens as f64 / 1_000.0).replace(".0K", "K")
+    } else {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0).replace(".0M", "M")
+    }
+}
+
 /// Dollars per million tokens, `(input, output)`, for the common models when
 /// the provider catalog has no price. `None` means the price is unknown: the
 /// session counter shows a dash instead of inventing a bill.
@@ -75,6 +89,16 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// A round trip as `340ms` or `1.2s`. Sub-second keeps milliseconds: the
+/// difference between a 200ms and an 800ms RTT is the whole point.
+pub fn format_rtt(millis: u64) -> String {
+    if millis < 1000 {
+        format!("{millis}ms")
+    } else {
+        format!("{:.1}s", millis as f64 / 1000.0)
+    }
+}
+
 /// Elapsed milliseconds as `12s`, `1m05s` or `1h02m`: compact enough for a
 /// sidebar row.
 pub fn format_duration_ms(millis: u64) -> String {
@@ -93,11 +117,32 @@ mod tests {
     use super::{format_bytes, format_cost, format_tokens};
 
     #[test]
+    fn rtt_keeps_milliseconds_under_a_second() {
+        use super::format_rtt;
+        assert_eq!(format_rtt(1), "1ms");
+        assert_eq!(format_rtt(340), "340ms");
+        assert_eq!(format_rtt(999), "999ms");
+        assert_eq!(format_rtt(1_240), "1.2s");
+    }
+
+    #[test]
     fn formats_keep_tokens_and_bytes_compact() {
         assert_eq!(format_tokens(999), "999");
         assert_eq!(format_tokens(1200), "1.2k");
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(2150), "2.1 KB");
+    }
+
+    #[test]
+    fn context_sizes_read_like_a_window() {
+        use super::format_context;
+        assert_eq!(format_context(850), "850");
+        assert_eq!(format_context(38_300), "38.3K");
+        assert_eq!(format_context(128_000), "128K");
+        // A rounding tail must not print `1000.0K`: it is a million.
+        assert_eq!(format_context(999_950), "1M");
+        assert_eq!(format_context(1_000_000), "1M");
+        assert_eq!(format_context(2_000_000), "2M");
     }
 
     #[test]
