@@ -118,8 +118,17 @@ http_download() {
 }
 
 printf "Looking up the latest release..."
-RELEASE_JSON="$(http_get "https://api.github.com/repos/$REPO/releases/latest")"
-TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+TAG=""
+if [ "$HTTP" = "curl" ]; then
+    FINAL_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)"
+    case "$FINAL_URL" in
+        */releases/tag/*) TAG="${FINAL_URL##*/releases/tag/}" ;;
+    esac
+fi
+if [ -z "$TAG" ]; then
+    RELEASE_JSON="$(http_get "https://api.github.com/repos/$REPO/releases/latest")"
+    TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+fi
 if [ -z "$TAG" ]; then
     echo ""
     echo "Error: could not determine latest release tag." >&2
