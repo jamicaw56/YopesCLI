@@ -33,7 +33,7 @@ pub(crate) use computer::screenshot_path;
 pub use definitions::definitions;
 pub(crate) use files::{change_preview, edit_targets, move_target};
 pub(crate) use ignore::Ignore;
-pub use policy::{requires_approval, system_prompt};
+pub use policy::{Prompt, requires_approval, system_prompt};
 pub use preview::{applied_change_all, command_text, preview, target_existed};
 pub(crate) use shell::BashNotice;
 pub(crate) use shell::kill_commands_for;

@@ -131,11 +131,46 @@ pub fn command_risk(arguments: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
+/// Which system prompt a request gets.
+///
+/// `Chat` is plain conversation: no tool text and no project files, so the
+/// model answers like a chat partner instead of an agent whose tools went
+/// missing. `NoTools` is an agent turn with the tools withheld (tools mode
+/// off, or a provider that refused them): the project instructions still ride
+/// along, because that session keeps its files and its tool history.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Prompt {
+    Chat,
+    #[default]
+    Tools,
+    NoTools,
+}
+
+impl Prompt {
+    /// Whether tool calls are offered to the model with this prompt.
+    pub const fn tools(self) -> bool {
+        matches!(self, Self::Tools)
+    }
+
+    pub const fn chat(self) -> bool {
+        matches!(self, Self::Chat)
+    }
+}
+
+pub fn system_prompt(prompt: Prompt, workspace: &Path) -> String {
     let cwd = workspace.display().to_string();
     let os = std::env::consts::OS;
     let temp = temp::platform_temp_root().display().to_string();
-    let base = if tools_enabled {
+    let base = if prompt.chat() {
+        "You are yopes, a chat companion in the user's terminal. This is plain \
+         conversation: no tools are wired up for this session, so nothing can be read, \
+         written, or run — answer from what you know and from the conversation, in prose. \
+         Format replies with Markdown by default: ## headings for sections, bullets or \
+         numbered lists for multiple items, **bold** for key terms, and fenced code \
+         blocks with a language tag for code. Keep paragraphs readable; do not flatten \
+         lists or code into plain prose. Keep responses short and concrete."
+            .to_owned()
+    } else if prompt.tools() {
         format!(
             "You are yopes, a coding assistant running in the user's terminal.\n\
              Working directory: {cwd}\n\
@@ -236,7 +271,12 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
          'let me know'. A heading or a list earns its place only when it helps the reader; \
          a one-line answer gets one line. Never claim a result you did not verify."
     );
-    let project_instructions = project_instructions(workspace);
+    let project_instructions = if prompt.chat() {
+        // A plain chat should not read like a briefing on someone's repo.
+        String::new()
+    } else {
+        project_instructions(workspace)
+    };
     if project_instructions.is_empty() {
         base
     } else {

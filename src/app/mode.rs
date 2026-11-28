@@ -120,6 +120,16 @@ impl Mode {
         }
     }
 
+    /// The system prompt this mode asks for. Chat is the one mode that gets
+    /// a plain conversational prompt, with no tool text and no project files.
+    pub(crate) fn prompt(self, tools_mode: ToolsMode) -> tools::Prompt {
+        match self {
+            Self::Chat => tools::Prompt::Chat,
+            _ if tools_mode.advertised() => tools::Prompt::Tools,
+            _ => tools::Prompt::NoTools,
+        }
+    }
+
     /// Tool names the model may not call in this mode.
     pub(crate) fn denied(self, tool: &str) -> bool {
         match self {
@@ -178,7 +188,10 @@ impl Mode {
                  or run commands; the user will switch to build mode to apply changes. Reading \
                  files, listing directories, and web search stay allowed.",
             ),
-            Self::Chat => Some("CHAT MODE: tools are disabled. Answer in plain text."),
+            Self::Chat => Some(
+                "CHAT MODE: plain conversation only. No tools, no files, no commands — \
+                 answer in prose from the conversation itself.",
+            ),
         }
     }
 }
@@ -186,6 +199,7 @@ impl Mode {
 #[cfg(test)]
 mod tests {
     use super::{Mode, ToolsMode};
+    use crate::tools::Prompt;
 
     #[test]
     fn the_mode_cycle_and_denials_match_the_labels() {
@@ -208,6 +222,18 @@ mod tests {
         assert!(Mode::Plan.denied("bash_kill"));
         assert!(Mode::Plan.denied("computer_use"));
         assert!(Mode::Chat.denied("read_file"));
+        // Chat is the only mode that asks for the bare conversational prompt,
+        // and it does so whatever the tools setting says.
+        assert_eq!(Mode::Chat.prompt(ToolsMode::On), Prompt::Chat);
+        assert_eq!(Mode::Chat.prompt(ToolsMode::Dangerous), Prompt::Chat);
+        assert_eq!(Mode::Build.prompt(ToolsMode::On), Prompt::Tools);
+        assert_eq!(Mode::Plan.prompt(ToolsMode::Auto), Prompt::Tools);
+        assert_eq!(Mode::Build.prompt(ToolsMode::Off), Prompt::NoTools);
+        assert!(
+            Mode::Chat
+                .instruction(ToolsMode::On)
+                .is_some_and(|note| note.contains("no tools") || note.contains("No tools"))
+        );
         assert!(
             Mode::Plan
                 .instruction(ToolsMode::On)

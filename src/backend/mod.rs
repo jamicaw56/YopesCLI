@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use crate::{
     config::{AuthKind, Config, ProviderKind, SavedModel},
     session::{Message, Role, ToolCall},
-    tools,
+    tools::{self, Prompt},
 };
 
 use messages::{
@@ -376,7 +376,7 @@ impl Backend {
         self.stream(
             request_id,
             messages,
-            false,
+            Prompt::NoTools,
             Some(brief.to_owned()),
             workspace,
             events,
@@ -403,19 +403,25 @@ impl Backend {
         self,
         request_id: u64,
         messages: Vec<Message>,
-        tools_enabled: bool,
+        prompt: Prompt,
         mode_note: Option<String>,
         workspace: PathBuf,
         events: mpsc::UnboundedSender<StreamEvent>,
     ) {
-        let tooling = tools_enabled
-            && matches!(
+        // A provider that cannot carry tool calls takes the prompt without the
+        // tool text; a chat turn keeps its bare prompt either way.
+        let prompt = if prompt.tools()
+            && !matches!(
                 self.provider,
                 ProviderKind::OpenAi
                     | ProviderKind::Custom
                     | ProviderKind::Anthropic
                     | ProviderKind::Gemini
-            );
+            ) {
+            Prompt::NoTools
+        } else {
+            prompt
+        };
         let result = match self.provider {
             ProviderKind::Unconfigured => Err(anyhow!(
                 "no provider connected; run /provider connect to get started"
@@ -433,7 +439,7 @@ impl Backend {
                 self.stream_openai(
                     request_id,
                     &messages,
-                    tooling,
+                    prompt,
                     mode_note.clone(),
                     &workspace,
                     &events,
@@ -444,6 +450,7 @@ impl Backend {
                 self.stream_ollama(
                     request_id,
                     &messages,
+                    prompt,
                     mode_note.clone(),
                     &workspace,
                     &events,
@@ -454,7 +461,7 @@ impl Backend {
                 self.stream_anthropic(
                     request_id,
                     &messages,
-                    tooling,
+                    prompt,
                     mode_note.clone(),
                     &workspace,
                     &events,
@@ -465,7 +472,7 @@ impl Backend {
                 self.stream_gemini(
                     request_id,
                     &messages,
-                    tooling,
+                    prompt,
                     mode_note.clone(),
                     &workspace,
                     &events,
@@ -504,7 +511,7 @@ impl Backend {
         &self,
         request_id: u64,
         messages: &[Message],
-        tooling: bool,
+        prompt: Prompt,
         mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
@@ -514,14 +521,21 @@ impl Backend {
         // and the request retried, so a hint the endpoint does not know never
         // costs the turn. Both flags only ever go from on to off, so the
         // ladder ends.
-        let mut tooling = tooling;
+        let mut tooling = prompt.tools();
         let mut effort = self.effort_to_send();
         loop {
+            // Chat keeps its chat prompt; an agent turn that lost its tools
+            // falls back to the plain agent prompt.
+            let once_prompt = if tooling || prompt.chat() {
+                prompt
+            } else {
+                Prompt::NoTools
+            };
             let result = self
                 .stream_openai_once(
                     request_id,
                     messages,
-                    tooling,
+                    once_prompt,
                     effort.as_deref(),
                     mode_note.clone(),
                     workspace,
@@ -568,17 +582,18 @@ impl Backend {
         &self,
         request_id: u64,
         messages: &[Message],
-        tooling: bool,
+        prompt: Prompt,
         effort: Option<&str>,
         mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
+        let tooling = prompt.tools();
         let mut request = serde_json::json!({
             "model": self.model,
             "messages": request_messages(
                 messages,
-                tooling,
+                prompt,
                 if matches!(
                     self.provider,
                     ProviderKind::OpenAi | ProviderKind::Custom
@@ -639,6 +654,7 @@ impl Backend {
         &self,
         request_id: u64,
         messages: &[Message],
+        prompt: Prompt,
         mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
@@ -647,7 +663,7 @@ impl Backend {
             "model": self.model,
             "messages": request_messages(
                 messages,
-                false,
+                prompt,
                 ImageStyle::Ollama,
                 self.custom_prompt.as_deref(),
                 mode_note.as_deref(),
@@ -681,14 +697,15 @@ impl Backend {
         &self,
         request_id: u64,
         messages: &[Message],
-        tooling: bool,
+        prompt: Prompt,
         mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
+        let tooling = prompt.tools();
         let (system, payload_messages) = anthropic_request_payload(
             messages,
-            tooling,
+            prompt,
             self.custom_prompt.as_deref(),
             mode_note.clone(),
             workspace,
@@ -774,14 +791,15 @@ impl Backend {
         &self,
         request_id: u64,
         messages: &[Message],
-        tooling: bool,
+        prompt: Prompt,
         mode_note: Option<String>,
         workspace: &Path,
         events: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<()> {
+        let tooling = prompt.tools();
         let (system_instruction, contents) = gemini_request_payload(
             messages,
-            tooling,
+            prompt,
             self.custom_prompt.as_deref(),
             mode_note.clone(),
             workspace,
@@ -871,6 +889,103 @@ fn completion_url(base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{anthropic_url, completion_url, gemini_url};
+
+    /// Stand up a one-shot HTTP server that answers like an OpenAI-compatible
+    /// stream with the text `hi`, and hand back the request body it read.
+    async fn capture_request(
+        backend: super::Backend,
+        prompt: super::Prompt,
+        workspace: std::path::PathBuf,
+    ) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut backend = backend;
+        backend.configure(
+            crate::config::ProviderKind::OpenAi,
+            "test".to_owned(),
+            "test-model".to_owned(),
+            format!("http://{address}"),
+            Some("key".to_owned()),
+            crate::config::AuthKind::Bearer,
+            Vec::new(),
+        );
+        let (events, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 8192];
+            let body_start = loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "the client closed before sending a body");
+                buffer.extend_from_slice(&chunk[..read]);
+                if let Some(end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&buffer[..body_start]).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map(|value| value.trim().parse().unwrap())
+                .expect("a content length");
+            while buffer.len() < body_start + length {
+                let read = stream.read(&mut chunk).await.unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+            }
+            let body =
+                String::from_utf8_lossy(&buffer[body_start..body_start + length]).into_owned();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n\
+                      data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            body
+        });
+        let messages = vec![crate::session::Message::new(
+            crate::session::Role::User,
+            "hello",
+        )];
+        backend
+            .stream(u64::MAX, messages, prompt, None, workspace, events)
+            .await;
+        server.await.unwrap()
+    }
+
+    /// Chat mode must reach the wire as a plain conversation: no tool schema,
+    /// no AGENTS.md, no skills listing. A build turn keeps all three.
+    #[tokio::test]
+    async fn only_an_agent_turn_puts_tools_and_project_files_on_the_wire() {
+        let workspace = crate::temp::unique_dir("chat-prompt");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("AGENTS.md"), "cargo build is allowed").unwrap();
+
+        let chat = capture_request(
+            super::Backend::default(),
+            super::Prompt::Chat,
+            workspace.clone(),
+        )
+        .await;
+        assert!(chat.contains("chat companion"), "{chat}");
+        assert!(!chat.contains("\"tools\":"), "{chat}");
+        assert!(!chat.contains("Project Markdown context"), "{chat}");
+        assert!(!chat.contains("cargo build is allowed"), "{chat}");
+        assert!(!chat.contains("The user installed skills"), "{chat}");
+
+        let build = capture_request(
+            super::Backend::default(),
+            super::Prompt::Tools,
+            workspace.clone(),
+        )
+        .await;
+        assert!(build.contains("\"tools\":"), "{build}");
+        assert!(build.contains("Project Markdown context"), "{build}");
+        assert!(build.contains("cargo build is allowed"), "{build}");
+        let _ = std::fs::remove_dir_all(workspace);
+    }
 
     #[test]
     fn a_refused_effort_is_not_sent_again_for_that_model() {

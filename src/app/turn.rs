@@ -367,11 +367,12 @@ impl App {
         }
         self.next_request_id = self.next_request_id.wrapping_add(1);
         let request_id = self.next_request_id;
-        let tools_enabled = self.mode != Mode::Chat && self.tools_mode.advertised();
+        let prompt = self.mode.prompt(self.tools_mode);
         // The system note: the mode's instruction, then the delegation
         // ledger. The ledger is rebuilt here from the session's records, so
         // every request carries the true state of every delegated run, even
-        // after compaction dropped the messages that mentioned them.
+        // after compaction dropped the messages that mentioned them. A chat
+        // turn leaves the ledger out: it is tool state, and chat has none.
         let mut notes: Vec<String> = Vec::new();
         // The goal rides first: it outranks the mode and the ledger.
         if let Some(goal) = self.session.goal.as_deref() {
@@ -382,7 +383,9 @@ impl App {
         if let Some(instruction) = self.mode.instruction(self.tools_mode) {
             notes.push(instruction.to_owned());
         }
-        if let Some(ledger) = self.delegate_ledger_note() {
+        if !prompt.chat()
+            && let Some(ledger) = self.delegate_ledger_note()
+        {
             notes.push(ledger);
         }
         let mode_note = (!notes.is_empty()).then(|| {
@@ -392,7 +395,7 @@ impl App {
 ",
             )
         });
-        let prompt_chars = tools::system_prompt(tools_enabled, self.working_dir())
+        let prompt_chars = tools::system_prompt(prompt, self.working_dir())
             .chars()
             .count()
             + self
@@ -434,7 +437,7 @@ impl App {
         Action::Start {
             request_id,
             messages,
-            tools_enabled,
+            prompt,
             mode_note,
         }
     }
@@ -2293,6 +2296,45 @@ pub(crate) mod tests {
         assert!(app.ticker_wanted(), "the send flash animates");
         app.spinner = app.spinner.wrapping_add(6);
         assert!(!app.ticker_wanted(), "the flash ends after a few ticks");
+    }
+
+    #[test]
+    fn a_chat_turn_asks_for_the_plain_prompt_and_leaves_the_ledger_home() {
+        let mut app = test_app();
+        app.mode = Mode::Chat;
+        // A finished delegate run: its ledger would ride an agent turn.
+        app.session
+            .delegations
+            .push(crate::delegation::DelegationRecord {
+                run: 1,
+                call_id: "call_1".to_owned(),
+                label: "the parser".to_owned(),
+                kind: crate::delegation::TaskKind::Change,
+                state: crate::delegation::RunState::Completed,
+                reasons: Vec::new(),
+                files: Vec::new(),
+                started_unix: 0,
+                finished_unix: Some(1),
+            });
+        app.input.set("how are you");
+        let Action::Start {
+            prompt, mode_note, ..
+        } = app.submit()
+        else {
+            panic!("the chat turn starts");
+        };
+        assert_eq!(prompt, tools::Prompt::Chat);
+        let note = mode_note.expect("the chat note rides the request");
+        assert!(note.contains("CHAT MODE"), "{note}");
+        assert!(!note.contains("DELEGAT"), "{note}");
+
+        // Build mode asks for the tool prompt again.
+        app.mode = Mode::Build;
+        app.input.set("fix it");
+        let Action::Start { prompt, .. } = app.submit() else {
+            panic!("the build turn starts");
+        };
+        assert_eq!(prompt, tools::Prompt::Tools);
     }
 
     #[test]

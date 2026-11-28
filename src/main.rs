@@ -40,7 +40,7 @@ use clipboard::read_clipboard;
 use terminal::{TerminalGuard, ctrl_c_interrupt};
 
 use crate::{
-    app::{Action, App, Mode, ToolEvent, ToolsMode},
+    app::{Action, App, ToolEvent, ToolsMode},
     backend::{Backend, StreamEvent},
     config::{AuthKind, Cli, Command, Config, load_session},
     session::{Message, Role, ToolCall},
@@ -641,7 +641,7 @@ fn dispatch(
         Action::Start {
             request_id,
             messages,
-            tools_enabled,
+            prompt,
             mode_note,
         } => {
             let backend = app.backend.clone();
@@ -655,7 +655,7 @@ fn dispatch(
                 let stream = std::panic::AssertUnwindSafe(backend.stream(
                     request_id,
                     messages,
-                    tools_enabled,
+                    prompt,
                     mode_note,
                     workspace,
                     sender.clone(),
@@ -955,7 +955,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
             // its answer: the verdict is decided from this at the end.
             let mut evidence = crate::delegation::Evidence::default();
             let mut timed_out = false;
-            let tools_enabled = mode != Mode::Chat && tools_mode.advertised();
+            let prompt = mode.prompt(tools_mode);
             let task = spec.task.clone();
             let mut messages = vec![Message::new(Role::User, task.clone())];
             let mut answer = String::new();
@@ -992,7 +992,7 @@ fn spawn_tool_calls(calls: Vec<ToolCall>, app: &mut App, channels: &Channels) {
                             .stream(
                                 u64::MAX,
                                 messages,
-                                tools_enabled,
+                                prompt,
                                 Some(crate::app::SUBAGENT_BRIEF.to_owned()),
                                 workspace,
                                 events,

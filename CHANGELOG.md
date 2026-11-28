@@ -8,6 +8,8 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Fixed
 
+- Chat mode is plain conversation again: the request carries no tool schema, no tool section in the system prompt, no AGENTS.md and no skills listing, so the model answers like a chat partner instead of an agent whose tools went missing. Tool history stays in the conversation as text.
+
 - An MCP server that dies is restarted once on the next call instead of staying dead until the process restarts: its stderr tail is in the error, and a server that answers with its own failure is reported to the model rather than restarted.
 - Discord Rich Presence actually shows up: the card is sent only after Discord answers the handshake, instead of being dropped when it went out in the same breath, and the worker no longer stalls on an idle read that stopped every later update.
 

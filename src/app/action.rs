@@ -4,6 +4,7 @@
 use crate::config::AuthKind;
 use crate::diff::FileDiff;
 use crate::session::{Message, ToolCall};
+use crate::tools::Prompt;
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,7 +51,9 @@ pub enum Action {
     Start {
         request_id: u64,
         messages: Vec<Message>,
-        tools_enabled: bool,
+        /// The system prompt this request gets: tool text, plain agent prose,
+        /// or a bare chat prompt.
+        prompt: Prompt,
         /// Mode instruction appended to the system prompt for this request.
         mode_note: Option<String>,
     },

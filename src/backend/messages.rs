@@ -8,15 +8,16 @@ use anyhow::Result;
 use crate::session::{Message, Role};
 use crate::{skills, tools};
 
-/// The system prompt every provider shape sends: the built-in tool prompt,
-/// the user's custom prompt, the mode note, then the skills listing.
+/// The system prompt every provider shape sends: the built-in prompt (tool,
+/// plain agent, or chat), the user's custom prompt, the mode note, then the
+/// skills listing.
 fn system_prompt(
-    tooling: bool,
+    prompt: tools::Prompt,
     custom_prompt: Option<&str>,
     mode_note: Option<&str>,
     workspace: &Path,
 ) -> String {
-    let mut system = tools::system_prompt(tooling, workspace);
+    let mut system = tools::system_prompt(prompt, workspace);
     // The user's prompt may duplicate what a built-in line already says: send
     // it anyway, since a provider may also enforce its own system prompt.
     if let Some(custom) = custom_prompt.filter(|custom| !custom.trim().is_empty()) {
@@ -29,7 +30,7 @@ fn system_prompt(
     }
     // Skills auto-load through read_file, so only tool-capable sessions get
     // the listing; slash invocation injects the content by itself.
-    if tooling {
+    if prompt.tools() {
         if let Some(listing) = skills::section(workspace) {
             system.push_str("\n\n");
             system.push_str(&listing);
@@ -40,12 +41,13 @@ fn system_prompt(
 
 pub(super) fn request_messages(
     messages: &[Message],
-    tooling: bool,
+    prompt: tools::Prompt,
     image_style: ImageStyle,
     custom_prompt: Option<&str>,
     mode_note: Option<&str>,
     workspace: &Path,
 ) -> Result<Vec<serde_json::Value>> {
+    let tooling = prompt.tools();
     let mut request = Vec::with_capacity(messages.len() + 1);
     let valid_tool_call_ids: std::collections::HashSet<&str> = messages
         .iter()
@@ -56,7 +58,7 @@ pub(super) fn request_messages(
     // turn's last tool result: every tool_call id still gets its own tool
     // message first, and the image sits in the turn it was read in.
     let mut tool_images: Vec<&crate::session::ImageAttachment> = Vec::new();
-    let system = system_prompt(tooling, custom_prompt, mode_note, workspace);
+    let system = system_prompt(prompt, custom_prompt, mode_note, workspace);
     request.push(serde_json::json!({
         "role": "system",
         "content": system,
@@ -259,12 +261,13 @@ pub(super) enum ImageStyle {
 /// add when prompt caching is explicitly configured.
 pub(super) fn anthropic_request_payload(
     messages: &[Message],
-    tooling: bool,
+    prompt: tools::Prompt,
     custom_prompt: Option<&str>,
     mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<(Option<String>, Vec<serde_json::Value>)> {
-    let system = system_prompt(tooling, custom_prompt, mode_note.as_deref(), workspace);
+    let tooling = prompt.tools();
+    let system = system_prompt(prompt, custom_prompt, mode_note.as_deref(), workspace);
 
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
     let valid_tool_call_ids: std::collections::HashSet<&str> = messages
@@ -481,12 +484,13 @@ const SKIP_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 /// add when temperature or safety threshold customization is needed.
 pub(super) fn gemini_request_payload(
     messages: &[Message],
-    tooling: bool,
+    prompt: tools::Prompt,
     custom_prompt: Option<&str>,
     mode_note: Option<String>,
     workspace: &Path,
 ) -> Result<(Option<serde_json::Value>, Vec<serde_json::Value>)> {
-    let system = system_prompt(tooling, custom_prompt, mode_note.as_deref(), workspace);
+    let tooling = prompt.tools();
+    let system = system_prompt(prompt, custom_prompt, mode_note.as_deref(), workspace);
 
     let mut call_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -698,6 +702,7 @@ mod tests {
     use super::request_messages;
     use crate::backend::ImageStyle;
     use crate::session::{Message, Role, ToolCall};
+    use crate::tools::Prompt;
     use std::path::Path;
 
     /// A failed request is not dropped from history: the model gets the
@@ -710,7 +715,7 @@ mod tests {
         ];
         let request = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             None,
             None,
@@ -758,7 +763,7 @@ mod tests {
 
         let tooling = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             None,
             None,
@@ -771,7 +776,7 @@ mod tests {
 
         let plain = request_messages(
             &messages,
-            false,
+            Prompt::NoTools,
             ImageStyle::None,
             None,
             None,
@@ -790,12 +795,49 @@ mod tests {
         }));
     }
 
+    /// Chat mode sends a conversational system prompt: no tool text, no
+    /// skills listing, and tool history turned back into prose.
+    #[test]
+    fn a_chat_request_carries_no_tool_context() {
+        let mut assistant = Message::new(Role::Assistant, "");
+        assistant.tool_calls = Some(vec![ToolCall::new(
+            "call_1",
+            "read_file",
+            r#"{"path":"README.md"}"#,
+        )]);
+        let messages = vec![
+            Message::new(Role::User, "read it"),
+            assistant,
+            Message::tool_result("call_1", "contents"),
+        ];
+        let chat = request_messages(
+            &messages,
+            Prompt::Chat,
+            ImageStyle::None,
+            None,
+            None,
+            Path::new("."),
+        )
+        .unwrap();
+        let system = chat[0]["content"].as_str().unwrap();
+        assert!(system.contains("chat companion"), "{system}");
+        assert!(!system.contains("run_command"), "{system}");
+        assert!(!system.contains("The user installed skills"), "{system}");
+        // The tool round is still in history, but as plain user text.
+        assert!(chat.iter().all(|entry| entry.get("tool_calls").is_none()));
+        assert!(chat.iter().any(|entry| {
+            entry["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("Tool result"))
+        }));
+    }
+
     #[test]
     fn the_mode_instruction_lands_in_the_system_prompt() {
         let messages = vec![Message::new(Role::User, "hi")];
         let plain = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             None,
             None,
@@ -804,7 +846,7 @@ mod tests {
         .unwrap();
         let plan = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             None,
             Some("PLAN MODE: propose only"),
@@ -828,7 +870,7 @@ mod tests {
         let messages = vec![Message::new(Role::User, "hi")];
         let request = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             Some(" Always answer in rhyme. "),
             Some("PLAN MODE: propose only"),
@@ -844,7 +886,7 @@ mod tests {
         assert_eq!(
             request_messages(
                 &messages,
-                true,
+                Prompt::Tools,
                 ImageStyle::None,
                 Some("  "),
                 None,
@@ -853,7 +895,7 @@ mod tests {
             .unwrap(),
             request_messages(
                 &messages,
-                true,
+                Prompt::Tools,
                 ImageStyle::None,
                 None,
                 None,
@@ -877,7 +919,7 @@ mod tests {
 
         let parts = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::Parts,
             None,
             None,
@@ -901,7 +943,7 @@ mod tests {
         // Ollama wants a flat base64 array on the message itself.
         let ollama = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::Ollama,
             None,
             None,
@@ -914,7 +956,7 @@ mod tests {
         // Plain requests keep the raw attachment field out.
         let plain = request_messages(
             &messages,
-            false,
+            Prompt::NoTools,
             ImageStyle::None,
             None,
             None,
@@ -951,7 +993,7 @@ mod tests {
 
         let request = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::Parts,
             None,
             None,
@@ -1005,7 +1047,7 @@ mod tests {
 
         let request = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::Parts,
             None,
             None,
@@ -1045,7 +1087,8 @@ mod tests {
         ];
 
         let (system, payload) =
-            anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            anthropic_request_payload(&messages, Prompt::Tools, None, None, Path::new("."))
+                .unwrap();
         assert!(system.is_some());
         assert_eq!(payload.len(), 3);
         assert_eq!(payload[0]["role"], "user");
@@ -1072,7 +1115,7 @@ mod tests {
         ];
 
         let (instruction, contents) =
-            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            gemini_request_payload(&messages, Prompt::Tools, None, None, Path::new(".")).unwrap();
         assert!(instruction.is_some());
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[0]["role"], "user");
@@ -1101,7 +1144,7 @@ mod tests {
         let messages = vec![Message::new(Role::User, "go"), assistant];
 
         let (_, contents) =
-            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            gemini_request_payload(&messages, Prompt::Tools, None, None, Path::new(".")).unwrap();
         assert_eq!(contents[1]["parts"][0]["thoughtSignature"], "sig-1");
         assert!(contents[1]["parts"][1].get("thoughtSignature").is_none());
 
@@ -1109,7 +1152,7 @@ mod tests {
         old.tool_calls = Some(vec![ToolCall::new("call_3", "list_dir", "{}")]);
         let messages = vec![Message::new(Role::User, "go"), old];
         let (_, contents) =
-            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            gemini_request_payload(&messages, Prompt::Tools, None, None, Path::new(".")).unwrap();
         assert_eq!(
             contents[1]["parts"][0]["thoughtSignature"],
             SKIP_THOUGHT_SIGNATURE
@@ -1140,7 +1183,7 @@ mod tests {
             Message::tool_result("call_1_0", "file.txt"),
         ];
         let (_, contents) =
-            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            gemini_request_payload(&messages, Prompt::Tools, None, None, Path::new(".")).unwrap();
         assert_eq!(
             contents[1]["parts"][0]["thoughtSignature"],
             "sig-round-trip"
@@ -1158,7 +1201,7 @@ mod tests {
 
         let request = request_messages(
             &[assistant],
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             None,
             None,
@@ -1183,7 +1226,7 @@ mod tests {
 
         let openai = request_messages(
             &messages,
-            true,
+            Prompt::Tools,
             ImageStyle::None,
             None,
             None,
@@ -1196,12 +1239,13 @@ mod tests {
         assert!(openai[2]["content"].as_str().unwrap().contains("hi"));
 
         let (_, anthropic) =
-            anthropic_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            anthropic_request_payload(&messages, Prompt::Tools, None, None, Path::new("."))
+                .unwrap();
         assert_eq!(anthropic.len(), 1);
         assert_eq!(anthropic[0]["role"], "user");
 
         let (_, gemini) =
-            gemini_request_payload(&messages, true, None, None, Path::new(".")).unwrap();
+            gemini_request_payload(&messages, Prompt::Tools, None, None, Path::new(".")).unwrap();
         assert_eq!(gemini.len(), 1);
         assert_eq!(gemini[0]["role"], "user");
     }
