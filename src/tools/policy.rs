@@ -193,11 +193,17 @@ pub fn system_prompt(tools_enabled: bool, workspace: &Path) -> String {
              On Windows, computer_use drives the real desktop: it takes a screenshot, runs pointer \
              or keyboard actions, then attaches a second screenshot of the result, so aim by the \
              pixels you saw and describe what the new screenshot shows. The agent has its own \
-             pointer: hovering posts a move to the window under the point; clicks, drags \
-             and the wheel inject real input and then restore the user's pointer \
-             position, so the person at the keyboard keeps their mouse. The agent cursor is a \
+             pointer: it glides from point to point with an eased animation, hovering by posting a \
+             move to the window under the point; clicks, drags and the wheel inject real input and \
+             then restore the user's pointer position, so the person at the keyboard keeps their \
+             mouse. The agent cursor is a \
              visible click-through desktop arrow and is drawn into the capture, so do not \
-             describe the system pointer as yours. Every call asks the user \
+             describe the system pointer as yours. Pass `window` (part of a title) to drive one \
+             window in the background instead: input is posted to that window's handle and the \
+             capture is of the window itself, so the system pointer does not move and nothing is \
+             raised, which suits working in a window the user is watching. In that mode \
+             coordinates are window client pixels and posted input may be ignored by apps that \
+             draw themselves. Every call asks the user \
              first; one call should do one visible thing. The result reports the frame origin and \
              size in screen pixels, the desktop bounds and where the agent's pointer ended up, so add the \
              frame origin to a pixel you pick in the image to get the coordinate to click. Crop \

@@ -34,7 +34,7 @@ impl CommandSpec {
     }
 }
 
-pub const COMMANDS: [CommandSpec; 20] = [
+pub const COMMANDS: [CommandSpec; 22] = [
     CommandSpec {
         name: "/help",
         description: "Show keys, commands and the version",
@@ -44,6 +44,11 @@ pub const COMMANDS: [CommandSpec; 20] = [
         name: "/session",
         description: "Sessions and tabs: list, new, tab, rename, close, next, prev, 1-9",
         argument: Some("action"),
+    },
+    CommandSpec {
+        name: "/new",
+        description: "Start a new session",
+        argument: None,
     },
     CommandSpec {
         name: "/provider",
@@ -103,6 +108,11 @@ pub const COMMANDS: [CommandSpec; 20] = [
     CommandSpec {
         name: "/revert",
         description: "Edit and re-run a previous prompt",
+        argument: None,
+    },
+    CommandSpec {
+        name: "/timeline",
+        description: "Jump to a previous prompt in the transcript",
         argument: None,
     },
     CommandSpec {
@@ -326,6 +336,7 @@ mod tests {
             vec![
                 "/help",
                 "/session",
+                "/new",
                 "/provider",
                 "/models",
                 "/set",
@@ -338,6 +349,7 @@ mod tests {
                 "/skills",
                 "/mcp",
                 "/revert",
+                "/timeline",
                 "/goal",
                 "/compact",
                 "/export",
@@ -348,6 +360,7 @@ mod tests {
         );
         assert_eq!(command_names("/c"), vec!["/cd", "/compact"]);
         assert_eq!(command_names("/m"), vec!["/models", "/mcp"]);
+        assert_eq!(command_names("/n"), vec!["/new"]);
         assert_eq!(command_names("/e"), vec!["/export"]);
         assert_eq!(command_names("/f"), vec!["/fork"]);
         assert_eq!(command_names("/i"), vec!["/init"]);
@@ -360,6 +373,7 @@ mod tests {
         assert_eq!(command_names("/p"), vec!["/provider"]);
         assert_eq!(command_names("/a"), vec!["/agents"]);
         assert_eq!(command_names("/q"), vec!["/quit"]);
+        assert_eq!(command_names("/t"), vec!["/timeline"]);
         // The query is matched case-insensitively against the name.
         assert_eq!(command_names("/MO"), vec!["/models"]);
         assert!(command_names("/model gpt").is_empty());

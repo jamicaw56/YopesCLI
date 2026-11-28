@@ -13,7 +13,7 @@ fn computer_use_schema() -> Value {
         "type": "function",
         "function": {
             "name": "computer_use",
-            "description": "Drive the desktop on Windows: point, click, scroll, drag, type text, press keys, wait between steps, focus a window and crop the capture to a region, then see the result. The agent has its own visible pointer: a click-through topmost arrow follows mouse steps on the desktop and remains between calls, while mouse steps post button messages to the window under the point so the system cursor never moves and the person at the keyboard keeps their mouse. The arrow is also drawn into the capture as a highlighted cursor, with its hotspot on the point the call last aimed at. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. The result reports the frame origin and size in screen pixels, the desktop bounds and where the agent's pointer ended up: add the frame origin to a pixel you pick in the image to get the screen coordinate to click. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
+            "description": "Drive the desktop on Windows: point, click, scroll, drag, type text, press keys, wait between steps, focus a window and crop the capture to a region, then see the result. The agent has its own visible pointer: a click-through topmost arrow glides smoothly from point to point on the desktop (eased, drawn at about 60fps) and remains between calls, while mouse steps post button messages to the window under the point so the system cursor never moves and the person at the keyboard keeps their mouse. The arrow is also drawn into the capture as a highlighted cursor, with its hotspot on the point the call last aimed at. One screenshot is captured before the actions and one after; the 'after' screenshot is attached to this tool result so a vision-capable model sees what changed. The result reports the frame origin and size in screen pixels, the desktop bounds and where the agent's pointer ended up: add the frame origin to a pixel you pick in the image to get the screen coordinate to click. Coordinates are screen pixels, so the screenshot tells you where to aim. Windows only.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -51,6 +51,10 @@ fn computer_use_schema() -> Value {
                     "settle_ms": {
                         "type": "integer",
                         "description": "How long to let the desktop repaint after the actions before the second screenshot, in milliseconds. Defaults to 350, capped at 10000. Raise it for a slow app; use a wait step when the delay belongs between two clicks."
+                    },
+                    "window": {
+                        "type": "string",
+                        "description": "Drive this window in the background instead of the desktop: part of its title, matched case-insensitively on the visible top-level windows. The actions are posted to that window's handle, so the system pointer does not move and no window is raised, and the capture is of the window itself rather than the screen, so the person at the keyboard keeps their desktop and can still watch. Coordinates become window client pixels: the frame origin is (0, 0) and image pixel (x, y) is the client point to act on. A focus_window step retargets later steps to another window, still without raising it. Posted input is best-effort: plain Win32 controls accept it, while apps that draw themselves (Chromium, Electron, games) often ignore posted clicks and keys; the result says whether the window rendered itself or the screen was copied."
                     },
                     "actions": {
                         "type": "array",

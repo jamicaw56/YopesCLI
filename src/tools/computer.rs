@@ -28,6 +28,8 @@ use super::{parse, truncate_output};
 
 #[cfg(any(windows, test))]
 mod cursor;
+#[cfg(any(windows, test))]
+mod window;
 
 #[derive(Debug, Deserialize)]
 struct ComputerUseArgs {
@@ -50,6 +52,11 @@ struct ComputerUseArgs {
     /// the delay belongs between two clicks.
     #[serde(default)]
     settle_ms: Option<u64>,
+    /// Drive one window in the background instead of the whole desktop: input
+    /// is posted to that window's handle, so the system pointer never moves
+    /// and no window is raised, and the capture comes from the window itself.
+    #[serde(default)]
+    window: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -180,10 +187,30 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
     {
         anyhow::bail!("region needs a width and a height above zero");
     }
+    let window = args
+        .window
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    if args.window.is_some() && window.is_none() {
+        anyhow::bail!("window needs a title to look for, or leave it out to drive the desktop");
+    }
+    if window.is_some() && args.screen != 0 {
+        anyhow::bail!(
+            "screen picks a display for a desktop capture; a window target names the window itself"
+        );
+    }
     if args.actions.is_empty() && intent.is_empty() {
         anyhow::bail!("computer_use needs an action: describe it, or list the actions to run");
     }
     let settle = args.settle_ms.unwrap_or(DEFAULT_SETTLE_MS).min(MAX_WAIT_MS);
+
+    // One window, driven in the background: posted input, no focus change, and
+    // a capture of the window itself, so the person at the keyboard keeps both
+    // their pointer and a view of what the agent is doing.
+    if let Some(title) = window {
+        return background(title, &intent, &args, settle);
+    }
 
     // The "before" capture proves the desktop answered; the model receives
     // only the state after the actions, one screenshot per call.
@@ -234,6 +261,27 @@ pub(super) fn computer_use(arguments: &str) -> anyhow::Result<String> {
     report.push_str("After: ");
     report.push_str(&after.path.display().to_string());
     Ok(truncate_output(report))
+}
+
+/// The background branch: one window, driven without the foreground.
+#[cfg(windows)]
+fn background(
+    title: &str,
+    intent: &str,
+    args: &ComputerUseArgs,
+    settle: u64,
+) -> anyhow::Result<String> {
+    window::run(intent, title, &args.actions, args.region, settle)
+}
+
+#[cfg(not(windows))]
+fn background(
+    _title: &str,
+    _intent: &str,
+    _args: &ComputerUseArgs,
+    _settle: u64,
+) -> anyhow::Result<String> {
+    anyhow::bail!("computer_use is only implemented on Windows")
 }
 
 /// The line naming the agent's pointer, and that it is the agent's alone.
@@ -448,7 +496,16 @@ fn run_actions(steps: &[Step]) -> anyhow::Result<Vec<String>> {
     if steps.is_empty() {
         return Ok(Vec::new());
     }
-    let script = windows_script(steps)?;
+    let script = windows_script(steps, remembered_pointer())?;
+    run_script(&script)?;
+    Ok(steps.iter().map(describe).collect())
+}
+
+/// Run one generated PowerShell script in a hidden STA process and hand back
+/// its stdout. A failed script becomes the call's error, with the script's own
+/// message rather than a bare exit code.
+#[cfg(any(windows, test))]
+fn run_script(script: &str) -> anyhow::Result<String> {
     let output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
@@ -457,7 +514,7 @@ fn run_actions(steps: &[Step]) -> anyhow::Result<Vec<String>> {
             "-WindowStyle",
             "Hidden",
             "-Command",
-            &script,
+            script,
         ])
         .output()
         .map_err(|error| anyhow::anyhow!("running powershell to drive the desktop: {error}"))?;
@@ -471,7 +528,13 @@ fn run_actions(steps: &[Step]) -> anyhow::Result<Vec<String>> {
         };
         anyhow::bail!("computer_use failed: {}", text.trim());
     }
-    Ok(steps.iter().map(describe).collect())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(all(not(windows), test))]
+fn run_script(script: &str) -> anyhow::Result<String> {
+    let _ = script;
+    anyhow::bail!("computer_use is only implemented on Windows")
 }
 
 #[cfg(not(windows))]
@@ -491,6 +554,9 @@ struct Shot {
     /// Where the system pointer sits: only the agent pointer's starting point
     /// the first time it aims.
     cursor: Option<(i32, i32)>,
+    /// The window this frame came from, in background mode; a foreground
+    /// frame is the desktop, which is named as such.
+    target: Option<String>,
 }
 
 /// What the capture script reports: the frame's origin and size, the whole
@@ -511,9 +577,17 @@ impl Shot {
         let (x, y) = self.origin;
         let (width, height) = self.size;
         let (dx, dy, dw, dh) = self.desktop;
-        format!(
-            "Frame: ({x}, {y}) {width}x{height} screen pixels\nDesktop: ({dx}, {dy}) {dw}x{dh}\n"
-        )
+        match &self.target {
+            Some(title) => format!(
+                "Frame: ({x}, {y}) {width}x{height} client pixels of the window `{title}`\n\
+                 Window: client area at ({dx}, {dy}) {dw}x{dh} screen pixels\n"
+            ),
+            None => {
+                format!(
+                    "Frame: ({x}, {y}) {width}x{height} screen pixels\nDesktop: ({dx}, {dy}) {dw}x{dh}\n"
+                )
+            }
+        }
     }
 }
 
@@ -595,6 +669,7 @@ exit 0;"#
         size: geometry.size,
         desktop: geometry.desktop,
         cursor: geometry.cursor,
+        target: None,
     })
 }
 
@@ -651,10 +726,80 @@ fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// The script that performs every step in order. Coordinates come from the
-/// model as plain integers, and text only crosses as a quoted literal.
+/// How long one frame of a pointer glide takes. Fast enough to read as a hand
+/// moving, slow enough that the window under the pointer and the agent's
+/// overlay both see the points in between instead of one jump.
 #[cfg(any(windows, test))]
-fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
+const GLIDE_STEP_MS: u64 = 14;
+
+/// Points from just after `from` to `to`, along a line eased with a
+/// smoothstep: slow off the mark, quick in the middle, gentle into the target,
+/// ending exactly on `to`. `from` is where the agent's pointer already sits;
+/// when that is unknown, or the target is already under it, the path is the
+/// single target point, so a call that aims nowhere new still acts at once.
+#[cfg(any(windows, test))]
+fn glide(from: Option<(i32, i32)>, to: (i32, i32)) -> Vec<(i32, i32)> {
+    let Some((from_x, from_y)) = from else {
+        return vec![to];
+    };
+    let (dx, dy) = (
+        i64::from(to.0) - i64::from(from_x),
+        i64::from(to.1) - i64::from(from_y),
+    );
+    let distance = ((dx * dx + dy * dy) as f64).sqrt();
+    if distance < 2.0 {
+        return vec![to];
+    }
+    // A short hop takes a handful of frames and a long sweep more, so the
+    // pointer keeps a roughly even speed instead of every move taking as long.
+    let steps = ((distance / 28.0).ceil() as usize).clamp(6, 22);
+    let mut path: Vec<(i32, i32)> = Vec::with_capacity(steps);
+    for step in 1..=steps {
+        let progress = step as f64 / steps as f64;
+        let eased = progress * progress * (3.0 - 2.0 * progress);
+        let x = from_x + (dx as f64 * eased).round() as i32;
+        let y = from_y + (dy as f64 * eased).round() as i32;
+        // A slow start rounds neighbouring frames onto the same pixel.
+        if path.last() != Some(&(x, y)) {
+            path.push((x, y));
+        }
+    }
+    match path.last_mut() {
+        Some(last) => *last = to,
+        None => path.push(to),
+    }
+    path
+}
+
+/// The hover posts that walk the agent's pointer from `from` to `to`. Every
+/// point but the last may miss a window — a sweep across a gap on the desktop
+/// still lands where it was aimed — but the point the step acts on must exist,
+/// so a call that aims at nothing fails instead of clicking into empty space.
+#[cfg(any(windows, test))]
+fn hover_script(from: Option<(i32, i32)>, to: (i32, i32)) -> String {
+    let path = glide(from, to);
+    let last = path.len().saturating_sub(1);
+    let mut script = String::new();
+    for (index, (x, y)) in path.iter().enumerate() {
+        if index == last {
+            script.push_str(&format!(
+                "if (-not [YopesInput]::Hover({x}, {y})) {{ [Console]::Error.Write('nothing to point at ({x}, {y})'); exit 5 }};\n"
+            ));
+        } else {
+            script.push_str(&format!(
+                "[void][YopesInput]::Hover({x}, {y});\nStart-Sleep -Milliseconds {GLIDE_STEP_MS};\n"
+            ));
+        }
+    }
+    script
+}
+
+/// The script that performs every step in order, starting from `start` where
+/// the agent's pointer already sits so the first aim glides instead of jumping.
+/// Coordinates come from the model as plain integers, and text only crosses as
+/// a quoted literal.
+#[cfg(any(windows, test))]
+fn windows_script(steps: &[Step], start: Option<(i32, i32)>) -> anyhow::Result<String> {
     let mut script = String::from(
         "Add-Type -AssemblyName System.Windows.Forms;\n\
          Add-Type -AssemblyName System.Drawing;\n\
@@ -711,10 +856,32 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            // Posted messages are ignored by Windows Terminal, Chromium and most\n\
            // GPU windows, so the click is also injected as real input. The\n\
            // pointer is put back where the user left it straight afterwards.\n\
-           static void Restore(POINT saved) { SetCursorPos(saved.X, saved.Y); Mark(saved.X, saved.Y); }\n\
+           // The user's pointer goes back where it was; the agent's own\n\
+           // pointer stays where it aimed.\n\
+           static void Restore(POINT saved) { SetCursorPos(saved.X, saved.Y); }\n\
+           // Walk the system pointer to the target instead of snapping it:\n\
+           // the same eased path the agent's arrow takes, so a click on the\n\
+           // far side of the screen reads as a hand moving, not a teleport.\n\
+           // A short hop is left to the caller's SetCursorPos.\n\
+           static void Glide(int toX, int toY) {\n\
+             POINT from; GetCursorPos(out from);\n\
+             int dx = toX - from.X, dy = toY - from.Y;\n\
+             double distance = Math.Sqrt((double)dx * dx + (double)dy * dy);\n\
+             if (distance < 120) { SetCursorPos(toX, toY); return; }\n\
+             int steps = (int)Math.Ceiling(distance / 40.0);\n\
+             if (steps < 4) steps = 4;\n\
+             if (steps > 14) steps = 14;\n\
+             for (int i = 1; i < steps; i++) {\n\
+               double p = (double)i / steps;\n\
+               double e = p * p * (3 - 2 * p);\n\
+               SetCursorPos(from.X + (int)Math.Round(dx * e), from.Y + (int)Math.Round(dy * e));\n\
+               System.Threading.Thread.Sleep(12);\n\
+             }\n\
+             SetCursorPos(toX, toY);\n\
+           }\n\
            public static void RealClick(int x, int y, uint down, uint up, int count) {\n\
              POINT saved; GetCursorPos(out saved);\n\
-             SetCursorPos(x, y);\n\
+             Glide(x, y);\n\
              System.Threading.Thread.Sleep(40);\n\
              for (int i = 0; i < count; i++) {\n\
                Raw(RawDown(down), 0);\n\
@@ -726,26 +893,35 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
            }\n\
            public static void RealWheel(int x, int y, int delta) {\n\
              POINT saved; GetCursorPos(out saved);\n\
-             SetCursorPos(x, y);\n\
+             Glide(x, y);\n\
              System.Threading.Thread.Sleep(40);\n\
              Raw(RawWheel, delta);\n\
              System.Threading.Thread.Sleep(120);\n\
              Restore(saved);\n\
            }\n\
-           public static void RealDrag(int fromX, int fromY, int toX, int toY, uint down, uint up) {\n\
-             POINT saved; GetCursorPos(out saved);\n\
-             SetCursorPos(fromX, fromY);\n\
+           // A drag is a press, a glide and a release; the caller walks the\n\
+           // path, so the window under the pointer sees every point.\n\
+           static POINT savedDrag;\n\
+           public static bool DragBegin(int x, int y, uint down) {\n\
+             IntPtr window = At(x, y);\n\
+             if (window == IntPtr.Zero) return false;\n\
+             Mark(x, y);\n\
+             SetForegroundWindow(GetAncestor(window, 2));\n\
+             GetCursorPos(out savedDrag);\n\
+             Glide(x, y);\n\
              System.Threading.Thread.Sleep(60);\n\
              Raw(RawDown(down), 0);\n\
              System.Threading.Thread.Sleep(80);\n\
-             for (int step = 1; step <= 4; step++) {\n\
-               SetCursorPos(fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4);\n\
-               Mark(fromX + (toX - fromX) * step / 4, fromY + (toY - fromY) * step / 4);\n\
-               System.Threading.Thread.Sleep(40);\n\
-             }\n\
+             return true;\n\
+           }\n\
+           public static void DragStep(int x, int y) {\n\
+             SetCursorPos(x, y);\n\
+             Mark(x, y);\n\
+           }\n\
+           public static void DragEnd(uint up) {\n\
              Raw(RawUp(up), 0);\n\
              System.Threading.Thread.Sleep(120);\n\
-             Restore(saved);\n\
+             Restore(savedDrag);\n\
            }\n\
            public static string CursorPath = \"\";\n\
            // The visible overlay polls this file; never move the system cursor.\n\
@@ -796,15 +972,6 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
              RealWheel(x, y, delta);\n\
              return true;\n\
            }\n\
-           public static bool Drag(int fromX, int fromY, int toX, int toY, uint down, uint up) {\n\
-             IntPtr window = At(fromX, fromY);\n\
-             if (window == IntPtr.Zero) return false;\n\
-             Mark(fromX, fromY);\n\
-             SetForegroundWindow(GetAncestor(window, 2));\n\
-             System.Threading.Thread.Sleep(80);\n\
-             RealDrag(fromX, fromY, toX, toY, down, up);\n\
-             return true;\n\
-           }\n\
          }\n\
          '@;\n\
          Add-Type @'\n\
@@ -827,12 +994,14 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
         "[YopesInput]::CursorPath = {};\n",
         ps_quote(&cursor::state_path().display().to_string())
     ));
+    // Where the agent's pointer already sits, so the first aim glides from it.
+    let mut last = start;
     for step in steps {
         match step {
             Step::Move { x, y } => {
-                script.push_str(&format!(
-                    "if (-not [YopesInput]::Hover({x}, {y})) {{ [Console]::Error.Write('nothing to point at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 60;\n"
-                ));
+                script.push_str(&hover_script(last, (*x, *y)));
+                script.push_str("Start-Sleep -Milliseconds 60;\n");
+                last = Some((*x, *y));
             }
             Step::Click {
                 x,
@@ -842,20 +1011,26 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
             } => {
                 let (down, up) = click_messages(*button);
                 let count = (*count).clamp(1, 3);
+                script.push_str(&hover_script(last, (*x, *y)));
                 script.push_str(&format!(
                     "if (-not [YopesInput]::Click({x}, {y}, [YopesInput]::{down}, [YopesInput]::{up}, {count})) {{ [Console]::Error.Write('nothing to click at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 60;\n"
                 ));
+                last = Some((*x, *y));
             }
             Step::DoubleClick { x, y } => {
+                script.push_str(&hover_script(last, (*x, *y)));
                 script.push_str(&format!(
                     "if (-not [YopesInput]::Click({x}, {y}, [YopesInput]::LeftDown, [YopesInput]::LeftUp, 2)) {{ [Console]::Error.Write('nothing to click at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 60;\n"
                 ));
+                last = Some((*x, *y));
             }
             Step::Scroll { x, y, amount } => {
                 let delta = (*amount).clamp(-10, 10) * 120;
+                script.push_str(&hover_script(last, (*x, *y)));
                 script.push_str(&format!(
                     "if (-not [YopesInput]::Scroll({x}, {y}, {delta})) {{ [Console]::Error.Write('nothing to scroll at ({x}, {y})'); exit 5 }};\nStart-Sleep -Milliseconds 120;\n"
                 ));
+                last = Some((*x, *y));
             }
             Step::Drag {
                 from_x,
@@ -865,9 +1040,21 @@ fn windows_script(steps: &[Step]) -> anyhow::Result<String> {
                 button,
             } => {
                 let (down, up) = click_messages(*button);
+                script.push_str(&hover_script(last, (*from_x, *from_y)));
                 script.push_str(&format!(
-                    "if (-not [YopesInput]::Drag({from_x}, {from_y}, {to_x}, {to_y}, [YopesInput]::{down}, [YopesInput]::{up})) {{ [Console]::Error.Write('nothing to drag at ({from_x}, {from_y})'); exit 5 }};\nStart-Sleep -Milliseconds 120;\n"
+                    "if (-not [YopesInput]::DragBegin({from_x}, {from_y}, [YopesInput]::{down})) {{ [Console]::Error.Write('nothing to drag at ({from_x}, {from_y})'); exit 5 }};\n"
                 ));
+                // The press, the glide and the release are three calls so the
+                // window under the pointer sees every point of the path.
+                for (x, y) in glide(Some((*from_x, *from_y)), (*to_x, *to_y)) {
+                    script.push_str(&format!(
+                        "[YopesInput]::DragStep({x}, {y});\nStart-Sleep -Milliseconds {GLIDE_STEP_MS};\n"
+                    ));
+                }
+                script.push_str(&format!(
+                    "[YopesInput]::DragEnd([YopesInput]::{up});\nStart-Sleep -Milliseconds 120;\n"
+                ));
+                last = Some((*to_x, *to_y));
             }
             Step::Type { text } => {
                 script.push_str(&format!(
@@ -1048,8 +1235,8 @@ fn wrap_modified(key: &str, literal: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SETTLE_MS, MAX_STEPS, MAX_WAIT_MS, cursor_line, describe, key_name, pointer_target,
-        screenshot_path, send_keys_literal, windows_script,
+        DEFAULT_SETTLE_MS, GLIDE_STEP_MS, MAX_STEPS, MAX_WAIT_MS, cursor_line, describe, glide,
+        hover_script, key_name, pointer_target, screenshot_path, send_keys_literal, windows_script,
     };
 
     #[test]
@@ -1119,7 +1306,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_generated_script_compiles_in_powershell() {
-        let script = super::windows_script(&[]).expect("script");
+        let script = super::windows_script(&[], None).expect("script");
         assert!(!script.contains("[YopesInput]::Click("), "{script}");
         let output = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", "-"])
@@ -1149,6 +1336,44 @@ mod tests {
     }
 
     #[test]
+    fn a_glide_walks_to_the_target_in_eased_steps() {
+        // Without a known start there is nothing to glide from.
+        assert_eq!(glide(None, (40, 60)), vec![(40, 60)]);
+        // Already on the target: one point, acted on at once.
+        assert_eq!(glide(Some((40, 60)), (40, 60)), vec![(40, 60)]);
+        let path = glide(Some((0, 0)), (400, 200));
+        assert!(path.len() >= 6, "{path:?}");
+        assert_eq!(path.last(), Some(&(400, 200)), "{path:?}");
+        // Every point sits on the straight line and never passes the target.
+        let mut previous = 0.0;
+        for (x, y) in &path {
+            let off = (*y * 2 - *x).abs();
+            assert!(off <= 1, "({x}, {y}) is off the line: {path:?}");
+            let at = ((x * x + y * y) as f64).sqrt();
+            assert!(at >= previous, "{path:?}");
+            previous = at;
+        }
+        // Eased, not linear: the first hop is shorter than the middle one.
+        let hops: Vec<i32> = path.windows(2).map(|pair| pair[1].0 - pair[0].0).collect();
+        let first = *hops.first().unwrap();
+        let biggest = *hops.iter().max().unwrap();
+        assert!(first < biggest, "{hops:?}");
+        assert_eq!(GLIDE_STEP_MS, 14);
+    }
+
+    #[test]
+    fn a_hover_path_posts_every_point_and_fails_only_at_the_target() {
+        let script = hover_script(Some((0, 0)), (60, 0));
+        let posted = script.matches("[void][YopesInput]::Hover(").count();
+        assert!(posted >= 5, "{script}");
+        // Only the point the step acts on must find a window: a sweep across
+        // a gap on the desktop must not fail the call.
+        assert_eq!(script.matches("nothing to point at").count(), 1, "{script}");
+        assert!(script.contains("[YopesInput]::Hover(60, 0)"), "{script}");
+        assert!(script.contains("Start-Sleep -Milliseconds 14"), "{script}");
+    }
+
+    #[test]
     fn the_script_keeps_every_step_and_ends_cleanly() {
         let steps = vec![
             super::Step::Move { x: 5, y: 6 },
@@ -1156,7 +1381,7 @@ mod tests {
                 text: "it's".to_owned(),
             },
         ];
-        let script = windows_script(&steps).unwrap();
+        let script = windows_script(&steps, None).unwrap();
         // Hover is posted, so the pointer stays put; a click injects real
         // input and restores the pointer right after.
         assert!(
@@ -1171,7 +1396,6 @@ mod tests {
             script.contains("static void Mark(int x, int y)"),
             "{script}"
         );
-        assert!(script.contains("Mark(fromX + (toX - fromX)"), "{script}");
         assert!(script.contains("SendWait('it{'}s')"), "{script}");
         assert!(script.ends_with("exit 0;\n"), "{script}");
     }
@@ -1187,7 +1411,7 @@ mod tests {
         ]}"#,
         )
         .unwrap();
-        let script = windows_script(&parsed.actions).unwrap();
+        let script = windows_script(&parsed.actions, None).unwrap();
         assert!(
             script.contains("Click(3, 4, [YopesInput]::RightDown, [YopesInput]::RightUp, 2)"),
             "{script}"
@@ -1198,9 +1422,13 @@ mod tests {
         );
         assert!(script.contains("Scroll(7, 8, -360)"), "{script}");
         assert!(
-            script.contains("Drag(1, 2, 3, 4, [YopesInput]::LeftDown, [YopesInput]::LeftUp)"),
+            script.contains("DragBegin(1, 2, [YopesInput]::LeftDown)"),
             "{script}"
         );
+        assert!(script.contains("DragEnd([YopesInput]::LeftUp)"), "{script}");
+        // The drag itself glides: a press, the points between, a release.
+        let drag_steps = script.matches("[YopesInput]::DragStep(").count();
+        assert!(drag_steps >= 2, "{script}");
         // A point with no window under it fails the call instead of silently
         // acting nowhere.
         assert!(script.contains("nothing to click at (3, 4)"), "{script}");
@@ -1281,7 +1509,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(describe(&parsed.actions[0]), "wait 500 ms");
-        let script = windows_script(&parsed.actions).unwrap();
+        let script = windows_script(&parsed.actions, None).unwrap();
         assert!(
             script.contains("Start-Sleep -Milliseconds 500;"),
             "{script}"
@@ -1334,6 +1562,7 @@ mod tests {
             size: (800, 600),
             desktop: (-1920, 0, 3840, 1080),
             cursor: Some((640, 480)),
+            target: None,
         };
         let report = format!("{}{}", shot.describe(), cursor_line(Some((640, 480)), true));
         assert!(report.contains("Frame: (100, 200) 800x600"), "{report}");

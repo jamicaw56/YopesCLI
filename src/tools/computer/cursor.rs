@@ -262,7 +262,12 @@ public static class YopesCursorWindow {
 
   $script:lastCursorX = [int]::MinValue
   $script:lastCursorY = [int]::MinValue
-  function Move-AgentCursor {
+  $script:shownX = 0.0
+  $script:shownY = 0.0
+  $script:aimX = 0
+  $script:aimY = 0
+  $script:hasAim = $false
+  function Read-Aim {
     if (-not (Test-Path -LiteralPath $StatePath)) { return }
     $stream = New-Object System.IO.FileStream($StatePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
     $reader = New-Object System.IO.StreamReader($stream)
@@ -275,21 +280,47 @@ public static class YopesCursorWindow {
     $x = 0
     $y = 0
     if ([int]::TryParse($parts[0], [ref]$x) -and [int]::TryParse($parts[1], [ref]$y)) {
-      if ($x -ne $script:lastCursorX -or $y -ne $script:lastCursorY) {
-        [YopesCursorWindow]::Move($script:cursorWindow, $x, $y)
-        $script:lastCursorX = $x
-        $script:lastCursorY = $y
+      if (-not $script:hasAim) {
+        # First aim of this process: start where it is instead of flying in.
+        $script:shownX = [double]$x
+        $script:shownY = [double]$y
+        $script:hasAim = $true
       }
+      $script:aimX = $x
+      $script:aimY = $y
+    }
+  }
+  # One animation frame: close a share of the remaining gap, so the arrow
+  # eases out of the old point and settles onto the new one instead of
+  # teleporting when the state file changes.
+  function Step-AgentCursor {
+    if (-not $script:hasAim) { return }
+    $gapX = [double]$script:aimX - $script:shownX
+    $gapY = [double]$script:aimY - $script:shownY
+    if ([Math]::Abs($gapX) -lt 0.5 -and [Math]::Abs($gapY) -lt 0.5) {
+      $script:shownX = [double]$script:aimX
+      $script:shownY = [double]$script:aimY
+    } else {
+      $ease = 0.35
+      $script:shownX += $gapX * $ease
+      $script:shownY += $gapY * $ease
+    }
+    $x = [int][Math]::Round($script:shownX)
+    $y = [int][Math]::Round($script:shownY)
+    if ($x -ne $script:lastCursorX -or $y -ne $script:lastCursorY) {
+      [YopesCursorWindow]::Move($script:cursorWindow, $x, $y)
+      $script:lastCursorX = $x
+      $script:lastCursorY = $y
     }
   }
 
   $timer = New-Object System.Windows.Threading.DispatcherTimer
-  $timer.Interval = [TimeSpan]::FromMilliseconds(40)
+  $timer.Interval = [TimeSpan]::FromMilliseconds(16)
   $script:ownerCheckTicks = 0
   $timer.add_Tick({
     try {
       $script:ownerCheckTicks += 1
-      if ($script:ownerCheckTicks -ge 12) {
+      if ($script:ownerCheckTicks -ge 31) {
         $script:ownerCheckTicks = 0
         if ($null -eq (Get-Process -Id $OwnerId -ErrorAction SilentlyContinue)) {
           $timer.Stop()
@@ -298,13 +329,15 @@ public static class YopesCursorWindow {
           return
         }
       }
-      Move-AgentCursor
+      Read-Aim
+      Step-AgentCursor
     } catch {
       # A state write may overlap this read; the next tick gets the whole point.
     }
   })
   $window.Show()
-  Move-AgentCursor
+  Read-Aim
+  Step-AgentCursor
   $timer.Start()
   [System.IO.File]::WriteAllText($ReadyPath, 'ready')
   [System.Windows.Threading.Dispatcher]::Run()

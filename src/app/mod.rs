@@ -400,11 +400,19 @@ pub struct App {
     pub generating_image: bool,
     /// Popup picker opened by `/session`.
     pub session_picker: Option<ListPicker>,
-    /// The sessions directory read once per picker open: parsing every saved
-    /// transcript per keystroke is what made `/session` lag.
+    /// Loaded rows for the `/session` popup, populated one JSON file per tick
+    /// so opening `/session` never blocks the TUI.
     session_entries: Vec<SessionEntry>,
+    /// Remaining session JSON paths to parse, newest first.
+    session_load_queue: VecDeque<(PathBuf, Option<std::time::SystemTime>)>,
+    /// Total session files queued when the `/session` picker opened.
+    session_load_total: usize,
     /// Popup picker opened by `/revert`, listing the prompts already sent.
     pub revert_picker: Option<ListPicker>,
+    /// Popup picker opened by `/timeline`, jumping to a previous prompt.
+    pub timeline_picker: Option<ListPicker>,
+    /// Message index to scroll to on the next transcript render.
+    pub pending_scroll_to_message: Option<usize>,
     pub running_tool: Option<RunningTool>,
     /// Whether a user command (from `!` or `/run`) is running in the
     /// background: a second one waits, and the Esc interrupt stops it.
@@ -579,7 +587,11 @@ impl App {
             generating_image: false,
             session_picker: None,
             session_entries: Vec::new(),
+            session_load_queue: VecDeque::new(),
+            session_load_total: 0,
             revert_picker: None,
+            timeline_picker: None,
+            pending_scroll_to_message: None,
             running_tool: None,
             user_command_running: false,
             running_delegates: Vec::new(),
@@ -826,6 +838,7 @@ impl App {
 
     pub fn tick(&mut self) {
         self.spinner = self.spinner.wrapping_add(1);
+        self.step_session_load();
         // A notice is transient: it dismisses itself after a few seconds, so
         // an old error stops sitting over output that arrived after it. The
         // ticker runs while a notice is up (see main's loop condition), which
@@ -864,6 +877,7 @@ impl App {
             || self.model_picker.is_some()
             || self.session_picker.is_some()
             || self.revert_picker.is_some()
+            || self.timeline_picker.is_some()
             || self.agents_picker.is_some()
             || (!self.palette_hidden && !self.palette_matches().is_empty())
             || self.approval.is_some()

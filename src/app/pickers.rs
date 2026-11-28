@@ -367,29 +367,14 @@ impl App {
             self.info("Finish the current turn before switching sessions.");
             return;
         }
-        self.refresh_session_entries();
-        let current = self.session_path.clone().unwrap_or_default();
-        let selected = self
-            .session_entries
-            .iter()
-            .position(|entry| entry.path == current)
-            .unwrap_or(0);
-        self.session_picker = Some(ListPicker {
-            selected,
-            ..ListPicker::default()
-        });
+        self.queue_session_entries();
+        self.session_picker = Some(ListPicker::default());
     }
 
-    /// Read the sessions directory once, when the picker opens: parsing every
-    /// saved transcript on each keystroke and each frame is what made
-    /// `/session` lag in a long-lived history.
-    fn refresh_session_entries(&mut self) {
-        self.session_entries = self.collect_sessions();
-    }
-
-    /// `/session` rows: every file in the sessions directory, newest first,
-    /// plus the active file when it lives somewhere else.
-    pub(crate) fn collect_sessions(&self) -> Vec<SessionEntry> {
+    /// Collect session paths and modification times without parsing JSON yet.
+    /// `step_session_load` parses one file per tick so opening `/session`
+    /// stays responsive even with many large transcripts.
+    fn queue_session_entries(&mut self) {
         let mut paths: Vec<PathBuf> = Vec::new();
         if let Some(dir) = &self.sessions_dir {
             if let Ok(list) = fs::read_dir(dir) {
@@ -407,10 +392,49 @@ impl App {
         } else if let Some(current) = &self.session_path {
             paths.push(current.clone());
         }
-        let mut entries: Vec<SessionEntry> = paths.into_iter().map(session_entry).collect();
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.modified));
-        entries.truncate(80);
-        entries
+        let mut pending: Vec<(PathBuf, Option<SystemTime>)> = paths
+            .into_iter()
+            .map(|path| {
+                let modified = fs::metadata(&path)
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok());
+                (path, modified)
+            })
+            .collect();
+        pending.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+        pending.truncate(80);
+        self.session_entries.clear();
+        self.session_load_total = pending.len();
+        self.session_load_queue = pending.into();
+    }
+
+    /// Parse one queued session JSON file per tick while the `/session` picker
+    /// is open.
+    pub(crate) fn step_session_load(&mut self) {
+        if self.session_picker.is_none() {
+            self.session_load_queue.clear();
+            self.session_load_total = 0;
+            return;
+        }
+        let Some((path, modified)) = self.session_load_queue.pop_front() else {
+            return;
+        };
+        let entry = session_entry_with_modified(path, modified);
+        let is_current = self.session_path.as_ref() == Some(&entry.path);
+        self.session_entries.push(entry);
+        if is_current {
+            if let Some(picker) = self.session_picker.as_mut() {
+                if picker.filter.is_empty() && picker.selected == 0 {
+                    picker.selected = self.session_entries.len().saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// `(loaded, total)` while `/session` is still reading JSON files.
+    pub(crate) fn session_load_progress(&self) -> Option<(usize, usize)> {
+        (!self.session_load_queue.is_empty())
+            .then_some((self.session_entries.len(), self.session_load_total))
     }
 
     pub(crate) fn session_matches(&self) -> Vec<SessionEntry> {
@@ -432,6 +456,8 @@ impl App {
     pub(crate) fn handle_session_picker_key(&mut self, key: KeyEvent) -> Action {
         if key.code == KeyCode::Esc {
             self.session_picker = None;
+            self.session_load_queue.clear();
+            self.session_load_total = 0;
             return Action::None;
         }
         // Editing a clone and writing it back keeps the borrow rules simple:
@@ -463,6 +489,8 @@ impl App {
                     .get(picker.selected.min(matches.len().saturating_sub(1)))
                     .map(|entry| entry.path.clone());
                 self.session_picker = None;
+                self.session_load_queue.clear();
+                self.session_load_total = 0;
                 if let Some(path) = target {
                     self.switch_session(path);
                 }
@@ -498,6 +526,8 @@ impl App {
     pub(crate) fn reset_session_view(&mut self) {
         self.scroll = 0;
         self.follow_tail = true;
+        self.pending_scroll_to_message = None;
+        self.timeline_picker = None;
         self.notice = None;
         self.pending_tools.clear();
         self.approval = None;
@@ -593,6 +623,111 @@ impl App {
             return;
         }
         self.revert_picker = Some(ListPicker::default());
+    }
+
+    /// `/timeline`: a popup over every prompt sent this session. Picking one
+    /// scrolls the transcript directly to that prompt without modifying history.
+    pub(crate) fn open_timeline_picker(&mut self) {
+        if !self
+            .session
+            .messages
+            .iter()
+            .any(|message| message.role == Role::User && !message.content.trim().is_empty())
+        {
+            self.info("Nothing in timeline — no prompts sent yet.");
+            return;
+        }
+        self.timeline_picker = Some(ListPicker::default());
+    }
+
+    /// `/timeline` rows, newest first: (message index, first-line excerpt).
+    pub(crate) fn timeline_matches(&self) -> Vec<(usize, String)> {
+        let filter = self
+            .timeline_picker
+            .as_ref()
+            .map_or("", |picker| picker.filter.as_str());
+        let filter = filter.to_ascii_lowercase();
+        let mut matches: Vec<(usize, String)> = self
+            .session
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.role == Role::User && !message.content.trim().is_empty())
+            .map(|(index, message)| {
+                (
+                    index,
+                    message
+                        .content
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned(),
+                )
+            })
+            .filter(|(_, excerpt)| {
+                filter.is_empty() || excerpt.to_ascii_lowercase().contains(&filter)
+            })
+            .collect();
+        matches.reverse();
+        matches
+    }
+
+    /// Rows shown in the `/timeline` popup for its current filter.
+    pub(crate) fn timeline_picker_count(&self) -> usize {
+        self.timeline_matches().len()
+    }
+
+    pub(crate) fn handle_timeline_picker_key(&mut self, key: KeyEvent) -> Action {
+        if key.code == KeyCode::Esc {
+            self.timeline_picker = None;
+            return Action::None;
+        }
+        let Some(mut picker) = self.timeline_picker.clone() else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Down => {
+                let count = self.timeline_matches().len();
+                picker.selected = (picker.selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Backspace => {
+                picker.filter.pop();
+                picker.selected = 0;
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                picker.filter.push(character);
+                picker.selected = 0;
+            }
+            KeyCode::Enter => {
+                let matches = self.timeline_matches();
+                let target = matches
+                    .get(picker.selected.min(matches.len().saturating_sub(1)))
+                    .map(|(index, _)| *index);
+                self.timeline_picker = None;
+                if let Some(index) = target {
+                    self.jump_to_prompt(index);
+                }
+                return Action::None;
+            }
+            _ => return Action::None,
+        }
+        self.timeline_picker = Some(picker);
+        Action::None
+    }
+
+    /// Scroll the transcript to the prompt at `index` on the next render.
+    pub(crate) fn jump_to_prompt(&mut self, index: usize) {
+        if index >= self.session.messages.len() || self.session.messages[index].role != Role::User {
+            return;
+        }
+        self.pending_scroll_to_message = Some(index);
+        self.follow_tail = false;
     }
 
     /// `/revert` rows, newest first: (message index, first-line excerpt).
@@ -800,16 +935,16 @@ struct SessionProbe {
     title: String,
 }
 
-pub(crate) fn session_entry(path: PathBuf) -> SessionEntry {
+pub(crate) fn session_entry_with_modified(
+    path: PathBuf,
+    modified: Option<SystemTime>,
+) -> SessionEntry {
     let title = fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str::<SessionProbe>(&text).ok())
         .map(|probe| probe.title.trim().to_owned())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| "Untitled".to_owned());
-    let modified = fs::metadata(&path)
-        .ok()
-        .and_then(|metadata| metadata.modified().ok());
     SessionEntry {
         path,
         title,

@@ -263,6 +263,17 @@ fn draw_add_provider_form(frame: &mut Frame, connect: &ConnectState, inner: Rect
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Two columns for the badge, whatever glyph lands in it: a terminal that
+/// draws a symbol wide cannot then shift the name and the tick off their
+/// columns for that one row.
+fn logo_cell(logo: &str) -> String {
+    match UnicodeWidthStr::width(logo) {
+        0 => "  ".to_owned(),
+        1 => format!("{logo} "),
+        _ => logo.to_owned(),
+    }
+}
+
 pub(super) fn draw_connect_list(
     frame: &mut Frame,
     app: &App,
@@ -327,7 +338,24 @@ pub(super) fn draw_connect_list(
     let start_row = selected_row.saturating_sub(height.saturating_sub(1));
     let start = start_row.min(rows.len().saturating_sub(height));
     let list = area;
-    let title_width = (usize::from(list.width) * 55 / 100).max(16);
+    // The name and the detail share the row: the marker, the badge cell and
+    // one space on the left, the tick and the arrow on the right, and the
+    // detail sized to the widest one so no row loses its ending to the edge.
+    let tail = if connect.stage == ConnectStage::Providers {
+        5
+    } else {
+        4
+    };
+    let room = usize::from(list.width).saturating_sub(5 + tail);
+    let widest_detail = items
+        .iter()
+        .map(|item| UnicodeWidthStr::width(item.detail.as_str()))
+        .max()
+        .unwrap_or(0);
+    // The name keeps at least 14 columns; anything longer than that in the
+    // detail is cut with an ellipsis rather than pushed out of the box.
+    let detail_width = widest_detail.min(room.saturating_sub(14));
+    let title_width = room.saturating_sub(detail_width).max(8);
 
     for (offset, row) in rows.iter().skip(start).take(height).enumerate() {
         let rect = Rect::new(list.x, list.y + offset as u16, list.width, 1);
@@ -366,8 +394,8 @@ pub(super) fn draw_connect_list(
         };
         let mut spans = vec![
             Span::styled(marker, Style::default().fg(accent())),
-            Span::styled(item.logo.to_string(), logo_style),
-            Span::styled("  ", Style::default()),
+            Span::styled(logo_cell(&item.logo), logo_style),
+            Span::styled(" ", Style::default()),
             Span::styled(fit_to(&item.title, title_width), title_style),
         ];
         // A tick marks the provider and model this session is already using.
@@ -381,7 +409,10 @@ pub(super) fn draw_connect_list(
         } else {
             spans.push(Span::styled("  ", Style::default()));
         }
-        spans.push(Span::styled(item.detail.clone(), detail_style));
+        spans.push(Span::styled(
+            truncate(&item.detail, detail_width),
+            detail_style,
+        ));
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         if chosen {
             highlight(frame, rect, step);

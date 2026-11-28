@@ -1,6 +1,16 @@
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_overlay_animates_toward_its_aim_instead_of_teleporting() {
+        let script = super::super::SCRIPT;
+        // A 60fps tick that eases a share of the remaining gap each frame.
+        assert!(script.contains("FromMilliseconds(16)"), "{script}");
+        assert!(script.contains("$ease = 0.35"), "{script}");
+        assert!(script.contains("$script:shownX += $gapX * $ease"));
+        assert!(script.contains("$script:shownY += $gapY * $ease"));
+    }
+
+    #[test]
     fn ready_handshake_waits_for_complete_signal_and_reports_explicit_error() {
         use super::super::{StartupSignal, startup_signal};
 
@@ -29,7 +39,9 @@ mod tests {
         assert!(script.contains("$window.IsHitTestVisible = $false"));
         assert!(script.contains("0x00000020 | 0x00000080 | 0x08000000"));
         assert!(script.contains("Get-Process -Id $OwnerId"));
-        assert!(script.contains("Move-AgentCursor"));
+        assert!(script.contains("Step-AgentCursor"));
+        assert!(script.contains("Read-Aim"));
+        assert!(!script.contains("Move-AgentCursor"));
         assert!(script.contains("SetWindowDisplayAffinity"));
         assert!(script.contains("SetThreadDpiAwarenessContext"));
         assert!(script.contains("GetDpiForWindow"));

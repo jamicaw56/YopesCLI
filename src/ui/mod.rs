@@ -461,6 +461,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let picker = app.model_picker.clone();
     let session_picker = app.session_picker.clone();
     let revert_picker = app.revert_picker.clone();
+    let timeline_picker = app.timeline_picker.clone();
     let agents_picker = app.agents_picker.clone();
     let connect_open = app.connect_open();
     // The Progress panel steps aside once every task is done: a finished
@@ -473,6 +474,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         || picker.is_some()
         || session_picker.is_some()
         || revert_picker.is_some()
+        || timeline_picker.is_some()
         || agents_picker.is_some()
         || app.settings_open
         || app.stats.is_some()
@@ -500,6 +502,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
+    let timeline_height = if timeline_picker.is_some() {
+        (app.timeline_picker_count().clamp(1, 12) as u16).saturating_add(2)
+    } else {
+        0
+    };
     let agents_height = if agents_picker.is_some() {
         (app.agents_picker_count().clamp(1, 12) as u16).saturating_add(2)
     } else {
@@ -510,7 +517,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let connect_height = connect_height(app);
     // Room for the box and its two borders. A short terminal gives the list
     // up to the transcript rather than pushing the composer off the screen.
-    let popup_height = palette_height + picker_height + revert_height + agents_height;
+    let popup_height =
+        palette_height + picker_height + revert_height + timeline_height + agents_height;
     let dock_height = popup_height.max(connect_height);
     let composer_height = composer_height(app, area.width, area.height).saturating_add(2);
     let progress_height = if tasks {
@@ -579,6 +587,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else if popup_height > 0 {
         if let Some(revert_picker) = &revert_picker {
             draw_revert_picker(frame, app, revert_picker, chunks[index]);
+        } else if let Some(timeline_picker) = &timeline_picker {
+            draw_timeline_picker(frame, app, timeline_picker, chunks[index]);
         } else if let Some(agents_picker) = &agents_picker {
             draw_agents_picker(frame, app, agents_picker, chunks[index]);
         } else if let Some(picker) = &picker {

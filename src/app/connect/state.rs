@@ -120,6 +120,60 @@ fn provider_monogram(name: &str) -> String {
         .unwrap_or_else(|| "?".to_owned())
 }
 
+/// The glyph each endpoint gets: one column of a plain terminal, no Nerd Font,
+/// no emoji, so a row keeps its columns whatever the terminal is set to.
+/// Both the saved URL and the name are matched against these keys, so an
+/// endpoint named `groq` that points at a proxy still gets the groq mark.
+const PROVIDER_GLYPHS: &[(&[&str], &str)] = &[
+    (&["openrouter"], "◇"),
+    (&["openai", "azure"], "◆"),
+    (&["anthropic", "claude"], "✳"),
+    (&["generativelanguage", "google", "gemini"], "✦"),
+    (&["deepseek"], "◈"),
+    (&["groq"], "❖"),
+    (&["mistral"], "▲"),
+    (&["x.ai", "xai", "grok"], "✕"),
+    (&["together"], "⬢"),
+    (&["fireworks"], "✺"),
+    (&["cerebras"], "◉"),
+    (&["perplexity"], "⌕"),
+    (&["cohere"], "◍"),
+    (&["qwen", "dashscope", "alibaba"], "❂"),
+    (&["moonshot", "kimi"], "☾"),
+    (&["ollama", "localhost", "127.0.0.1", "0.0.0.0"], "⌂"),
+    (&["github"], "⌥"),
+];
+
+/// The badge of a provider row: the glyph of an endpoint the list knows, so
+/// two providers of the same kind read apart at a glance, and the name's
+/// initial for everything else.
+fn provider_logo(name: &str, base_url: &str) -> String {
+    let host = endpoint_host(base_url).to_ascii_lowercase();
+    let label = name.trim().to_ascii_lowercase();
+    for (keys, glyph) in PROVIDER_GLYPHS {
+        if keys
+            .iter()
+            .any(|key| host.contains(key) || label.contains(key))
+        {
+            return (*glyph).to_owned();
+        }
+    }
+    provider_monogram(name)
+}
+
+/// The line under a provider's name: where it points and what it holds.
+fn provider_detail(provider: &config::CustomProvider) -> String {
+    let models = match provider.models.len() {
+        0 => "no models".to_owned(),
+        1 => "1 model".to_owned(),
+        count => format!("{count} models"),
+    };
+    match endpoint_host(&provider.base_url) {
+        host if host.is_empty() => models,
+        host => format!("{host} · {models}"),
+    }
+}
+
 /// One rendered row of the connect list: an item, a blank spacer, or a
 /// rule line naming the section below it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,7 +282,42 @@ impl ConnectState {
         };
         match self.stage {
             ConnectStage::Providers => {
-                let mut items = Vec::new();
+                // Saved endpoints, in a readable order: the one this session
+                // is using first, the rest by name. Insertion order told the
+                // user nothing once there were more than a handful.
+                let mut saved: Vec<&config::CustomProvider> = self
+                    .saved_custom
+                    .iter()
+                    .filter(|saved| {
+                        filter.is_empty()
+                            || saved.name.to_ascii_lowercase().contains(filter.as_str())
+                    })
+                    .collect();
+                saved.sort_by(|a, b| {
+                    is_active(&b.base_url)
+                        .cmp(&is_active(&a.base_url))
+                        .then_with(|| {
+                            a.name
+                                .trim()
+                                .to_ascii_lowercase()
+                                .cmp(&b.name.trim().to_ascii_lowercase())
+                        })
+                        .then_with(|| a.base_url.cmp(&b.base_url))
+                });
+                let mut items: Vec<ConnectItem> = saved
+                    .into_iter()
+                    .map(|saved| ConnectItem {
+                        id: saved.id.clone(),
+                        title: saved.name.clone(),
+                        detail: provider_detail(saved),
+                        logo: provider_logo(&saved.name, &saved.base_url),
+                        custom_id: Some(saved.id.clone()),
+                        active: is_active(&saved.base_url),
+                    })
+                    .collect();
+                // The action that adds another endpoint sits below the ones
+                // already saved, the way the endpoint actions sit below the
+                // model rows in the custom stage.
                 if filter.is_empty() || "custom".contains(filter.as_str()) {
                     items.push(ConnectItem {
                         id: CUSTOM_PROVIDER_ID.to_owned(),
@@ -237,18 +326,6 @@ impl ConnectState {
                         logo: "⚙".to_owned(),
                         custom_id: None,
                         active: false,
-                    });
-                }
-                for saved in self.saved_custom.iter().filter(|saved| {
-                    filter.is_empty() || saved.name.to_ascii_lowercase().contains(filter.as_str())
-                }) {
-                    items.push(ConnectItem {
-                        id: saved.id.clone(),
-                        title: saved.name.clone(),
-                        detail: format!("saved · {} models", saved.models.len()),
-                        logo: provider_monogram(&saved.name),
-                        custom_id: Some(saved.id.clone()),
-                        active: is_active(&saved.base_url),
                     });
                 }
                 items
@@ -568,14 +645,14 @@ impl ConnectState {
         let mut rows = Vec::with_capacity(items.len() + 3);
         match self.stage {
             ConnectStage::Providers => {
-                let custom_count = items
-                    .iter()
-                    .take_while(|item| item.id == CUSTOM_PROVIDER_ID || item.custom_id.is_some())
-                    .count();
-                let divider = custom_count > 0 && custom_count < items.len();
                 for index in 0..items.len() {
-                    if divider && index == custom_count {
-                        rows.push(ListRow::Rule(" models.dev "));
+                    // The add row is an action, not a saved endpoint: a rule
+                    // keeps it from reading as provider number n.
+                    if index > 0
+                        && items[index].id == CUSTOM_PROVIDER_ID
+                        && items[index].custom_id.is_none()
+                    {
+                        rows.push(ListRow::Rule(" add "));
                     }
                     rows.push(ListRow::Item(index));
                 }
@@ -741,38 +818,128 @@ pub(super) fn custom_field_mut(
 }
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn saved_providers_show_name_monograms() {
-        use super::{ConnectStage, ConnectState};
-        use crate::config::{AuthKind, CustomProvider};
-        let base = CustomProvider {
-            id: "base".to_owned(),
-            name: "Base".to_owned(),
-            base_url: "https://example.test/v1".to_owned(),
-            auth: AuthKind::Bearer,
+    /// A saved endpoint for the provider tests below.
+    fn saved_provider(id: &str, name: &str, base_url: &str) -> crate::config::CustomProvider {
+        crate::config::CustomProvider {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            base_url: base_url.to_owned(),
+            auth: crate::config::AuthKind::Bearer,
             models: Vec::new(),
             models_url: None,
             token: None,
             encrypted: false,
             secret: crate::config::StoredSecret::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn saved_providers_show_name_monograms() {
+        use super::{ConnectStage, ConnectState};
         let mut connect = ConnectState::loading();
         connect.stage = ConnectStage::Providers;
         connect.saved_custom = vec![
-            CustomProvider {
-                id: "one".to_owned(),
-                name: "  Biggie Solutions".to_owned(),
-                ..base.clone()
-            },
-            CustomProvider {
-                id: "two".to_owned(),
-                name: String::new(),
-                ..base
-            },
+            saved_provider("one", "  Biggie Solutions", "https://example.test/v1"),
+            saved_provider("two", "", "https://example.test/other"),
         ];
         let items = connect.items();
+        // Empty names sort first, and the action row is last.
+        assert_eq!(items[0].logo, "?");
         assert_eq!(items[1].logo, "B");
-        assert_eq!(items[2].logo, "?");
+        assert_eq!(items[2].title, "Add custom API");
+    }
+
+    #[test]
+    fn providers_are_sorted_by_name_with_the_active_one_first() {
+        use super::{ConnectStage, ConnectState};
+        let mut connect = ConnectState::loading();
+        connect.stage = ConnectStage::Providers;
+        connect.saved_custom = vec![
+            saved_provider("zed", "Zed", "https://zed.test/v1"),
+            saved_provider("alpha", "alpha", "https://alpha.test/v1"),
+            saved_provider("mid", "Middle", "https://mid.test/v1"),
+        ];
+        let titles = |connect: &ConnectState| -> Vec<String> {
+            connect.items().into_iter().map(|item| item.title).collect()
+        };
+        assert_eq!(
+            titles(&connect),
+            ["alpha", "Middle", "Zed", "Add custom API"]
+        );
+        // The endpoint in use is pinned above the alphabetical order.
+        let pinned = connect.items_using("https://zed.test/v1", "model");
+        assert_eq!(
+            pinned
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Zed", "alpha", "Middle", "Add custom API"]
+        );
+        assert!(pinned[0].active);
+        assert!(!pinned[1].active);
+    }
+
+    #[test]
+    fn known_hosts_get_a_glyph_and_unknown_ones_the_initial() {
+        use super::{ConnectStage, ConnectState};
+        let mut connect = ConnectState::loading();
+        connect.stage = ConnectStage::Providers;
+        connect.saved_custom = vec![
+            saved_provider("a", "Home GPU", "https://api.groq.com/openai/v1"),
+            saved_provider("b", "Router", "https://openrouter.ai/api/v1"),
+            saved_provider("c", "Mine", "https://mine.test/v1"),
+        ];
+        let logos: Vec<String> = connect.items().into_iter().map(|item| item.logo).collect();
+        // Sorted by name: Home GPU (groq host), Mine (unknown), Router.
+        assert_eq!(
+            logos,
+            [
+                "❖".to_owned(),
+                "M".to_owned(),
+                "◇".to_owned(),
+                "⚙".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_rows_name_their_host_and_model_count() {
+        use super::{ConnectStage, ConnectState};
+        use crate::config::SavedModel;
+        let mut connect = ConnectState::loading();
+        connect.stage = ConnectStage::Providers;
+        let mut empty = saved_provider("a", "Empty", "https://empty.test/v1");
+        empty.models = Vec::new();
+        let mut one = saved_provider("b", "One", "https://one.test/v1");
+        one.models = vec![SavedModel {
+            id: "m".to_owned(),
+            ..SavedModel::default()
+        }];
+        connect.saved_custom = vec![empty, one];
+        let details: Vec<String> = connect
+            .items()
+            .into_iter()
+            .map(|item| item.detail)
+            .take(2)
+            .collect();
+        assert_eq!(details, ["empty.test · no models", "one.test · 1 model"]);
+    }
+
+    #[test]
+    fn the_add_row_sits_under_a_rule_of_its_own() {
+        use super::{ConnectStage, ConnectState, ListRow};
+        let mut connect = ConnectState::loading();
+        connect.stage = ConnectStage::Providers;
+        connect.saved_custom = vec![saved_provider("a", "Alpha", "https://alpha.test/v1")];
+        let items = connect.items();
+        let rows = connect.list_rows(&items);
+        assert!(matches!(rows[0], ListRow::Item(0)));
+        assert!(matches!(rows[1], ListRow::Rule(" add ")));
+        assert!(matches!(rows[2], ListRow::Item(1)));
+        // With nothing saved there is no section to divide.
+        let empty = ConnectState::loading();
+        let rows = empty.list_rows(&empty.items());
+        assert_eq!(rows, vec![ListRow::Item(0)]);
     }
 
     #[test]
@@ -795,9 +962,13 @@ mod tests {
             secret: crate::config::StoredSecret::default(),
         });
         let items = connect.items_using("https://example.test/v1", "model");
-        assert_eq!(items[0].custom_id, None, "first row adds a provider");
-        assert_eq!(items[1].custom_id.as_deref(), Some(CUSTOM_PROVIDER_ID));
-        assert!(items[1].active);
+        assert_eq!(
+            items[0].custom_id.as_deref(),
+            Some(CUSTOM_PROVIDER_ID),
+            "the saved endpoint keeps its id even when it reads like the action"
+        );
+        assert!(items[0].active);
+        assert_eq!(items[1].custom_id, None, "the last row adds a provider");
     }
     #[test]
     fn custom_filter_hides_other_sections() {

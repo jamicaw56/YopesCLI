@@ -163,6 +163,7 @@ impl App {
                 && self.model_picker.is_none()
                 && self.session_picker.is_none()
                 && self.revert_picker.is_none()
+                && self.timeline_picker.is_none()
                 && self.agents_picker.is_none()
             {
                 match mouse.kind {
@@ -291,6 +292,41 @@ impl App {
                     self.revert_picker = None;
                     if let Some(index) = picked {
                         self.perform_revert(index);
+                    }
+                    return Action::None;
+                }
+                _ => {}
+            }
+            return Action::None;
+        }
+        if self.timeline_picker.is_some() {
+            let count = self.timeline_picker_count();
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(picker) = self.timeline_picker.as_mut() {
+                        picker.selected = picker.selected.saturating_sub(1);
+                    }
+                    return Action::None;
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(picker) = self.timeline_picker.as_mut() {
+                        picker.selected = (picker.selected + 1).min(count.saturating_sub(1));
+                    }
+                    return Action::None;
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let selected = self
+                        .timeline_picker
+                        .as_ref()
+                        .map(|p| p.selected)
+                        .unwrap_or_default();
+                    let matches = self.timeline_matches();
+                    let picked = matches
+                        .get(selected.min(count.saturating_sub(1)))
+                        .map(|(index, _)| *index);
+                    self.timeline_picker = None;
+                    if let Some(index) = picked {
+                        self.jump_to_prompt(index);
                     }
                     return Action::None;
                 }
@@ -692,6 +728,9 @@ impl App {
         }
         if self.revert_picker.is_some() {
             return self.handle_revert_picker_key(key);
+        }
+        if self.timeline_picker.is_some() {
+            return self.handle_timeline_picker_key(key);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {

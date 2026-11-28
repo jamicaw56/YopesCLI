@@ -63,6 +63,7 @@ fn command_is_safe_while_streaming(prompt: &str) -> bool {
             | "/export"
             | "/stats"
             | "/generate"
+            | "/timeline"
     )
 }
 
@@ -457,6 +458,7 @@ impl App {
         let mut parts = command.split_whitespace();
         match parts.next().unwrap_or_default() {
             "/help" => self.show_help = true,
+            "/new" => self.new_session(),
             "/session" => match parts
                 .next()
                 .unwrap_or_default()
@@ -564,6 +566,7 @@ impl App {
                 other => self.error(format!("Usage: /mcp [list|reload], not `{other}`")),
             },
             "/revert" => self.open_revert_picker(),
+            "/timeline" => self.open_timeline_picker(),
             "/goal" => {
                 let goal = parts.collect::<Vec<_>>().join(" ");
                 self.set_goal(&goal);
@@ -1930,10 +1933,19 @@ pub(crate) mod tests {
         app.sessions_dir = Some(dir.clone());
         app.session_path = Some(first.clone());
         app.command("/session");
-        assert_eq!(app.session_picker_count(), 2);
+        assert_eq!(app.session_picker_count(), 0);
+        assert_eq!(app.session_load_progress(), Some((0, 2)));
 
-        // A file that appears after the picker opened is not picked up: the
-        // rows come from the one read, which is the whole point of the cache.
+        // One JSON file loads per tick so opening `/session` never blocks the TUI.
+        app.tick();
+        assert_eq!(app.session_picker_count(), 1);
+        assert_eq!(app.session_load_progress(), Some((1, 2)));
+
+        app.tick();
+        assert_eq!(app.session_picker_count(), 2);
+        assert_eq!(app.session_load_progress(), None);
+
+        // A file that disappears after loading finished stays in the cache.
         std::fs::remove_file(&second).unwrap();
         assert_eq!(app.session_picker_count(), 2);
         let _ = std::fs::remove_dir_all(dir);
@@ -2337,5 +2349,66 @@ pub(crate) mod tests {
             },
         ];
         assert_eq!(app.goal_progress_label().as_deref(), Some("goal 2/3 · 66%"));
+    }
+
+    #[test]
+    fn new_command_starts_a_new_session() {
+        let mut app = test_app();
+        app.session.messages.push(Message::new(Role::User, "hello"));
+        let previous_id = app.session.id.clone();
+
+        app.command("/new");
+
+        assert_ne!(app.session.id, previous_id);
+        assert!(app.session.messages.is_empty());
+    }
+
+    #[test]
+    fn timeline_lists_prompts_and_jumps_without_truncating() {
+        let mut app = test_app();
+        app.session
+            .messages
+            .push(Message::new(Role::User, "first prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "first reply"));
+        app.session
+            .messages
+            .push(Message::new(Role::User, "second prompt"));
+        app.session
+            .messages
+            .push(Message::new(Role::Assistant, "second reply"));
+
+        app.command("/timeline");
+        assert!(app.timeline_picker.is_some());
+        assert_eq!(
+            app.timeline_matches(),
+            vec![
+                (2, "second prompt".to_owned()),
+                (0, "first prompt".to_owned()),
+            ]
+        );
+
+        // Move down to "first prompt" and press Enter.
+        app.handle_timeline_picker_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_timeline_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(app.timeline_picker.is_none());
+        assert_eq!(app.pending_scroll_to_message, Some(0));
+        assert!(!app.follow_tail);
+        // History is untouched.
+        assert_eq!(app.session.messages.len(), 4);
+    }
+
+    #[test]
+    fn timeline_with_no_prompts_shows_an_info_notice() {
+        let mut app = test_app();
+        app.command("/timeline");
+        assert!(app.timeline_picker.is_none());
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|n| n.message.contains("no prompts"))
+        );
     }
 }

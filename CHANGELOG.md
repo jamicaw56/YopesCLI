@@ -26,6 +26,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 
 ### Added
 
+- The connect dialog's provider list is ordered and badged: saved endpoints are sorted by name with the one in use pinned on top, the add-provider row sits under an `add` rule of its own, each row names its host and model count, and known endpoints (`openrouter`, `openai`, `anthropic`, `groq`, `deepseek`, `mistral`, `together`, `fireworks`, `cerebras`, `perplexity`, `cohere`, `qwen`, `kimi`, localhost, …) get a single-column glyph instead of a bare letter, so a dozen saved providers read apart at a glance.
 - `run_command` and `bash_background` take a `shell` argument (`bash`, `powershell`, `cmd`, `sh`), so an agent picks the interpreter its command needs instead of the default git-bash/cmd/sh one; the approval preview shows which shell ran it.
 - MCP servers speak stdio, streamable HTTP or SSE. A spec takes `command`/`args`/`env`/`cwd` or `url`/`type`/`headers`, plus `timeout` (seconds per `tools/call`) and `disabled`, with `${VAR}` and `${VAR:-default}` expanded anywhere.
 - Project MCP config in `.mcp.json` at the launch directory, read after `~/.yopes/mcp.json`, so a project server of the same name replaces the global one.
@@ -51,6 +52,7 @@ All notable changes to YopesCLI are recorded here. The format follows
 - `read_all` reads every text file under a directory recursively, honoring `.yopesignore`.
 - `yopes --resume` continues a session that was cut off mid-turn instead of
   waiting for a typed prompt.
+- `computer_use` moves the agent's pointer smoothly: `move`, `click`, `scroll` and `drag` glide along an eased path (smoothstep, 6–22 frames) instead of jumping, the WPF arrow overlay animates toward its aim at 60fps, and the real system pointer is glided for clicks, wheel and drags before it is restored.
 - `computer_use` tolerates partial cursor-ready signals and gives WPF 15 seconds to start.
 
 ### Changed

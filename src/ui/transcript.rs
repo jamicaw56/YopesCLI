@@ -317,6 +317,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     // The role of the last non-tool message seen so far: the label walk below
     // reads it instead of rescanning backwards for every assistant message.
     let mut last_speaker: Option<Role> = None;
+    let mut target_slot: Option<usize> = None;
     for (index, message) in app.session.messages.iter().enumerate() {
         let call_name = (message.role == Role::Tool)
             .then(|| {
@@ -447,6 +448,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
         // From here the current non-tool message is the latest speaker for
         // every later message, including the early-continue paths below.
         last_speaker = Some(message.role);
+        if app.pending_scroll_to_message == Some(index) {
+            target_slot = Some(slots.len());
+        }
         if show_label {
             slots.push(Slot::Line(Line::styled(
                 label,
@@ -698,6 +702,13 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let total_lines = next_row;
     let maximum = total_lines.saturating_sub(usize::from(inner.height));
+    if app.pending_scroll_to_message.is_some() {
+        app.pending_scroll_to_message = None;
+        if let Some(slot) = target_slot {
+            app.follow_tail = false;
+            app.scroll = starts[slot];
+        }
+    }
     if !app.follow_tail {
         app.scroll = app.scroll.min(maximum);
         if app.scroll == maximum {
@@ -740,7 +751,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
     // text is read back out of the frame buffer — the wrapped cells exactly as
     // drawn — so a selection can never copy something that is not on screen.
     app.transcript_area = Some(inner);
-    if let Some(selection) = app.text_selection {
+    if let Some(selection) = app.text_selection.filter(|s| s.anchor != s.head) {
         app.selection_text = paint_selection(frame, inner, app.scroll, selection);
     } else {
         app.selection_text = None;
