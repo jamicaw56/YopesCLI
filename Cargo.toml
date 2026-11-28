@@ -1,6 +1,6 @@
 [package]
 name = "yopes"
-version = "0.1.91"
+version = "0.1.92"
 edition = "2024"
 rust-version = "1.85"
 description = "A better coding CLI, built with Rust, Ratatui, and Tokio."
