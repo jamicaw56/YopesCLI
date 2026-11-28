@@ -211,7 +211,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if app.session.messages.is_empty() {
         // The welcome names the model; the working view carries no branding.
-        let model = app.backend.model();
+        let model = app.backend.model_display();
         let heading = if model.is_empty() {
             app.backend.provider_label().to_owned()
         } else {
@@ -389,7 +389,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, app: &mut App, area: Rect) {
             Role::Tool => ("tool", muted()),
             // The label names the responding model, not the product.
             Role::Assistant => {
-                let model = app.backend.model();
+                let model = app.backend.model_display();
                 (if model.is_empty() { "assistant" } else { model }, accent())
             }
         };

@@ -22,7 +22,7 @@ pub(super) fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let right = header_right(
         app.backend.provider_label(),
-        app.backend.model(),
+        app.backend.model_display(),
         &app.spent_cost(),
         usize::from(inner.width).saturating_sub(bars_w),
     );

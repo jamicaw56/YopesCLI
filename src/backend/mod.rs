@@ -204,6 +204,16 @@ impl Backend {
         &self.model
     }
 
+    /// Human-readable model name: uses the saved model's `name` if non-empty,
+    /// otherwise falls back to the raw model id.
+    pub fn model_display(&self) -> &str {
+        self.models
+            .iter()
+            .find(|m| m.id == self.model && !m.name.trim().is_empty())
+            .map(|m| m.name.as_str())
+            .unwrap_or(&self.model)
+    }
+
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -334,6 +344,19 @@ impl Backend {
         self.api_key = api_key;
         self.auth = auth;
         self.models = models;
+    }
+
+    /// Fall back to the built-in free DeepSeek model when no API is connected.
+    pub fn configure_free(&mut self) {
+        self.configure(
+            ProviderKind::OpenAi,
+            crate::config::FREE_PROVIDER_LABEL.to_owned(),
+            crate::config::FREE_MODEL_ID.to_owned(),
+            crate::config::FREE_BASE_URL.to_owned(),
+            Some(crate::config::FREE_API_KEY.to_owned()),
+            AuthKind::Bearer,
+            vec![crate::config::free_saved_model()],
+        );
     }
 
     /// One helper request: empty conversation, no tools, and the answer text
@@ -866,6 +889,19 @@ mod tests {
         backend.reasoning_effort = Some("xhigh".to_owned());
         backend.model = "gpt-4o".to_owned();
         assert_eq!(backend.effort_to_send().as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn configure_free_uses_deepseek_and_displays_auto() {
+        let mut backend = super::Backend::default();
+        backend.configure_free();
+        assert!(backend.is_configured());
+        assert_eq!(backend.provider_kind(), super::ProviderKind::OpenAi);
+        assert_eq!(backend.provider_label(), crate::config::FREE_PROVIDER_LABEL);
+        assert_eq!(backend.base_url(), crate::config::FREE_BASE_URL);
+        assert_eq!(backend.api_key(), Some(crate::config::FREE_API_KEY));
+        assert_eq!(backend.model(), crate::config::FREE_MODEL_ID);
+        assert_eq!(backend.model_display(), "Auto");
     }
 
     #[test]

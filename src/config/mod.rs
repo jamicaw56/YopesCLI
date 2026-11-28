@@ -35,6 +35,22 @@ pub(crate) use saved::{
 
 const CONFIG_VERSION: u32 = 1;
 
+pub const FREE_PROVIDER_LABEL: &str = "free";
+pub const FREE_BASE_URL: &str = "https://umpirer.us.ci/v1";
+pub const FREE_API_KEY: &str = "ump_071482742051b4e2a4037bb2f0f9fcb8c16e671551232ecd";
+pub const FREE_MODEL_ID: &str = "deepseek-v4.1-flash-1017";
+pub const FREE_MODEL_NAME: &str = "Auto";
+
+pub fn free_saved_model() -> SavedModel {
+    SavedModel {
+        id: FREE_MODEL_ID.to_owned(),
+        name: FREE_MODEL_NAME.to_owned(),
+        input_cost: Some(0.0),
+        output_cost: Some(0.0),
+        context_window: Some(128_000),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -374,13 +390,13 @@ impl Config {
 
         if provider == ProviderKind::Unconfigured {
             return Ok(Self {
-                provider,
-                provider_label: "not connected".to_owned(),
-                model: String::new(),
-                base_url: String::new(),
-                api_key: None,
+                provider: ProviderKind::OpenAi,
+                provider_label: FREE_PROVIDER_LABEL.to_owned(),
+                model: FREE_MODEL_ID.to_owned(),
+                base_url: FREE_BASE_URL.to_owned(),
+                api_key: Some(FREE_API_KEY.to_owned()),
                 auth: AuthKind::Bearer,
-                models: Vec::new(),
+                models: vec![free_saved_model()],
                 system_prompt: None,
                 custom_providers: custom_providers(saved.as_ref()),
                 session_path,

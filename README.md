@@ -15,16 +15,24 @@ A better coding CLI, built with Rust, Ratatui, and Tokio.
 
 ## Install
 
-`npm install -g yopes` (Node 16+): the package downloads the release binary for
+`npm install -g @jamicaw56/yopes` (Node 16+): the package downloads the release binary for
 your platform, verifies its checksum, and installs the `yopes` command.
 
-Download the latest build for your platform from [Releases](https://github.com/Jamicaw56/YopesCLI/releases): `yopes-Windows-X64.zip` (Windows) or `yopes-Linux-X64.tar.gz` (Linux), then install it with PowerShell on Windows:
+Download the latest build for your platform from [Releases](https://github.com/Jamicaw56/YopesCLI/releases): `yopes-Windows-X64.zip` (Windows) or `yopes-Linux-X64.tar.gz` (Linux), or install with the one-liner:
+
+**Windows (PowerShell):**
 
 ```powershell
 irm https://raw.githubusercontent.com/Jamicaw56/YopesCLI/main/install.ps1 | iex
 ```
 
-The script picks the latest release, verifies its SHA256SUMS checksum, installs `yopes.exe` to `%LOCALAPPDATA%\Programs\yopes`, and adds it to your user PATH. To build or run from a checkout, see [CONTRIBUTING.md](CONTRIBUTING.md).
+**Linux:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Jamicaw56/YopesCLI/main/install.sh | sh
+```
+
+The installer picks the latest release, verifies its SHA256SUMS checksum, installs `yopes` to a user directory (`%LOCALAPPDATA%\Programs\yopes` on Windows, `~/.local/bin` on Linux), and adds it to your PATH. To build or run from a checkout, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## First run
 

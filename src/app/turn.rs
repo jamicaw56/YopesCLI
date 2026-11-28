@@ -501,6 +501,10 @@ impl App {
                             || self.backend.provider_kind() == ProviderKind::Unconfigured
                         {
                             self.info("No provider currently connected.");
+                        } else if active_endpoint.trim_end_matches('/') == config::FREE_BASE_URL {
+                            self.info(
+                                "Using the built-in free model (no custom provider connected).",
+                            );
                         } else {
                             self.disconnect_endpoint(&active_endpoint);
                         }
@@ -1180,17 +1184,9 @@ impl App {
         }
         match config::disconnect_provider(&self.config_path, target) {
             Ok(()) => {
-                // The active connection goes with it.
+                // The active connection goes with it, falling back to the free model.
                 if self.backend.base_url().trim_end_matches('/') == target.trim_end_matches('/') {
-                    self.backend.configure(
-                        ProviderKind::Unconfigured,
-                        "not connected".to_owned(),
-                        String::new(),
-                        String::new(),
-                        None,
-                        AuthKind::Bearer,
-                        Vec::new(),
-                    );
+                    self.backend.configure_free();
                 }
                 self.custom_providers = config::load_custom_providers(&self.config_path);
                 if let Some(connect) = self.connect.as_mut() {
@@ -1220,15 +1216,7 @@ impl App {
             Ok(()) => {
                 if let Some(target) = target_endpoint {
                     if self.backend.base_url().trim_end_matches('/') == target {
-                        self.backend.configure(
-                            ProviderKind::Unconfigured,
-                            "not connected".to_owned(),
-                            String::new(),
-                            String::new(),
-                            None,
-                            AuthKind::Bearer,
-                            Vec::new(),
-                        );
+                        self.backend.configure_free();
                     }
                 }
                 self.custom_providers = config::load_custom_providers(&self.config_path);
