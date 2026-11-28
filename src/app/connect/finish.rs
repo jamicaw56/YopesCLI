@@ -816,4 +816,56 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp);
     }
+
+    /// The row the cursor is on is the endpoint Enter opens. The list puts the
+    /// endpoint in use on top, so the highlighted row has to be read from the
+    /// same order the dialog draws.
+    #[test]
+    fn enter_opens_the_provider_row_under_the_cursor() {
+        use crate::app::turn::tests::test_app;
+        use crate::config::{CustomProvider, StoredSecret};
+
+        let provider = |id: &str, name: &str, url: &str| CustomProvider {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            base_url: url.to_owned(),
+            auth: AuthKind::Bearer,
+            models: Vec::new(),
+            models_url: None,
+            token: None,
+            encrypted: false,
+            secret: StoredSecret::default(),
+        };
+        let mut app = test_app();
+        // Zeta is the connected endpoint, so it is drawn on the first row even
+        // though Alpha sorts before it by name.
+        let zeta = app.backend.base_url().to_owned();
+        app.custom_providers = vec![
+            provider("a", "Alpha", "https://alpha.test/v1"),
+            provider("z", "Zeta", &zeta),
+        ];
+        app.begin_connect();
+        let connect = app.connect.as_ref().expect("the dialog is open");
+        assert_eq!(connect.selected, 0);
+        assert_eq!(connect.selected_item().expect("a row").id, "z");
+        app.handle_connect_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let connect = app.connect.as_ref().expect("the dialog stays open");
+        assert_eq!(connect.stage, ConnectStage::CustomModels);
+        assert_eq!(connect.custom_provider_id.as_deref(), Some("z"));
+
+        // And the second row is the other provider, not the one on top.
+        let mut app = test_app();
+        let zeta = app.backend.base_url().to_owned();
+        app.custom_providers = vec![
+            provider("a", "Alpha", "https://alpha.test/v1"),
+            provider("z", "Zeta", &zeta),
+        ];
+        app.begin_connect();
+        app.handle_connect_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let connect = app.connect.as_ref().expect("the dialog is open");
+        assert_eq!(connect.selected_item().expect("a row").id, "a");
+        app.handle_connect_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let connect = app.connect.as_ref().expect("the dialog stays open");
+        assert_eq!(connect.custom_provider_id.as_deref(), Some("a"));
+    }
 }

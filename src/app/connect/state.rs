@@ -199,6 +199,9 @@ pub struct ConnectState {
     pub filter: String,
     pub selected: usize,
     pub(crate) saved_custom: Vec<config::CustomProvider>,
+    /// Base URL of the endpoint in use, so the list both draws and resolves
+    /// its rows in one order: the connected endpoint on top.
+    pub(crate) active_base_url: String,
     pub(crate) model_id: Option<String>,
     pub(crate) api_key: String,
     pub(crate) password: String,
@@ -241,6 +244,7 @@ impl ConnectState {
             filter: String::new(),
             selected: 0,
             saved_custom: Vec::new(),
+            active_base_url: String::new(),
             model_id: None,
             api_key: String::new(),
             password: String::new(),
@@ -268,7 +272,7 @@ impl ConnectState {
         }
     }
     pub fn items(&self) -> Vec<ConnectItem> {
-        self.items_using("", "")
+        self.items_using(&self.active_base_url, "")
     }
     /// Build the list, marking whatever the session is already using.
     ///

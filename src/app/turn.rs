@@ -1192,6 +1192,7 @@ impl App {
                 if let Some(connect) = self.connect.as_mut() {
                     // The row loses its tick immediately.
                     connect.saved_custom = self.custom_providers.clone();
+                    connect.active_base_url = self.backend.base_url().to_owned();
                     connect.error = None;
                 }
                 self.info("Disconnected. The key is asked for again next time.");
@@ -1222,6 +1223,7 @@ impl App {
                 self.custom_providers = config::load_custom_providers(&self.config_path);
                 if let Some(connect) = self.connect.as_mut() {
                     connect.saved_custom = self.custom_providers.clone();
+                    connect.active_base_url = self.backend.base_url().to_owned();
                     connect.error = None;
                 }
                 self.info("Provider removed.");
@@ -1313,6 +1315,7 @@ impl App {
         self.palette_hidden = true;
         let mut connect = ConnectState::loading();
         connect.saved_custom = self.custom_providers.clone();
+        connect.active_base_url = self.backend.base_url().to_owned();
         if self.backend.provider_kind() == ProviderKind::Custom {
             connect.custom_endpoint = self.backend.base_url().to_owned();
             connect.custom_auth = self.backend.auth();
